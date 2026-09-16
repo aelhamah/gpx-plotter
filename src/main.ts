@@ -378,7 +378,6 @@ function startDrawing() {
     selectRoute(created.id);
   }
   drawing = true;
-  $('draw-route').textContent = 'Drawing…';
   $('draw-route').classList.add('active');
   drawHint.textContent = 'Click to add route points · double-click to finish · Esc to cancel';
   drawHint.classList.remove('hidden');
@@ -386,7 +385,6 @@ function startDrawing() {
 }
 function stopDrawing() {
   drawing = false;
-  $('draw-route').textContent = 'Draw route';
   $('draw-route').classList.remove('active');
   drawHint.classList.add('hidden');
   map.getCanvas().style.cursor = '';
@@ -396,7 +394,7 @@ function setWaypointMode(on: boolean) {
   $('add-waypoint').classList.toggle('active', on);
   if (on) {
     stopDrawing();
-    drawHint.textContent = 'Click to add waypoints · Esc or toggle off to stop';
+    drawHint.textContent = 'Click to place a waypoint · Esc to cancel';
     drawHint.classList.remove('hidden');
     map.getCanvas().style.cursor = 'copy';
   } else {
@@ -410,6 +408,7 @@ function addWaypoint(event: MapMouseEvent) {
   waypoints.push({ lat: event.lngLat.lat, lon: event.lngLat.lng, name: `Waypoint ${waypoints.length + 1}` });
   selectedWaypointIndex = waypoints.length - 1;
   selectedIndex = null;
+  setWaypointMode(false);
   refreshMarkers();
   updateUI();
 }

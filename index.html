@@ -22,13 +22,45 @@
 
         <div class="toolbar">
           <label class="button button-secondary file-button">
-            Import GPX
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Import GPX</span>
             <input id="gpx-input" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml" />
           </label>
-          <button id="draw-route" class="button button-primary">Draw route</button>
-          <button id="new-route" class="button button-secondary">+ New route</button>
-          <button id="add-waypoint" class="button button-secondary">Add waypoint</button>
+          <div class="icon-button-wrap">
+            <button id="undo" class="button button-secondary icon-button" type="button" aria-label="Undo">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h11a5 5 0 0 1 0 10H9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 4L3 8l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="button-tooltip">Undo</span>
+          </div>
+          <div class="icon-button-wrap">
+            <button id="redo" class="button button-secondary icon-button" type="button" aria-label="Redo">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8H10a5 5 0 0 0 0 10h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="button-tooltip">Redo</span>
+          </div>
         </div>
+
+        <div class="toolbar">
+          <div class="icon-button-wrap">
+            <button id="draw-route" class="button button-primary icon-button" type="button" aria-label="Draw route">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18l5-7 4 3 5-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="18" r="1.7" fill="currentColor"/><circle cx="19" cy="6" r="1.7" fill="currentColor"/></svg>
+            </button>
+            <span class="button-tooltip">Draw route</span>
+          </div>
+          <div class="icon-button-wrap">
+            <button id="new-route" class="button button-secondary icon-button" type="button" aria-label="New route">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="button-tooltip">New route</span>
+          </div>
+          <div class="icon-button-wrap">
+            <button id="add-waypoint" class="button button-secondary icon-button" type="button" aria-label="Add waypoint">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21c4-4 6.5-7.2 6.5-10a6.5 6.5 0 0 0-13 0C5.5 13.8 8 17 12 21z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="11" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <span class="button-tooltip">Add waypoint</span>
+          </div>
+        </div>
+        <p id="map-status" class="hint"></p>
 
         <div class="section">
           <div class="section-title">Routes</div>
@@ -59,17 +91,6 @@
           <p id="profile-empty" class="hint">Draw or import two points to see a terrain elevation profile.</p>
         </div>
 
-        <div class="section">
-          <div class="section-title">Map</div>
-          <div class="button-row">
-            <button id="terrain-toggle" class="button button-secondary">3D terrain</button>
-            <button id="imagery-toggle" class="button button-secondary">Satellite</button>
-            <button id="relief-toggle" class="button button-secondary">Relief</button>
-            <button id="slope-toggle" class="button button-secondary">Slope shading</button>
-          </div>
-          <p id="map-status" class="hint">Add a MapTiler key in <code>src/config.ts</code>.</p>
-        </div>
-
         <div class="section help">
           <div class="section-title">Editing</div>
           <p><b>Draw:</b> click to add points, double-click to finish.</p>
@@ -81,8 +102,6 @@
         </div>
 
         <div class="bottom-actions">
-          <button id="undo" class="button button-secondary">Undo</button>
-          <button id="redo" class="button button-secondary">Redo</button>
           <button id="export-gpx" class="button button-primary">Export GPX</button>
         </div>
       </aside>
@@ -91,11 +110,37 @@
         <div id="map"></div>
         <div id="stats-progress" class="stats-progress hidden"><span class="spinner"></span>Reading terrain…</div>
         <div id="draw-hint" class="map-overlay hidden">Click to add route points · double-click to finish · Esc to cancel</div>
-        <div class="map-icon-control">
-          <button id="fit-route" class="map-icon-button" type="button" aria-label="Fit view to routes">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <span class="map-icon-tooltip">fit</span>
+        <div class="map-icon-controls">
+          <div class="map-icon-control">
+            <button id="fit-route" class="map-icon-button" type="button" aria-label="Fit view to routes">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="map-icon-tooltip">fit</span>
+          </div>
+          <div class="map-icon-control">
+            <button id="terrain-toggle" class="map-icon-button" type="button" aria-label="3D terrain">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="map-icon-tooltip">3D terrain</span>
+          </div>
+          <div class="map-icon-control">
+            <button id="imagery-toggle" class="map-icon-button" type="button" aria-label="Satellite">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <span class="map-icon-tooltip">Satellite</span>
+          </div>
+          <div class="map-icon-control">
+            <button id="relief-toggle" class="map-icon-button" type="button" aria-label="Relief">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 20l6-9 3 4.5 2-3 5 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="18.5" cy="5.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <span class="map-icon-tooltip">Relief</span>
+          </div>
+          <div class="map-icon-control">
+            <button id="slope-toggle" class="map-icon-button" type="button" aria-label="Slope shading">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 18L16 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <span class="map-icon-tooltip">Slope shading</span>
+          </div>
         </div>
         <div id="slope-legend" class="slope-legend hidden">
           <b>Slope angle</b>
