@@ -7,6 +7,10 @@ import {
   routeProfilePoints,
   summarizeProfile,
   segmentSlopeDegrees,
+  profileAxisLabel,
+  profileAxisStep,
+  nearestProfileSample,
+  colorToAlpha,
 } from '../src/geo';
 
 describe('mercator helpers', () => {
@@ -98,5 +102,52 @@ describe('segmentSlopeDegrees', () => {
   });
   it('ignores duplicated vertices', () => {
     expect(segmentSlopeDegrees({ lat: 0, lon: 0, elevation: 5 }, { lat: 0, lon: 0, elevation: 10 })).toBeUndefined();
+  });
+});
+
+describe('profileAxisLabel', () => {
+  it('uses one decimal below 10 miles and rounds above', () => {
+    expect(profileAxisLabel(1609.344)).toBe('1.0');
+    expect(profileAxisLabel(2023)).toBe('1.3');
+    expect(profileAxisLabel(30 * 1609.344)).toBe('30');
+  });
+});
+
+describe('profileAxisStep', () => {
+  it('returns 0 for a zero-length route', () => {
+    expect(profileAxisStep(0)).toBe(0);
+  });
+  it('picks a nice even spacing in 1/2/5 decades', () => {
+    for (const [total, expected] of [
+      [3000, 500],   // 3 km → 6 divisions of 500 m
+      [10000, 2000], // 10 km → 5 divisions of 2 km
+      [40000, 10000], // 40 km → 4 divisions of 10 km
+      [500, 100],    // 500 m → 5 divisions of 100 m
+      [75, 20],      // 75 m → ~4 divisions of 20 m
+    ] as [number, number][]) {
+      expect(profileAxisStep(total), `total=${total}`).toBe(expected);
+    }
+  });
+  it('always fits into the total (so ticks exist only inside the route)', () => {
+    for (const total of [800, 1600, 5000, 12000, 900000]) {
+      expect(profileAxisStep(total)).toBeLessThanOrEqual(total);
+    }
+  });
+});
+
+describe('nearestProfileSample', () => {
+  it('snaps to the closest cumulative distance', () => {
+    const cumulative = [0, 1000, 2000, 3000];
+    expect(nearestProfileSample(cumulative, 0)).toBe(0);
+    expect(nearestProfileSample(cumulative, 999)).toBe(1);
+    expect(nearestProfileSample(cumulative, 2499)).toBe(2);
+    expect(nearestProfileSample(cumulative, 4000)).toBe(3);
+  });
+});
+
+describe('colorToAlpha', () => {
+  it('converts a hex color to an rgba string', () => {
+    expect(colorToAlpha('#22c55e', 0.5)).toBe('rgba(34, 197, 94, 0.5)');
+    expect(colorToAlpha('#111827', 1)).toBe('rgba(17, 24, 39, 1)');
   });
 });

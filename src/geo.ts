@@ -85,6 +85,43 @@ export function summarizeProfile(profile: RoutePoint[]): ProfileSummary {
 export function metersToMiles(m: number) { return m / 1609.344; }
 export function metersToFeet(m: number) { return m * 3.280839895; }
 
+/** Distance-axis tick label: miles, one decimal below 10, integer from 10 up. */
+export function profileAxisLabel(meters: number): string {
+  const miles = metersToMiles(meters);
+  return miles < 10 ? miles.toFixed(1) : Math.round(miles).toString();
+}
+
+/** "Nice" even spacing between x-axis ticks, aimed at ~5 divisions along the route. */
+export function profileAxisStep(totalMeters: number): number {
+  const raw = totalMeters / 5;
+  if (raw <= 0) return 0;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / magnitude;
+  return (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * magnitude;
+}
+
+/** Closest profile sample index to a cumulative distance, for chart hover snapping. */
+export function nearestProfileSample(cumulative: number[], target: number): number {
+  let best = 0;
+  let bestDistance = Infinity;
+  for (let i = 0; i < cumulative.length; i++) {
+    const distance = Math.abs(cumulative[i] - target);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** "#rrggbb" → "rgba(r, g, b, a)" for canvas fills with translucency. */
+export function colorToAlpha(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 // Web-Mercator helpers so profile samples follow the straight lines drawn on the map.
 export function mercatorX(lngDeg: number): number { return (lngDeg + 180) / 360; }
 export function mercatorY(latDeg: number): number {

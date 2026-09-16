@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decodeElevations, slopeRgba } from '../src/dem';
+import { decodeElevations, slopeBandColorHex, slopeRgba } from '../src/dem';
 
 describe('decodeElevations', () => {
   it('decodes the terrain-RGB formula', () => {
@@ -55,6 +55,27 @@ describe('slopeRgba', () => {
       const perPixel = 200 * Math.tan((degrees * Math.PI) / 180);
       const rgba = slopeRgba(rampGrid(64, 64, perPixel), 64, 64, 100);
       expect([rgba[0], rgba[1], rgba[2]], `at ${degrees}°`).toEqual(expected);
+    }
+  });
+});
+
+describe('slopeBandColorHex', () => {
+  it('matches every avalanche band boundary used by the profile shader and legend', () => {
+    for (const [degrees, expected] of [
+      [0, '#22c55e'], // <20° green
+      [19.9, '#22c55e'],
+      [20, '#eab308'], // <30° yellow
+      [29.9, '#eab308'],
+      [30, '#f97316'], // <35° orange
+      [34.9, '#f97316'],
+      [35, '#ef4444'], // <40° red
+      [39.9, '#ef4444'],
+      [40, '#a855f7'], // <45° purple
+      [44.9, '#a855f7'],
+      [45, '#111827'], // 45°+ near-black
+      [89, '#111827'],
+    ] as [number, string][]) {
+      expect(slopeBandColorHex(degrees), `at ${degrees}°`).toBe(expected);
     }
   });
 });

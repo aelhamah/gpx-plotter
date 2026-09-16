@@ -151,13 +151,22 @@ function metersPerPixel(z: number, midLatDeg: number) {
   return (circumference / Math.pow(2, z)) * Math.cos((midLatDeg * Math.PI) / 180);
 }
 
+/** CSS color per avalanche slope band (matches the on-map slope legend). */
+export function slopeBandColorHex(slopeDeg: number): string {
+  if (slopeDeg < 20) return '#22c55e';
+  if (slopeDeg < 30) return '#eab308';
+  if (slopeDeg < 35) return '#f97316';
+  if (slopeDeg < 40) return '#ef4444';
+  if (slopeDeg < 45) return '#a855f7';
+  return '#111827';
+}
+
 function slopeColor(slopeDeg: number): [number, number, number, number] {
-  if (slopeDeg < 20) return [34, 197, 94, 150];   // green
-  if (slopeDeg < 30) return [234, 179, 8, 150];   // yellow
-  if (slopeDeg < 35) return [249, 115, 22, 150];  // orange
-  if (slopeDeg < 40) return [239, 68, 68, 150];   // red
-  if (slopeDeg < 45) return [168, 85, 247, 150];  // purple
-  return [17, 24, 39, 170];                       // near-black
+  const hex = slopeBandColorHex(slopeDeg);
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return [r, g, b, slopeDeg >= 45 ? 170 : 150];
 }
 
 function blankSlopeCanvas(width: number, height: number) {
