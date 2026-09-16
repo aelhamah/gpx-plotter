@@ -1,0 +1,56 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #171717;
+  background: #f7f7f5;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; margin: 0; }
+body { overflow: hidden; }
+#app { display: grid; grid-template-columns: 330px minmax(0, 1fr); }
+.sidebar { background: #fff; border-right: 1px solid #deded9; padding: 22px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; z-index: 5; }
+.brand h1 { font-size: 22px; margin: 0 0 3px; letter-spacing: -0.02em; }
+.brand p { margin: 0; color: #737373; font-size: 13px; }
+.toolbar, .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.toolbar .file-button { grid-column: span 2; }
+.button { appearance: none; border: 1px solid #d3d3ce; background: #fff; color: #252525; border-radius: 8px; padding: 9px 11px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: .15s ease; }
+.button:hover { border-color: #aaa9a3; background: #f8f8f6; }
+.button-primary { background: #171717; color: white; border-color: #171717; }
+.button-primary:hover { background: #333; border-color: #333; }
+.button.active { background: #e9e9e4; border-color: #aaa; }
+.file-button { text-align: center; }
+.file-button input { display: none; }
+.section { border-top: 1px solid #e4e4df; padding-top: 17px; }
+.section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; font-weight: 800; color: #777; margin-bottom: 10px; }
+.text-input { width: 100%; border: 1px solid #d6d6d1; border-radius: 8px; padding: 9px 10px; font: inherit; outline: none; margin-bottom: 12px; }
+.text-input:focus { border-color: #777; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.stats div { background: #f5f5f2; border-radius: 8px; padding: 9px 10px; }
+.stats span { display: block; color: #777; font-size: 11px; margin-bottom: 3px; }
+.stats strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.hint { color: #777; font-size: 12px; line-height: 1.45; margin: 10px 0 0; }
+code { font-size: 11px; }
+.help p { font-size: 12px; line-height: 1.45; color: #666; margin: 6px 0; }
+.bottom-actions { margin-top: auto; display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 7px; padding-top: 5px; }
+.map-wrap { position: relative; min-width: 0; }
+#map { position: absolute; inset: 0; }
+.slope-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.map-overlay { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); background: rgba(20,20,20,.88); color: #fff; border-radius: 999px; padding: 9px 14px; font-size: 12px; pointer-events: none; white-space: nowrap; }
+.hidden { display: none; }
+.route-marker { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; background: #e11d48; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: grab; padding: 0; }
+.route-marker.selected { width: 18px; height: 18px; background: #111; }
+.route-marker:active { cursor: grabbing; }
+.maplibregl-ctrl-group { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+@media (max-width: 800px) {
+  #app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .sidebar { max-height: 45vh; border-right: 0; border-bottom: 1px solid #deded9; padding: 14px; gap: 12px; }
+  .help { display: none; }
+  .bottom-actions { margin-top: 0; }
+  .map-overlay { top: 10px; font-size: 11px; }
+}
+.button-row { grid-template-columns: 1fr 1fr; }
+.slope-legend { position: absolute; right: 18px; bottom: 28px; display: grid; gap: 6px; padding: 11px 13px; background: rgba(255,255,255,.94); border: 1px solid rgba(0,0,0,.12); border-radius: 9px; box-shadow: 0 2px 10px rgba(0,0,0,.18); font-size: 11px; z-index: 3; }
+.slope-legend b { font-size: 12px; margin-bottom: 2px; }
+.slope-legend span { display: flex; align-items: center; gap: 7px; }
+.swatch { width: 15px; height: 6px; border-radius: 99px; display: inline-block; }
+.swatch.green { background: #22c55e; } .swatch.yellow { background: #eab308; } .swatch.orange { background: #f97316; } .swatch.red { background: #ef4444; } .swatch.purple { background: #a855f7; } .swatch.black { background: #111827; }
