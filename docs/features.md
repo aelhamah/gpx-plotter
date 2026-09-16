@@ -1,0 +1,134 @@
+# Features
+
+Everything currently implemented in the GPX Route Plotter, grouped by area.
+
+## Map and terrain
+
+- **Outdoor basemap** rendered by MapLibre GL JS, served by MapTiler.
+- **Satellite basemap** toggle. The camera (center/zoom/bearing/pitch) is
+  preserved across the style swap, and all custom layers + 3D terrain are
+  re-applied after the new style loads.
+- **3D terrain** toggle using MapTiler Terrain-RGB with a 1.15× exaggeration,
+  plus ⌘/Ctrl-drag to tilt and rotate the camera.
+- **Relief hillshade** toggle for a soft shaded-relief overlay.
+- **Slope-angle shading**: the terrain is colorized into avalanche bands
+  (`<20°` green, `20–30°` yellow, `30–35°` orange, `35–40°` red, `40–45°`
+  purple, `45°+` near-black), with an on-map legend. Implemented as a custom
+  `slope://` raster protocol so shading stays aligned while panning, tilting,
+  and rotating.
+- **Fit to view** control that frames all routes and waypoints.
+
+## Routes
+
+- **Multiple routes**, each with a stable id, name, and color from a
+  deterministic palette (colors wrap when routes outnumber colors).
+- **Draw a route** by clicking the map. A floating draw bar shows the live point
+  count, a **Finish** button (enabled at ≥ 2 points), and **Cancel**.
+- **New route** creates a route and drops straight into drawing.
+- **Drag route points** to reshape a route; elevation is re-sampled after a drag.
+- **Rename routes** from the sidebar or by double-clicking the route's map label.
+- **Remove routes** from the route list.
+- **Select routes** to make one "active" for editing, stats, and the profile;
+  the list shows a color swatch per route.
+
+## Waypoints
+
+- **Add waypoints** in a one-shot mode: click the toolbar icon, click the map,
+  and a single waypoint is placed (the mode then exits).
+- **Drag waypoints** to reposition them.
+- **Rename waypoints** by double-clicking the marker or its label.
+- **Delete** the selected waypoint with the Delete key.
+- **Elevation labels**: each waypoint label shows its name and terrain
+  elevation, sampled from the DEM once and kept up to date.
+- **Waypoint count** section summarising how many waypoints exist.
+- **Selection affordance**: the selected waypoint is highlighted with a border
+  and an edit (✎) label; clicking empty map clears the selection.
+
+## Import
+
+- **GPX tracks and routes**: reads `<trk>/<trkseg>/<trkpt>` and falls back to
+  `<rte>/<rtept>`.
+- **GPX waypoints** (`<wpt>`) with names and elevations.
+- **Elevation preservation**: `<ele>` is parsed and kept; missing elevations are
+  later filled from the terrain DEM.
+- **Additive imports**: importing appends routes and waypoints to what is
+  already loaded and frames the view on the newly imported content.
+- **Large-file downsampling dialog**: files with more than 500 points in a route
+  open a dialog before loading, offering a point budget with a live preview of
+  the resulting point count and a "keep every point" option.
+  - The **default budget scales with route distance** — roughly one point every
+    15 m — so longer tracks keep proportionally more points.
+  - Downsampling keeps the first and last point of each route and thins the
+    middle while preserving the shape.
+- **Stale elevation handling**: files previously exported by this app are
+  detected (`creator="GPX Plotter"`) and their cached elevations are discarded so
+  stats are recomputed from current terrain.
+
+## Export
+
+- **Export GPX** writes a GPX 1.1 document containing every route as a separate
+  `<trk>` plus all waypoints as `<wpt>`, preserving elevations where known.
+- The download filename is derived from the first route name.
+
+## Statistics
+
+- Per-route **distance, total gain, total loss, low, high, point count, and max
+  slope**, shown in the sidebar.
+- Stats are computed from the terrain **between vertices**: the route is
+  resampled every ~30 m and each sample is filled from the DEM, so gain/loss and
+  slope reflect the ground actually crossed.
+- A **"Reading terrain…"** spinner indicates when DEM sampling is in progress.
+
+## Elevation profile
+
+- Interactive **canvas elevation chart** for the active route.
+- Segments are colored by **slope band**, matching the map shading.
+- **Distance/elevation axes** with automatic tick spacing.
+- **Hover** snaps to the nearest sample, shows a distance/elevation readout,
+  draws a dashed cursor, and highlights the corresponding trail on the map with
+  a blue trace and a matching blue dot.
+- Slightly translucent chart background so the map shows through, with darkened
+  axis labels for readability.
+
+## Units
+
+- **Metric / Imperial** toggle.
+- The default is chosen from the browser locale (imperial for `US`, metric
+  otherwise).
+- All distances, elevations, and the profile axis respect the selection.
+
+## Editing and shortcuts
+
+- **Document-level undo/redo** (bounded to 50 snapshots), covering every point,
+  waypoint, rename, delete, and import.
+- Keyboard shortcuts:
+
+  | Shortcut | Action |
+  | --- | --- |
+  | Click map | Add a route point (drawing) or waypoint (waypoint mode) |
+  | Enter | Finish the current drawing |
+  | Esc | Cancel drawing / waypoint mode / the import dialog |
+  | Delete | Remove the selected point or waypoint |
+  | ⌘/Ctrl-Z | Undo |
+  | ⇧⌘/Ctrl-Z | Redo |
+  | ⌘/Ctrl-drag | Tilt / rotate the camera |
+  | Scroll | Zoom the map (or scroll the sidebar when hovering it) |
+
+## Interface
+
+- Translucent, blurred sidebar floating over a full-bleed map with click-through
+  gaps.
+- Icon toolbars with hover tooltips (including shortcut hints such as
+  **Undo · ⌘Z**) and segmented button groups.
+- Map controls (fit, terrain, satellite, relief, slope) stacked at the
+  bottom-left; the slope legend at the bottom-right.
+- Responsive layout tweaks for narrow/mobile viewports.
+
+## Demo data and quality
+
+- A 13,000-point sample hike is bundled at `public/demos/Afternoon_Hike.gpx`
+  (also served at `/demos/Afternoon_Hike.gpx`) for exercising the downsampling
+  flow.
+- **62 unit tests** across 8 files covering geodesy, GPX parse/serialize, DEM
+  decoding, units, colors, names, config, and downsampling.
+- GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

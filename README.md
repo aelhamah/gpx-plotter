@@ -1,26 +1,76 @@
 # GPX Route Plotter
 
-A small client-side GPX route editor built with TypeScript, Vite, MapLibre GL JS, and MapTiler.
+A browser-based GPX editor: draw, import, inspect, and export hiking/running
+routes on a 3D MapTiler terrain, with live distance, climb, and slope stats plus
+an interactive elevation profile.
 
-## What it currently does
+It is a purely static, client-side app — **no backend, database, or login**. The
+whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
 
-- Displays a MapTiler Outdoor basemap.
-- Imports GPX tracks/routes in the browser.
-- Draws a route by clicking on the map.
-- Drags route points to edit them.
-- Deletes selected points with Delete.
-- Undo/redo.
-- Calculates distance, gain, loss, low, high, and max slope by sampling MapTiler terrain DEM along the drawn lines.
-- Toggles 3D terrain using MapTiler Terrain RGB, with cmd/ctrl+drag tilt & rotate.
-- Slope-angle color shading and relief hillshade overlays.
-- Satellite basemap switch.
-- Exports a GPX 1.1 track.
-- Unit tests (Vitest) and a GitHub Actions CI workflow that runs on every PR.
-- Requires no backend, database, or login.
+- Full architecture: [`docs/architecture.md`](docs/architecture.md)
+- Feature reference: [`docs/features.md`](docs/features.md)
+- Contributing / dev workflow: [`docs/dev.md`](docs/dev.md)
 
-## 1. Add your MapTiler API key
+## High-level architecture
 
-Copy `.env.example` to `.env.local` and set your browser/public MapTiler API key:
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│ index.html  —  static shell (sidebar, map container, toolbars, dialogs)│
+└───────────────────────────────────────────────────────────────────────┘
+                    │ imports
+                    ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ src/main.ts  —  the application hub                                    │
+│  • map init + layers + terrain                                         │
+│  • in-memory state (routes, waypoints, selection, history)             │
+│  • all DOM wiring, markers, dialogs, profile chart                     │
+└───────────────────────────────────────────────────────────────────────┘
+        │            │           │            │           │
+        ▼            ▼           ▼            ▼           ▼
+   gpx.ts       geo.ts       dem.ts      simplify.ts   units.ts / colors.ts
+   parse &      geodesy &    Terrain-RGB  downsample    formatting &
+   serialize    profiles     sampling     large tracks  palette
+```
+
+**Data flow**
+
+1. **Import** — `File.text()` → `parseGPX()` → (large files) the downsampling
+   dialog → `downsamplePoints()` → appended to state.
+2. **Edit** — map clicks and marker drags mutate `routes` / `waypoints`; each
+   mutation snapshots prior state for undo/redo.
+3. **Stats** — the active route is resampled with `routeProfilePoints()` every
+   30 m, missing elevations are filled from MapTiler Terrain-RGB via
+   `elevationAt()`, then `summarizeProfile()` produces gain/loss/low/high/max
+   slope and the elevation profile is drawn to a `<canvas>`.
+4. **Render** — MapLibre layers draw route lines, the profile hover trace, slope
+   shading (via a custom `slope://` raster protocol), and hillshade; DOM
+   `Marker`s render draggable route points, route labels, and waypoints.
+5. **Export** — `exportGPX()` writes a multi-track/waypoint GPX 1.1 file and the
+   browser downloads it.
+
+**State & undo/redo** live in `main.ts` as plain module variables. `snapshot()`
+deep-clones `{ routes, waypoints }`; `commitSnapshot()` pushes onto a bounded
+history stack so ⌘/Ctrl-Z and ⇧⌘/Ctrl-Z replay whole documents.
+
+## Third-party dependencies
+
+Runtime:
+
+- [MapLibre GL JS](https://maplibre.org/) — open-source WebGL map renderer (vector styles, terrain, custom protocols, markers).
+- [MapTiler](https://www.maptiler.com/) — basemap styles (Outdoor/Satellite), Terrain-RGB DEM tiles, and hillshade data used through MapLibre. See the [MapTiler documentation](https://docs.maptiler.com/).
+
+Build & dev:
+
+- [Vite](https://vite.dev/) — dev server and production bundler.
+- [TypeScript](https://www.typescriptlang.org/) — language and type checking.
+- [Vitest](https://vitest.dev/) — unit test runner.
+- [jsdom](https://github.com/jsdom/jsdom) — DOM environment for tests.
+- [@types/geojson](https://www.npmjs.com/package/@types/geojson) — GeoJSON typings for the map layer code.
+
+## Getting started
+
+Add a **public** MapTiler key (browser keys are visible to users; restrict them
+by HTTP origin):
 
 ```bash
 cp .env.example .env.local
@@ -30,107 +80,25 @@ cp .env.example .env.local
 VITE_MAPTILER_API_KEY=your_browser_maptiler_key
 ```
 
-`.env.local` is gitignored, so the key never gets committed.
-
-Because this is a static site, the key is visible to users. That is expected. **Do not use a private/service token.** Protect the public key with HTTP-origin restrictions in MapTiler. For GitHub Pages, allow the origin for your published site, such as:
-
-```text
-https://YOUR-USERNAME.github.io
-```
-
-If you use a custom domain, allow that domain instead.
-
-## 2. Run locally
+`.env.local` is gitignored, so the key is never committed.
 
 ```bash
 npm install
-npm run dev
+npm run dev      # local dev server
+npm run build    # type-check + production bundle in dist/
+npm test         # Vitest unit tests
 ```
 
-Open the local URL printed by Vite.
+## Deployment
 
-## 3. Build
+The app is static, so it deploys to any static host. This repository ships two
+GitHub Actions workflows:
 
-```bash
-npm run build
-```
+- `.github/workflows/pr.yml` — build + test on every push/PR.
+- `.github/workflows/deploy.yml` — build and publish `dist/` to GitHub Pages on
+  push to `main`.
 
-The production site is generated in `dist/`.
+Enable **Settings → Pages → Source: GitHub Actions**, and allow-list your Pages
+origin on the MapTiler key.
 
-## 4. Deploy to GitHub Pages
-
-The easiest setup is:
-
-1. Create a GitHub repository.
-2. Push this project to the repository.
-3. Add the GitHub Actions workflow below as `.github/workflows/deploy.yml`.
-4. In GitHub, go to **Settings → Pages** and select **GitHub Actions** as the source.
-
-```yaml
-name: Deploy to GitHub Pages
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install
-        run: npm install
-
-      - name: Build
-        run: npm run build
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
-```
-
-## Important API-key note
-
-A frontend map key cannot be kept secret on a static site. The right approach is to use a public browser key and restrict it to your site's HTTP origin. See MapTiler's key-protection documentation:
-
-https://docs.maptiler.com/guides/maps-apis/maps-platform/how-to-protect-your-map-key/
-
-## Next features worth adding
-
-- **Multiple routes + waypoint markers** — named, color-coded routes (edit one "active" route while others render read-only; per-route and combined stats; multi-track GPX export) plus independent named waypoints (icons + labels, draggable, exported as `<wpt>`). Management & UI design to be explored.
-- Interactive elevation profile.
-- Route point insertion between existing points.
-- Map style switcher (Outdoor / Topo / Satellite / Winter).
-- GPX metadata preservation.
-- Optional trail snapping/routing.
-- Better mobile editing UX.
+See [`docs/dev.md`](docs/dev.md) for the full development guide.
