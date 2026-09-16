@@ -16,6 +16,8 @@ let waypoints: Waypoint[] = [];
 let selectedRouteId: number | null = null;
 let nextRouteId = 1;
 let drawing = false;
+let lastRouteClickTime = 0;
+let lastRouteClickScreen: { x: number; y: number } | null = null;
 let waypointMode = false;
 let terrainEnabled = false;
 let reliefEnabled = false;
@@ -364,9 +366,19 @@ function selectRoute(id: number | null) {
   selectedRouteId = id;
   selectedIndex = null;
   selectedWaypointIndex = null;
-  refreshMarkers();
+  refreshRoutesLayer();
   updateUI();
+  updateDrawBar();
   void refreshRouteStats();
+}
+
+function updateDrawBar() {
+  const count = activeRoute()?.points.length ?? 0;
+  $('draw-count').textContent = String(count);
+  ($('draw-finish') as HTMLButtonElement).disabled = count < 2;
+  $('draw-status').textContent = count < 2
+    ? 'Click to add points — double-click, press Enter, or Finish to end'
+    : 'Double-click, press Enter, or Finish to end';
 }
 
 function startDrawing() {
@@ -378,16 +390,33 @@ function startDrawing() {
     selectRoute(created.id);
   }
   drawing = true;
+  map.doubleClickZoom?.disable();
   $('draw-route').classList.add('active');
-  drawHint.textContent = 'Click to add route points · double-click to finish · Esc to cancel';
-  drawHint.classList.remove('hidden');
+  drawHint.classList.add('hidden');
+  $('draw-bar').classList.remove('hidden');
+  updateDrawBar();
   map.getCanvas().style.cursor = 'crosshair';
 }
 function stopDrawing() {
   drawing = false;
+  lastRouteClickScreen = null;
+  map.doubleClickZoom?.enable();
   $('draw-route').classList.remove('active');
-  drawHint.classList.add('hidden');
+  $('draw-bar').classList.add('hidden');
   map.getCanvas().style.cursor = '';
+}
+
+function finishRoute() {
+  if (!drawing) return;
+  const route = activeRoute();
+  if (route && route.points.length >= 2) {
+    const a = route.points[route.points.length - 1], b = route.points[route.points.length - 2];
+    if (Math.abs(a.lat - b.lat) < 1e-6 && Math.abs(a.lon - b.lon) < 1e-6) route.points.pop();
+  }
+  stopDrawing();
+  refreshRoutesLayer();
+  updateUI();
+  void refreshRouteStats();
 }
 function setWaypointMode(on: boolean) {
   waypointMode = on;
@@ -422,26 +451,37 @@ function addRoutePoint(event: MapMouseEvent) {
   selectedWaypointIndex = null;
   refreshRoutesLayer();
   updateUI();
+  updateDrawBar();
   void refreshRouteStats();
 }
 
 map.on('click', (event: MapMouseEvent) => {
   if (rotating || rotatedThisGesture) return;
   if (waypointMode) addWaypoint(event);
-  else if (drawing) addRoutePoint(event);
+  else if (drawing) {
+    const now = performance.now();
+    const { x, y } = event.point;
+    const isDouble = lastRouteClickScreen !== null
+      && now - lastRouteClickTime < 350
+      && Math.abs(x - lastRouteClickScreen.x) < 12
+      && Math.abs(y - lastRouteClickScreen.y) < 12;
+    lastRouteClickTime = now;
+    lastRouteClickScreen = { x, y };
+    if (isDouble) finishRoute();
+    else addRoutePoint(event);
+  }
 });
 map.on('dblclick', (event: MapMouseEvent) => {
   if (!drawing) return;
   event.preventDefault();
-  const route = activeRoute();
-  if (route && route.points.length >= 2) {
-    const a = route.points[route.points.length - 1], b = route.points[route.points.length - 2];
-    if (Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lon - b.lon) < 1e-9) route.points.pop();
-  }
-  stopDrawing();
-  refreshRoutesLayer();
-  updateUI();
-  void refreshRouteStats();
+  finishRoute();
+});
+// Double-click zoom is disabled while drawing, which also suppresses the map's
+// dblclick event, so listen on the canvas directly to guarantee finishing.
+map.getCanvas().addEventListener('dblclick', (event) => {
+  if (!drawing) return;
+  event.preventDefault();
+  finishRoute();
 });
 
 window.addEventListener('keydown', (event) => {
@@ -451,6 +491,7 @@ window.addEventListener('keydown', (event) => {
     if (drawing) { stopDrawing(); return; }
     if (waypointMode) { setWaypointMode(false); return; }
   }
+  if (event.key === 'Enter' && drawing) { finishRoute(); return; }
   const metaOrCtrl = event.metaKey || event.ctrlKey;
   if (metaOrCtrl && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
   if (event.key === 'Delete') {
@@ -518,7 +559,9 @@ map.on('mousedown', (event: MapMouseEvent) => {
 
 $('draw-route').addEventListener('click', () => drawing ? stopDrawing() : startDrawing());
 $('add-waypoint').addEventListener('click', () => setWaypointMode(!waypointMode));
-$('new-route').addEventListener('click', () => { commitSnapshot(); stopDrawing(); routes.push(newRoute()); selectRoute(routes[routes.length - 1].id); updateUI(); });
+$('new-route').addEventListener('click', () => { commitSnapshot(); routes.push(newRoute()); selectRoute(routes[routes.length - 1].id); startDrawing(); updateUI(); });
+$('draw-finish').addEventListener('click', finishRoute);
+$('draw-cancel').addEventListener('click', () => stopDrawing());
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
 routeName.addEventListener('input', () => {
@@ -721,6 +764,7 @@ function updateUI() {
   $('point-count').textContent = String(route?.points.length ?? 0);
   $('max-slope').textContent = formatSlope(routeStats.maxSlope);
   $('waypoint-count').textContent = String(waypoints.length);
+  $('waypoint-summary-label').textContent = waypoints.length === 0 ? 'No waypoints' : waypoints.length === 1 ? 'waypoint' : 'waypoints';
   $('slope-note').textContent = !route
     ? 'Select a route to see terrain stats'
     : routeStats.gain === undefined

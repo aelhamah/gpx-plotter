@@ -79,9 +79,16 @@
             <div><span>High</span><strong id="max-elevation">—</strong></div>
             <div><span>Points</span><strong id="point-count">0</strong></div>
             <div><span>Max slope</span><strong id="max-slope">—</strong></div>
-            <div><span>Waypoints</span><strong id="waypoint-count">0</strong></div>
           </div>
           <p id="slope-note" class="hint">Import GPX elevation to calculate slope.</p>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Waypoints</div>
+          <div class="waypoint-summary">
+            <strong id="waypoint-count">0</strong>
+            <span id="waypoint-summary-label">No waypoints</span>
+          </div>
         </div>
 
         <div class="section">
@@ -93,7 +100,7 @@
 
         <div class="section help">
           <div class="section-title">Editing</div>
-          <p><b>Draw:</b> click to add points, double-click to finish.</p>
+          <p><b>Draw:</b> click to add points; double-click, press Enter, or hit Finish to end.</p>
           <p><b>Move:</b> drag a point or waypoint.</p>
           <p><b>Waypoints:</b> click to select, double-click to rename, Delete to remove.</p>
           <p><b>Rotate/Tilt:</b> ⌘/Ctrl + click and drag the map; scroll to zoom.</p>
@@ -109,7 +116,17 @@
       <main class="map-wrap">
         <div id="map"></div>
         <div id="stats-progress" class="stats-progress hidden"><span class="spinner"></span>Reading terrain…</div>
-        <div id="draw-hint" class="map-overlay hidden">Click to add route points · double-click to finish · Esc to cancel</div>
+        <div id="draw-hint" class="map-overlay hidden">Click to place a waypoint · Esc to cancel</div>
+        <div id="draw-bar" class="draw-bar hidden">
+          <span class="draw-dot"></span>
+          <div class="draw-info">
+            <b class="draw-title">Drawing a route</b>
+            <em id="draw-status">Click to add points — double-click, press Enter, or Finish to end</em>
+          </div>
+          <span id="draw-count" class="draw-count">0</span><span class="draw-count-label">pts</span>
+          <button id="draw-finish" class="draw-finish" type="button" disabled>Finish</button>
+          <button id="draw-cancel" class="draw-cancel" type="button">Cancel</button>
+        </div>
         <div class="map-icon-controls">
           <div class="map-icon-control">
             <button id="fit-route" class="map-icon-button" type="button" aria-label="Fit view to routes">
