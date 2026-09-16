@@ -16,8 +16,6 @@ let waypoints: Waypoint[] = [];
 let selectedRouteId: number | null = null;
 let nextRouteId = 1;
 let drawing = false;
-let lastRouteClickTime = 0;
-let lastRouteClickScreen: { x: number; y: number } | null = null;
 let waypointMode = false;
 let terrainEnabled = false;
 let reliefEnabled = false;
@@ -377,8 +375,8 @@ function updateDrawBar() {
   $('draw-count').textContent = String(count);
   ($('draw-finish') as HTMLButtonElement).disabled = count < 2;
   $('draw-status').textContent = count < 2
-    ? 'Click to add points — double-click, press Enter, or Finish to end'
-    : 'Double-click, press Enter, or Finish to end';
+    ? 'Click to add points — press Enter or click Finish to end'
+    : 'Press Enter or click Finish to end';
 }
 
 function startDrawing() {
@@ -390,7 +388,6 @@ function startDrawing() {
     selectRoute(created.id);
   }
   drawing = true;
-  map.doubleClickZoom?.disable();
   $('draw-route').classList.add('active');
   drawHint.classList.add('hidden');
   $('draw-bar').classList.remove('hidden');
@@ -399,8 +396,6 @@ function startDrawing() {
 }
 function stopDrawing() {
   drawing = false;
-  lastRouteClickScreen = null;
-  map.doubleClickZoom?.enable();
   $('draw-route').classList.remove('active');
   $('draw-bar').classList.add('hidden');
   map.getCanvas().style.cursor = '';
@@ -458,31 +453,24 @@ function addRoutePoint(event: MapMouseEvent) {
 map.on('click', (event: MapMouseEvent) => {
   if (rotating || rotatedThisGesture) return;
   if (waypointMode) addWaypoint(event);
-  else if (drawing) {
-    const now = performance.now();
-    const { x, y } = event.point;
-    const isDouble = lastRouteClickScreen !== null
-      && now - lastRouteClickTime < 350
-      && Math.abs(x - lastRouteClickScreen.x) < 12
-      && Math.abs(y - lastRouteClickScreen.y) < 12;
-    lastRouteClickTime = now;
-    lastRouteClickScreen = { x, y };
-    if (isDouble) finishRoute();
-    else addRoutePoint(event);
-  }
+  else if (drawing) addRoutePoint(event);
 });
-map.on('dblclick', (event: MapMouseEvent) => {
-  if (!drawing) return;
-  event.preventDefault();
-  finishRoute();
-});
-// Double-click zoom is disabled while drawing, which also suppresses the map's
-// dblclick event, so listen on the canvas directly to guarantee finishing.
-map.getCanvas().addEventListener('dblclick', (event) => {
-  if (!drawing) return;
-  event.preventDefault();
-  finishRoute();
-});
+
+// The sidebar floats over the map with a click-through backdrop, so wheel
+// events over it would otherwise reach the map and zoom. Intercept them in the
+// capture phase and scroll the sidebar instead.
+const sidebarEl = document.querySelector<HTMLElement>('.sidebar');
+if (sidebarEl) {
+  document.addEventListener('wheel', (event) => {
+    const box = sidebarEl.getBoundingClientRect();
+    const overSidebar = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+    if (!overSidebar) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const step = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+    sidebarEl.scrollTop += step;
+  }, { capture: true, passive: false });
+}
 
 window.addEventListener('keydown', (event) => {
   const typingInField = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
