@@ -86,8 +86,13 @@ map.on('load', () => {
 
 map.on('style.load', () => {
   addDataLayers();
+  applyTerrain();
   updateUI();
 });
+
+function applyTerrain() {
+  map.setTerrain(terrainEnabled ? { source: 'terrain', exaggeration: 1.15 } : null);
+}
 
 function addDataLayers() {
   if (!map.getSource('terrain')) {
@@ -597,8 +602,8 @@ function setUnitSystem(system: UnitSystem) {
 
 $('terrain-toggle').addEventListener('click', () => {
   terrainEnabled = !terrainEnabled;
-  if (terrainEnabled) { map.setTerrain({ source: 'terrain', exaggeration: 1.15 }); map.easeTo({ pitch: 55, duration: 600 }); }
-  else { map.setTerrain(null); map.easeTo({ pitch: 0, duration: 600 }); }
+  if (terrainEnabled) { applyTerrain(); map.easeTo({ pitch: 55, duration: 600 }); }
+  else { applyTerrain(); map.easeTo({ pitch: 0, duration: 600 }); }
   $('terrain-toggle').classList.toggle('active', terrainEnabled);
 });
 
