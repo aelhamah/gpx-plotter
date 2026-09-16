@@ -42,9 +42,9 @@ describe('downsamplePoints', () => {
 });
 
 describe('defaultPointBudget', () => {
-  it('scales the budget with distance at roughly one point per 10 m', () => {
-    expect(defaultPointBudget(7110, 13360)).toBe(711);
-    expect(defaultPointBudget(20000, 50000)).toBe(2000);
+  it('scales the budget with distance at roughly one point per 12 m', () => {
+    expect(defaultPointBudget(7110, 13360)).toBe(593);
+    expect(defaultPointBudget(20000, 50000)).toBe(1667);
   });
 
   it('never suggests more points than the track has', () => {
