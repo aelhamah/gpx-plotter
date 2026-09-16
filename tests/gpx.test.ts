@@ -46,6 +46,12 @@ describe('exportGPX → parseGPX round trip', () => {
     expect(parsed.waypoints[0].lat).toBe(9);
     expect(parsed.waypoints[0].lon).toBe(10);
   });
+  it('round-trips a waypoint elevation when present', () => {
+    const xml = exportGPX([], [{ lat: 9, lon: 10, name: 'Camp', elevation: 2134.5 }]);
+    expect(xml).toContain('<ele>2134.50</ele>');
+    const parsed = parseGPX(xml);
+    expect(parsed.waypoints[0].elevation).toBeCloseTo(2134.5, 2);
+  });
 });
 
 describe('parseGPX', () => {
@@ -97,6 +103,14 @@ describe('parseGPX', () => {
     expect(parsed.waypoints).toHaveLength(2);
     expect(parsed.waypoints[0]).toEqual({ lat: 9, lon: 10, name: 'Camp' });
     expect(parsed.waypoints[1].name).toBe('Waypoint 2');
+  });
+  it('parses a waypoint elevation when supplied', () => {
+    const wps = `<?xml version="1.0"?>
+      <gpx xmlns="http://www.topografix.com/GPX/1/1">
+        <trk><name>T</name><trkseg><trkpt lat="1" lon="2"/><trkpt lat="3" lon="4"/></trkseg></trk>
+        <wpt lat="9" lon="10"><name>Camp</name><ele>1234.5</ele></wpt>
+      </gpx>`;
+    expect(parseGPX(wps).waypoints[0].elevation).toBeCloseTo(1234.5, 6);
   });
   it('throws on non-XML input', () => {
     expect(() => parseGPX('this is not xml')).toThrow();

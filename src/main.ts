@@ -194,6 +194,24 @@ async function refreshRouteStats() {
   drawProfileChart();
 }
 
+/** Map label for a waypoint; the selected waypoint also shows its terrain elevation. */
+function waypointLabelText(index: number): string {
+  const waypoint = waypoints[index];
+  if (!waypoint) return '';
+  const showElevation = selectedWaypointIndex === index && Number.isFinite(waypoint.elevation);
+  return showElevation ? `${waypoint.name} · ${formatElevation(waypoint.elevation, unitSystem)}` : waypoint.name;
+}
+
+/** Fill in a waypoint's terrain elevation (once) and refresh its label when known. */
+async function ensureWaypointElevation(index: number) {
+  const waypoint = waypoints[index];
+  if (!waypoint || Number.isFinite(waypoint.elevation)) return;
+  const elevation = await elevationAt(waypoint.lon, waypoint.lat);
+  if (elevation === undefined || !waypoints[index]) return;
+  waypoints[index] = { ...waypoints[index], elevation };
+  if (selectedWaypointIndex === index) refreshMarkers();
+}
+
 function refreshMarkers() {
   for (const marker of markers) marker.remove();
   markers = [];
@@ -287,7 +305,7 @@ function refreshMarkers() {
     el.title = waypoint.name;
     const label = document.createElement('span');
     label.className = `waypoint-map-label ${selectedWaypointIndex === index ? 'editable' : ''}`;
-    label.textContent = waypoint.name;
+    label.textContent = waypointLabelText(index);
     label.title = waypoint.name;
     const renameInput = document.createElement('input');
     renameInput.type = 'text';
@@ -306,9 +324,9 @@ function refreshMarkers() {
       label.classList.remove('hidden');
     });
     wrap.append(el, label, renameInput);
-    el.addEventListener('click', (event) => { event.stopPropagation(); selectedWaypointIndex = index; selectedIndex = null; refreshMarkers(); updateUI(); });
+    el.addEventListener('click', (event) => { event.stopPropagation(); selectedWaypointIndex = index; selectedIndex = null; refreshMarkers(); updateUI(); void ensureWaypointElevation(index); });
     el.addEventListener('dblclick', (event) => { event.stopPropagation(); openWaypointRename(index); });
-    label.addEventListener('click', (event) => { event.stopPropagation(); selectedWaypointIndex = index; selectedIndex = null; refreshMarkers(); updateUI(); });
+    label.addEventListener('click', (event) => { event.stopPropagation(); selectedWaypointIndex = index; selectedIndex = null; refreshMarkers(); updateUI(); void ensureWaypointElevation(index); });
     label.addEventListener('dblclick', (event) => { event.stopPropagation(); openWaypointRename(index); });
     el.addEventListener('pointerdown', (event) => {
       event.stopPropagation();
@@ -321,7 +339,7 @@ function refreshMarkers() {
       const move = (e: PointerEvent) => {
         const rect = map.getCanvas().getBoundingClientRect();
         const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
-        waypoints[index] = { ...waypoints[index], lat: lngLat.lat, lon: lngLat.lng };
+        waypoints[index] = { ...waypoints[index], lat: lngLat.lat, lon: lngLat.lng, elevation: undefined };
         refreshMarkers();
       };
       const up = () => {
@@ -329,6 +347,7 @@ function refreshMarkers() {
         document.removeEventListener('pointerup', up);
         map.dragPan.enable();
         commitSnapshot();
+        void ensureWaypointElevation(index);
       };
       document.addEventListener('pointermove', move);
       document.addEventListener('pointerup', up, { once: true });
@@ -590,7 +609,7 @@ function commitWaypointName(index: number, raw: string) {
   waypoints[index] = { ...waypoints[index], name: normalizeWaypointName(raw, index) };
   const label = waypointMarkerLabels[index];
   const markerButton = waypointMarkerElements[index];
-  if (label) { label.textContent = waypoints[index].name; label.title = waypoints[index].name; }
+  if (label) { label.textContent = waypointLabelText(index); label.title = waypoints[index].name; }
   if (markerButton) markerButton.title = waypoints[index].name;
 }
 

@@ -17,6 +17,7 @@ export interface Waypoint {
   lat: number;
   lon: number;
   name: string;
+  elevation?: number;
 }
 
 function firstElement(parent: Element, tag: string): Element | null {
@@ -76,7 +77,12 @@ export function parseGPX(xmlText: string): ParsedGPX {
   Array.from(doc.getElementsByTagNameNS('*', 'wpt')).forEach((node, index) => {
     const point = pointFrom(node);
     if (!point) return;
-    waypoints.push({ lat: point.lat, lon: point.lon, name: normalizeWaypointName(textOf(node, 'name') ?? '', index) });
+    waypoints.push({
+      lat: point.lat,
+      lon: point.lon,
+      name: normalizeWaypointName(textOf(node, 'name') ?? '', index),
+      ...(point.elevation === undefined ? {} : { elevation: point.elevation }),
+    });
   });
 
   if (!routes.some((route) => route.points.length) && !waypoints.length) {
@@ -98,7 +104,10 @@ export function exportGPX(routes: Route[], waypoints: Waypoint[]): string {
     return `  <trk>\n    <name>${xmlEscape(route.name || 'Unnamed route')}</name>\n    <trkseg>\n${points}\n    </trkseg>\n  </trk>`;
   }).join('\n');
 
-  const wpts = waypoints.map((w) => `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lon.toFixed(7)}">\n    <name>${xmlEscape(w.name || 'Waypoint')}</name>\n  </wpt>`).join('\n');
+  const wpts = waypoints.map((w) => {
+    const elevation = w.elevation === undefined ? '' : `\n    <ele>${w.elevation.toFixed(2)}</ele>`;
+    return `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lon.toFixed(7)}">\n    <name>${xmlEscape(w.name || 'Waypoint')}</name>${elevation}\n  </wpt>`;
+  }).join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="GPX Plotter" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n  <metadata>\n    <name>${xmlEscape(routes[0]?.name || 'My Route')}</name>\n  </metadata>\n${tracks ? `${tracks}\n` : ''}${wpts ? `${wpts}\n` : ''}</gpx>\n`;
 }
