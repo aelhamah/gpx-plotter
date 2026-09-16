@@ -131,7 +131,7 @@ function routesGeoJSON(): FeatureCollection<LineString | Point> {
     .filter((route) => route.points.length >= 2)
     .map((route) => ({
       type: 'Feature',
-      properties: { color: route.color },
+      properties: { color: route.color, id: route.id },
       geometry: { type: 'LineString', coordinates: route.points.map((p) => [p.lon, p.lat]) },
     }));
   return { type: 'FeatureCollection', features };
@@ -292,10 +292,7 @@ function refreshMarkers() {
       text.classList.remove('hidden');
     });
     label.append(text, renameInput);
-    label.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (selectedRouteId !== null) selectRoute(null);
-    });
+    label.addEventListener('click', (event) => { event.stopPropagation(); selectRoute(route.id); });
     label.addEventListener('dblclick', (event) => { event.stopPropagation(); openRouteRename(index); });
     routeNameWidgets.push({ label, text, input: renameInput });
     markers.push(new maplibregl.Marker({ element: label, anchor: 'left', offset: [10, 0] }).setLngLat([mid.lon, mid.lat]).addTo(map));
@@ -477,13 +474,16 @@ function addRoutePoint(event: MapMouseEvent) {
 
 map.on('click', (event: MapMouseEvent) => {
   if (rotating || rotatedThisGesture) return;
-  if (waypointMode) addWaypoint(event);
-  else if (drawing) addRoutePoint(event);
-  else if (selectedWaypointIndex !== null || selectedIndex !== null) {
-    selectedWaypointIndex = null;
-    selectedIndex = null;
-    refreshMarkers();
-    updateUI();
+  if (waypointMode) { addWaypoint(event); return; }
+  if (drawing) { addRoutePoint(event); return; }
+  const hit = map.queryRenderedFeatures(event.point, { layers: ['route-line', 'route-casing'] });
+  const hitId = hit[0]?.properties?.id;
+  if (hitId !== undefined && hitId !== null) {
+    selectRoute(Number(hitId));
+    return;
+  }
+  if (selectedRouteId !== null || selectedWaypointIndex !== null || selectedIndex !== null) {
+    selectRoute(null);
   }
 });
 
