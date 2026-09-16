@@ -965,7 +965,7 @@ function drawProfileChart() {
   const yAt = (elevation: number) => PROFILE_PAD_T + (1 - (elevation - geometry.yMin) / (geometry.yMax - geometry.yMin)) * geometry.plotH;
 
   context.font = '10px Inter, ui-sans-serif, system-ui, sans-serif';
-  context.fillStyle = '#94a3b8';
+  context.fillStyle = '#64748b';
   context.strokeStyle = '#e2e8f0';
   context.lineWidth = 1;
   const distanceUnit = unitSystem === 'imperial' ? 'mi' : 'km';
@@ -993,7 +993,7 @@ function drawProfileChart() {
       context.lineTo(x, cssHeight - PROFILE_PAD_B);
       context.stroke();
       const label = t === ticks[ticks.length - 1] ? `${formatDistanceAxis(t, unitSystem)} ${distanceUnit}` : formatDistanceAxis(t, unitSystem);
-      context.fillStyle = '#94a3b8';
+      context.fillStyle = '#64748b';
       context.fillText(label, x - context.measureText(label).width / 2, cssHeight - 6);
     }
     context.fillText('0', PROFILE_PAD_L - context.measureText('0').width / 2, cssHeight - 6);
