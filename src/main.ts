@@ -476,6 +476,12 @@ map.on('click', (event: MapMouseEvent) => {
   if (rotating || rotatedThisGesture) return;
   if (waypointMode) addWaypoint(event);
   else if (drawing) addRoutePoint(event);
+  else if (selectedWaypointIndex !== null || selectedIndex !== null) {
+    selectedWaypointIndex = null;
+    selectedIndex = null;
+    refreshMarkers();
+    updateUI();
+  }
 });
 
 // The sidebar floats over the map with a click-through backdrop, so wheel
