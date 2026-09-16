@@ -730,22 +730,24 @@ function closeImportDialog() {
 
 async function applyImport(data: ParsedGPX, stripElevations: boolean, target?: number) {
   commitSnapshot();
-  routes = data.routes.map(({ name, points }) => {
+  const imported = data.routes.map(({ name, points }) => {
     // Files we exported carry DEM-sampled elevations; they may be stale, so ignore them and re-query the terrain.
     const base = stripElevations ? points.map(({ lat, lon }) => ({ lat, lon })) : points;
     const next = target !== undefined && base.length > target ? downsamplePoints(base, target) : base;
     return { ...newRoute(), name, points: next };
   });
-  waypoints = data.waypoints;
-  selectedRouteId = routes[0]?.id ?? null;
+  routes.push(...imported);
+  const firstWaypoint = waypoints.length;
+  waypoints.push(...data.waypoints);
+  selectedRouteId = imported[0]?.id ?? selectedRouteId;
   selectedIndex = null;
   selectedWaypointIndex = null;
   refreshRoutesLayer();
   updateUI();
-  fitAll();
+  fitPoints([...imported.flatMap((route) => route.points), ...data.waypoints]);
   await refreshRouteStats();
   refreshRoutesLayer();
-  waypoints.forEach((_, index) => void ensureWaypointElevation(index));
+  for (let index = firstWaypoint; index < waypoints.length; index++) void ensureWaypointElevation(index);
 }
 
 async function confirmImport() {
@@ -792,15 +794,18 @@ $('export-gpx').addEventListener('click', () => {
   anchor.click(); URL.revokeObjectURL(url);
 });
 
-function fitAll() {
-  const points = [
-    ...routes.flatMap((route) => route.points),
-    ...waypoints.map((w) => ({ lat: w.lat, lon: w.lon })),
-  ];
+function fitPoints(points: { lat: number; lon: number }[]) {
   if (!points.length) return;
   const bounds = new maplibregl.LngLatBounds();
   for (const point of points) bounds.extend([point.lon, point.lat]);
   map.fitBounds(bounds, { padding: 80, duration: 700, maxZoom: 15 });
+}
+
+function fitAll() {
+  fitPoints([
+    ...routes.flatMap((route) => route.points),
+    ...waypoints.map((w) => ({ lat: w.lat, lon: w.lon })),
+  ]);
 }
 
 function fillRouteList() {
