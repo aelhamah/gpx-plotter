@@ -73,6 +73,14 @@ Guidelines:
 - DOM-heavy code in `main.ts` is exercised manually (see below) rather than in
   unit tests.
 
+## Pull requests
+
+Every PR should generally include a test that asserts the expected behavior of
+the change being made — ideally one that fails before the change and passes
+after, so the new or fixed behavior is pinned down. If the change lives in
+DOM/map code that can't reasonably be unit-tested, add the closest test for the
+underlying logic and describe the manual verification steps in the PR.
+
 ## Adding a feature (checklist)
 
 1. **Model / math first.** Put reusable logic in a pure module and write a test.
