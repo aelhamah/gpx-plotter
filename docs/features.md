@@ -126,8 +126,9 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 
 ## Demo data and quality
 
-- A 13,000-point sample hike is bundled at `public/demos/Afternoon_Hike.gpx`
-  (also served at `/demos/Afternoon_Hike.gpx`) for exercising the downsampling
+- Sample tracks are bundled under `public/demos/` (also served at `/demos/…`):
+  `Afternoon_Hike.gpx` (a ~13,000-point hike) and
+  `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
 - **62 unit tests** across 8 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, and downsampling.
