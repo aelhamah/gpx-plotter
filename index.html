@@ -14,6 +14,10 @@
             <h1>GPX Plotter</h1>
             <p>Draw, edit, inspect, and export routes.</p>
           </div>
+          <div class="units-toggle" role="group" aria-label="Units">
+            <button id="units-metric" class="unit-button" type="button">Metric</button>
+            <button id="units-imperial" class="unit-button" type="button">Imperial</button>
+          </div>
         </div>
 
         <div class="toolbar">
@@ -21,8 +25,15 @@
             Import GPX
             <input id="gpx-input" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml" />
           </label>
-          <button id="new-route" class="button button-secondary">New route</button>
           <button id="draw-route" class="button button-primary">Draw route</button>
+          <button id="new-route" class="button button-secondary">+ New route</button>
+          <button id="add-waypoint" class="button button-secondary">Add waypoint</button>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Routes</div>
+          <div id="routes-list" class="routes-list"></div>
+          <p id="routes-empty" class="hint">No routes yet — draw one, import a GPX, or press “+ New route”.</p>
         </div>
 
         <div class="section">
@@ -36,6 +47,7 @@
             <div><span>High</span><strong id="max-elevation">—</strong></div>
             <div><span>Points</span><strong id="point-count">0</strong></div>
             <div><span>Max slope</span><strong id="max-slope">—</strong></div>
+            <div><span>Waypoints</span><strong id="waypoint-count">0</strong></div>
           </div>
           <p id="slope-note" class="hint">Import GPX elevation to calculate slope.</p>
         </div>
@@ -54,7 +66,6 @@
             <button id="imagery-toggle" class="button button-secondary">Satellite</button>
             <button id="relief-toggle" class="button button-secondary">Relief</button>
             <button id="slope-toggle" class="button button-secondary">Slope shading</button>
-            <button id="fit-route" class="button button-secondary">Fit route</button>
           </div>
           <p id="map-status" class="hint">Add a MapTiler key in <code>src/config.ts</code>.</p>
         </div>
@@ -62,7 +73,8 @@
         <div class="section help">
           <div class="section-title">Editing</div>
           <p><b>Draw:</b> click to add points, double-click to finish.</p>
-          <p><b>Move:</b> drag a point.</p>
+          <p><b>Move:</b> drag a point or waypoint.</p>
+          <p><b>Waypoints:</b> click to select, double-click to rename, Delete to remove.</p>
           <p><b>Rotate/Tilt:</b> ⌘/Ctrl + click and drag the map; scroll to zoom.</p>
           <p><b>Delete:</b> select a point and press Delete.</p>
           <p><b>Undo/Redo:</b> use ⌘/Ctrl-Z and ⇧⌘/Ctrl-Z.</p>
@@ -79,6 +91,12 @@
         <div id="map"></div>
         <div id="stats-progress" class="stats-progress hidden"><span class="spinner"></span>Reading terrain…</div>
         <div id="draw-hint" class="map-overlay hidden">Click to add route points · double-click to finish · Esc to cancel</div>
+        <div class="map-icon-control">
+          <button id="fit-route" class="map-icon-button" type="button" aria-label="Fit view to routes">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="map-icon-tooltip">fit</span>
+        </div>
         <div id="slope-legend" class="slope-legend hidden">
           <b>Slope angle</b>
           <span><i class="swatch green"></i>&lt;20°</span>

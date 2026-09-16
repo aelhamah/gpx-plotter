@@ -7,10 +7,10 @@ import {
   routeProfilePoints,
   summarizeProfile,
   segmentSlopeDegrees,
-  profileAxisLabel,
   profileAxisStep,
   nearestProfileSample,
   colorToAlpha,
+  metersToKm,
 } from '../src/geo';
 
 describe('mercator helpers', () => {
@@ -105,14 +105,6 @@ describe('segmentSlopeDegrees', () => {
   });
 });
 
-describe('profileAxisLabel', () => {
-  it('uses one decimal below 10 miles and rounds above', () => {
-    expect(profileAxisLabel(1609.344)).toBe('1.0');
-    expect(profileAxisLabel(2023)).toBe('1.3');
-    expect(profileAxisLabel(30 * 1609.344)).toBe('30');
-  });
-});
-
 describe('profileAxisStep', () => {
   it('returns 0 for a zero-length route', () => {
     expect(profileAxisStep(0)).toBe(0);
@@ -149,5 +141,12 @@ describe('colorToAlpha', () => {
   it('converts a hex color to an rgba string', () => {
     expect(colorToAlpha('#22c55e', 0.5)).toBe('rgba(34, 197, 94, 0.5)');
     expect(colorToAlpha('#111827', 1)).toBe('rgba(17, 24, 39, 1)');
+  });
+});
+
+describe('metersToKm', () => {
+  it('converts meters to kilometers', () => {
+    expect(metersToKm(1000)).toBeCloseTo(1, 9);
+    expect(metersToKm(3218.688)).toBeCloseTo(3.219, 2);
   });
 });

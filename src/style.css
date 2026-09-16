@@ -40,7 +40,7 @@ code { font-size: 11px; }
 .map-overlay { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); background: rgba(20,20,20,.88); color: #fff; border-radius: 999px; padding: 9px 14px; font-size: 12px; pointer-events: none; white-space: nowrap; }
 .hidden { display: none; }
 .route-marker { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; background: #e11d48; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: grab; padding: 0; }
-.route-marker.selected { width: 18px; height: 18px; background: #111; }
+.route-marker.selected { width: 18px; height: 18px; border-color: #111; }
 .route-marker:active { cursor: grabbing; }
 .maplibregl-ctrl-group { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
 @media (max-width: 800px) {
@@ -61,3 +61,38 @@ code { font-size: 11px; }
 .profile-readout { font-size: 12px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 6px; background: #f5f5f2; border: 1px solid #e4e4df; border-radius: 8px; padding: 6px 9px; margin-bottom: 8px; }
 .profile-readout.hidden { display: none; }
 .profile-hover-marker { width: 12px; height: 12px; border-radius: 50%; background: #e11d48; border: 2px solid #fff; box-shadow: 0 0 8px rgba(225,29,72,.8); pointer-events: none; }
+.brand { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.units-toggle { display: flex; border: 1px solid #d3d3ce; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+.unit-button { appearance: none; background: #fff; color: #555; border: 0; padding: 6px 9px; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.unit-button.active { background: #171717; color: #fff; }
+.routes-list { display: grid; gap: 6px; }
+.route-item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; background: #fafaf8; }
+.route-item:hover { background: #f5f5f2; }
+.route-item.selected { border-color: #d6d6d1; background: #f0f0ec; }
+.route-swatch { width: 12px; height: 12px; border-radius: 999px; }
+.route-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #252525; }
+.route-remove { appearance: none; border: 0; background: transparent; color: #a1a1a1; font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 5px; border-radius: 5px; }
+.route-remove:hover { color: #e11d48; background: #fde8ec; }
+.waypoint-marker { width: 22px; height: 22px; display: grid; place-items: center; background: #f8fafc; border: 2px solid #111827; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; font-size: 11px; font-weight: 800; color: #111827; }
+.waypoint-marker.selected { background: #e11d48; border-color: #e11d48; color: #fff; }
+.waypoint-marker::before { content: "●"; font-size: 8px; }
+.waypoint-marker-wrap { position: relative; width: 0; height: 0; }
+.waypoint-marker-wrap .waypoint-marker { position: absolute; left: -11px; top: -11px; }
+.waypoint-map-label { position: absolute; left: 12px; top: -8px; font-size: 11px; font-weight: 700; color: #1f2937; background: rgba(255,255,255,.92); border: 1px solid rgba(0,0,0,.15); border-radius: 6px; padding: 2px 7px; box-shadow: 0 1px 4px rgba(0,0,0,.18); white-space: nowrap; cursor: pointer; }
+.waypoint-map-label.editable { border-style: dashed; border-color: #0284c7; color: #0c4a6e; }
+.waypoint-map-label.editable::after { content: "✎"; color: #0284c7; margin-left: 5px; font-size: 10px; }
+.waypoint-name-input { position: absolute; left: 12px; top: -8px; font: 700 11px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; color: #1f2937; background: #fff; border: 1px solid #0284c7; border-radius: 6px; padding: 2px 7px; box-shadow: 0 1px 4px rgba(0,0,0,.2); z-index: 2; }
+.waypoint-name-input.hidden { display: none; }
+.route-map-label { position: relative; display: inline-block; width: max-content; font-size: 11px; font-weight: 800; color: #1f2937; background: rgba(255,255,255,.92); border: 1px solid rgba(0,0,0,.15); border-left: 5px solid var(--route-color); border-radius: 7px; padding: 3px 8px; box-shadow: 0 1px 4px rgba(0,0,0,.18); white-space: nowrap; cursor: pointer; }
+.route-name-text.hidden { display: none; }
+.route-map-label.editable { border-style: dashed; border-color: #0284c7; border-left: 5px solid var(--route-color); }
+.route-map-label.editable .route-name-text::after { content: "✎"; color: #0284c7; margin-left: 5px; font-size: 10px; }
+.route-name-input { font: 800 11px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; color: #1f2937; background: #fff; border: 1px solid #0284c7; border-radius: 4px; padding: 0 4px; box-shadow: 0 1px 4px rgba(0,0,0,.2); z-index: 2; }
+.route-name-input.hidden { display: none; }
+.map-icon-control { position: absolute; left: 12px; bottom: 26px; z-index: 3; display: flex; align-items: center; }
+.map-icon-button { width: 29px; height: 29px; border: 1px solid rgba(0,0,0,.18); border-radius: 7px; background: #fff; color: #444; cursor: pointer; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,.2); padding: 0; }
+.map-icon-button:hover { background: #f6f6f4; color: #111; }
+.map-icon-button svg { width: 15px; height: 15px; }
+.map-icon-tooltip { position: absolute; left: 37px; top: 50%; transform: translateY(-50%); background: rgba(20,20,20,.92); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .12s ease; white-space: nowrap; }
+.map-icon-tooltip::before { content: ""; position: absolute; right: 100%; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-right-color: rgba(20,20,20,.92); }
+.map-icon-control:hover .map-icon-tooltip { opacity: 1; }

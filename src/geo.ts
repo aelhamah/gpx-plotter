@@ -84,12 +84,9 @@ export function summarizeProfile(profile: RoutePoint[]): ProfileSummary {
 
 export function metersToMiles(m: number) { return m / 1609.344; }
 export function metersToFeet(m: number) { return m * 3.280839895; }
+export function metersToKm(m: number) { return m / 1000; }
 
-/** Distance-axis tick label: miles, one decimal below 10, integer from 10 up. */
-export function profileAxisLabel(meters: number): string {
-  const miles = metersToMiles(meters);
-  return miles < 10 ? miles.toFixed(1) : Math.round(miles).toString();
-}
+export type UnitSystem = 'metric' | 'imperial';
 
 /** "Nice" even spacing between x-axis ticks, aimed at ~5 divisions along the route. */
 export function profileAxisStep(totalMeters: number): number {
