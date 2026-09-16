@@ -194,11 +194,11 @@ async function refreshRouteStats() {
   drawProfileChart();
 }
 
-/** Map label for a waypoint; the selected waypoint also shows its terrain elevation. */
+/** Map label for a waypoint; shows its terrain elevation once known. */
 function waypointLabelText(index: number): string {
   const waypoint = waypoints[index];
   if (!waypoint) return '';
-  const showElevation = selectedWaypointIndex === index && Number.isFinite(waypoint.elevation);
+  const showElevation = Number.isFinite(waypoint.elevation);
   return showElevation ? `${waypoint.name} · ${formatElevation(waypoint.elevation, unitSystem)}` : waypoint.name;
 }
 
@@ -209,7 +209,7 @@ async function ensureWaypointElevation(index: number) {
   const elevation = await elevationAt(waypoint.lon, waypoint.lat);
   if (elevation === undefined || !waypoints[index]) return;
   waypoints[index] = { ...waypoints[index], elevation };
-  if (selectedWaypointIndex === index) refreshMarkers();
+  refreshMarkers();
 }
 
 function refreshMarkers() {
@@ -370,6 +370,7 @@ function restore(state: AppState) {
   refreshRoutesLayer();
   updateUI();
   void refreshRouteStats();
+  waypoints.forEach((_, index) => void ensureWaypointElevation(index));
 }
 function undo() { const previous = history.pop(); if (!previous) return; future.push(snapshot()); restore(previous); }
 function redo() { const next = future.pop(); if (!next) return; history.push(snapshot()); restore(next); }
@@ -454,6 +455,7 @@ function addWaypoint(event: MapMouseEvent) {
   setWaypointMode(false);
   refreshMarkers();
   updateUI();
+  void ensureWaypointElevation(waypoints.length - 1);
 }
 
 function addRoutePoint(event: MapMouseEvent) {
@@ -701,6 +703,7 @@ $('gpx-input').addEventListener('change', async (event) => {
     fitAll();
     await refreshRouteStats();
     refreshRoutesLayer();
+    waypoints.forEach((_, index) => void ensureWaypointElevation(index));
   } catch (error) { alert(error instanceof Error ? error.message : 'Unable to import GPX.'); }
   finally { input.value = ''; }
 });
