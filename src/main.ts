@@ -4,7 +4,8 @@ import type { GeoJSONSource } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
 import { colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, type UnitSystem } from './geo';
-import { exportGPX, parseGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
+import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
+import { DOWNSAMPLE_PROMPT_THRESHOLD, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
 import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
 import { routeColorForId, TRACE_COLOR } from './colors';
@@ -679,33 +680,101 @@ $('imagery-toggle').addEventListener('click', () => {
   $('imagery-toggle').classList.toggle('active', satelliteEnabled);
 });
 
+type PendingImport = {
+  fileName: string;
+  points: number;
+  data: ParsedGPX;
+  stripElevations: boolean;
+};
+
+let pendingImport: PendingImport | null = null;
+const formatCount = (value: number) => value.toLocaleString('en-US');
+
+function openImportDialog(pending: PendingImport) {
+  pendingImport = pending;
+  const largest = pending.data.routes.reduce((max, route) => Math.max(max, route.points.length), 0);
+  const slider = $<HTMLInputElement>('import-target');
+  slider.min = '2';
+  slider.max = String(largest);
+  slider.step = '1';
+  slider.value = String(Math.min(largest, 1000));
+  $('import-summary').textContent = `${pending.fileName} · ${formatCount(pending.points)} points`;
+  updateImportPreview();
+  $('import-dialog').classList.remove('hidden');
+}
+
+function updateImportPreview() {
+  if (!pendingImport) return;
+  const target = Number($<HTMLInputElement>('import-target').value);
+  let kept = 0;
+  let largest = 0;
+  for (const route of pendingImport.data.routes) {
+    largest = Math.max(largest, route.points.length);
+    kept += route.points.length > target ? downsamplePoints(route.points, target).length : route.points.length;
+  }
+  $('import-target-value').textContent = formatCount(target);
+  $('import-result').textContent = target >= largest
+    ? `Keeping all ${formatCount(kept)} points — may be slow for large files.`
+    : `Keeps ${formatCount(kept)} points and the first and last fix of each route.`;
+}
+
+function closeImportDialog() {
+  pendingImport = null;
+  $('import-dialog').classList.add('hidden');
+}
+
+async function applyImport(data: ParsedGPX, stripElevations: boolean, target?: number) {
+  commitSnapshot();
+  routes = data.routes.map(({ name, points }) => {
+    // Files we exported carry DEM-sampled elevations; they may be stale, so ignore them and re-query the terrain.
+    const base = stripElevations ? points.map(({ lat, lon }) => ({ lat, lon })) : points;
+    const next = target !== undefined && base.length > target ? downsamplePoints(base, target) : base;
+    return { ...newRoute(), name, points: next };
+  });
+  waypoints = data.waypoints;
+  selectedRouteId = routes[0]?.id ?? null;
+  selectedIndex = null;
+  selectedWaypointIndex = null;
+  refreshRoutesLayer();
+  updateUI();
+  fitAll();
+  await refreshRouteStats();
+  refreshRoutesLayer();
+  waypoints.forEach((_, index) => void ensureWaypointElevation(index));
+}
+
+async function confirmImport() {
+  if (!pendingImport) return;
+  const target = Number($<HTMLInputElement>('import-target').value);
+  const { data, stripElevations } = pendingImport;
+  closeImportDialog();
+  await applyImport(data, stripElevations, target);
+}
+
+$('import-target').addEventListener('input', updateImportPreview);
+$('import-cancel').addEventListener('click', closeImportDialog);
+$('import-confirm').addEventListener('click', () => void confirmImport());
+$('import-dialog').addEventListener('click', (event) => { if (event.target === $('import-dialog')) closeImportDialog(); });
+window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('import-dialog').classList.contains('hidden')) closeImportDialog(); });
+
 $('gpx-input').addEventListener('change', async (event) => {
-  const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file) return;
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
   try {
     const content = await file.text();
     const doc = new DOMParser().parseFromString(content, 'application/xml');
     const imported = parseGPX(content);
-    // Files we exported carry DEM-sampled elevations; they may be stale, so ignore them and re-query the terrain.
     const stripElevations = doc.documentElement.getAttribute('creator') === 'GPX Plotter';
-    const nextRoutes = imported.routes.map(({ name, points }) => ({
-      ...newRoute(),
-      name,
-      points: stripElevations ? points.map(({ lat, lon }) => ({ lat, lon })) : points,
-    }));
-    commitSnapshot();
-    routes = nextRoutes;
-    waypoints = imported.waypoints;
-    selectedRouteId = routes[0]?.id ?? null;
-    selectedIndex = null;
-    selectedWaypointIndex = null;
-    refreshRoutesLayer();
-    updateUI();
-    fitAll();
-    await refreshRouteStats();
-    refreshRoutesLayer();
-    waypoints.forEach((_, index) => void ensureWaypointElevation(index));
+    const largest = imported.routes.reduce((max, route) => Math.max(max, route.points.length), 0);
+    if (largest > DOWNSAMPLE_PROMPT_THRESHOLD) {
+      const points = imported.routes.reduce((sum, route) => sum + route.points.length, 0);
+      openImportDialog({ fileName: file.name, points, data: imported, stripElevations });
+    } else {
+      await applyImport(imported, stripElevations);
+    }
   } catch (error) { alert(error instanceof Error ? error.message : 'Unable to import GPX.'); }
-  finally { input.value = ''; }
 });
 
 $('export-gpx').addEventListener('click', () => {

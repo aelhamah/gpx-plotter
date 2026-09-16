@@ -122,3 +122,12 @@ code { font-size: 11px; }
 .map-icon-tooltip { position: absolute; left: 37px; top: 50%; transform: translateY(-50%); background: rgba(20,20,20,.92); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .12s ease; white-space: nowrap; }
 .map-icon-tooltip::before { content: ""; position: absolute; right: 100%; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-right-color: rgba(20,20,20,.92); }
 .map-icon-control:hover .map-icon-tooltip { opacity: 1; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(17,17,17,.42); display: grid; place-items: center; z-index: 20; padding: 20px; }
+.modal { width: min(420px, 100%); background: rgba(255,255,255,.97); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border: 1px solid rgba(0,0,0,.12); border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,.3); padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.modal .section-title { margin: 0; }
+.modal-summary { margin: 0; color: #525252; font-size: 13px; }
+.modal-field { display: flex; align-items: baseline; justify-content: space-between; font-size: 13px; font-weight: 600; }
+.modal-value { font-variant-numeric: tabular-nums; color: #2563eb; }
+.modal-range { width: 100%; accent-color: #2563eb; }
+.modal-hint { margin: 0; color: #737373; font-size: 12px; min-height: 16px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
