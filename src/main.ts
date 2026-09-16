@@ -292,7 +292,7 @@ function refreshMarkers() {
       text.classList.remove('hidden');
     });
     label.append(text, renameInput);
-    label.addEventListener('click', (event) => { event.stopPropagation(); commitSnapshot(); selectRoute(route.id); });
+    label.addEventListener('click', (event) => { event.stopPropagation(); });
     label.addEventListener('dblclick', (event) => { event.stopPropagation(); openRouteRename(index); });
     routeNameWidgets.push({ label, text, input: renameInput });
     markers.push(new maplibregl.Marker({ element: label, anchor: 'left', offset: [10, 0] }).setLngLat([mid.lon, mid.lat]).addTo(map));
