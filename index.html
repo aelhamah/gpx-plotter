@@ -56,7 +56,7 @@
           <div class="section-title">Editing</div>
           <p><b>Draw:</b> click to add points, double-click to finish.</p>
           <p><b>Move:</b> drag a point.</p>
-          <p><b>Rotate:</b> ⌘/Ctrl + click and drag the map.</p>
+          <p><b>Rotate/Tilt:</b> ⌘/Ctrl + click and drag the map; scroll to zoom.</p>
           <p><b>Delete:</b> select a point and press Delete.</p>
           <p><b>Undo/Redo:</b> use ⌘/Ctrl-Z and ⇧⌘/Ctrl-Z.</p>
         </div>
@@ -70,7 +70,7 @@
 
       <main class="map-wrap">
         <div id="map"></div>
-        <canvas id="slope-overlay" class="slope-overlay hidden"></canvas>
+        <div id="stats-progress" class="stats-progress hidden"><span class="spinner"></span>Reading terrain…</div>
         <div id="draw-hint" class="map-overlay hidden">Click to add route points · double-click to finish · Esc to cancel</div>
         <div id="slope-legend" class="slope-legend hidden">
           <b>Slope angle</b>

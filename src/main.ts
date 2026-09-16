@@ -3,9 +3,9 @@ import maplibregl, { type MapMouseEvent, type Marker } from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
-import { elevationStats, metersToFeet, metersToMiles, routeDistanceMeters, segmentSlopeDegrees } from './geo';
+import { metersToFeet, metersToMiles, routeDistanceMeters, routeProfilePoints, summarizeProfile } from './geo';
 import { exportGPX, parseGPX, type Route, type RoutePoint } from './gpx';
-import { DEM_MAX_ZOOM, elevationAt, lngLatToTile, slopeCanvasForTile, tileNWLngLat, worldMercator } from './dem';
+import { DEM_MAX_ZOOM, elevationAt, slopeCanvasForTile } from './dem';
 import './style.css';
 
 const emptyRoute: Route = { name: 'My Route', points: [] };
@@ -25,7 +25,6 @@ const future: Route[] = [];
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
 const routeName = $('route-name') as HTMLInputElement;
-const slopeOverlay = $('slope-overlay') as HTMLCanvasElement;
 
 if (!MAPTILER_API_KEY) {
   mapStatus.textContent = 'MapTiler key missing — add it in src/config.ts, then reload.';
@@ -45,6 +44,24 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.AttributionControl(), 'bottom-right');
 
+// Serve color-graded slope raster tiles to MapLibre via a custom protocol, so the
+// shading stays perfectly aligned through pan/pitch/rotate (no canvas reprojection).
+maplibregl.addProtocol('slope', (async (requestParameters: { url: string }) => {
+  try {
+    const [z, x, y] = requestParameters.url.replace(/^slope:\/\//, '').split('/').map(Number);
+    const canvas = await slopeCanvasForTile(z, x, y);
+    if (!canvas) throw new Error('slope tile unavailable');
+    const data = await new Promise<ArrayBuffer>((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? blob.arrayBuffer().then(resolve, reject) : reject(new Error('slope tile encode failed'))), 'image/png');
+    });
+    return { data, contentType: 'image/png' };
+  } catch (error) {
+    console.error('slope protocol error:', error);
+    mapStatus.textContent = `Slope layer error: ${error instanceof Error ? error.message : String(error)}`;
+    throw error;
+  }
+}) as unknown as Parameters<typeof maplibregl.addProtocol>[1]);
+
 map.on('load', () => {
   map.touchZoomRotate.enableRotation();
   addDataLayers();
@@ -56,13 +73,15 @@ map.on('style.load', () => {
   updateUI();
 });
 
-map.on('idle', () => {
-  if (slopeEnabled) renderSlopeOverlay();
-});
-
 function addDataLayers() {
   if (!map.getSource('terrain')) {
     map.addSource('terrain', { type: 'raster-dem', url: TERRAIN_URL, tileSize: 512, maxzoom: DEM_MAX_ZOOM });
+  }
+  if (!map.getSource('slope')) {
+    map.addSource('slope', { type: 'raster', tiles: ['slope://{z}/{x}/{y}'], tileSize: 512, maxzoom: DEM_MAX_ZOOM });
+  }
+  if (!map.getLayer('slope-shading')) {
+    map.addLayer({ id: 'slope-shading', type: 'raster', source: 'slope', layout: { visibility: slopeEnabled ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.9, 'raster-fade-duration': 0, 'raster-resampling': 'linear' } });
   }
   if (!map.getSource('route')) {
     map.addSource('route', { type: 'geojson', data: routeGeoJSON() });
@@ -90,22 +109,42 @@ function refreshRouteLayer() {
   refreshMarkers();
 }
 
+interface RouteStats { gain?: number; loss?: number; min?: number; max?: number; maxSlope?: number; }
+const EMPTY_STATS: RouteStats = {};
+let routeStats: RouteStats = EMPTY_STATS;
+let statsToken = 0;
+const STATS_PROFILE_STEP_METERS = 30;
+
+const statsProgress = $('stats-progress');
+function setStatsLoading(loading: boolean) {
+  statsProgress.classList.toggle('hidden', !loading);
+}
+
 /**
- * Query the MapTiler DEM for any route points that are missing elevation,
- * so gain/loss/low/high and max slope always populate. Preserves elevations
- * that came from an imported GPX.
+ * Sample the terrain along every route line (~30 m spacing) and recompute
+ * gain/loss/low/high/max-slope from that profile, so the numbers reflect the
+ * terrain crossed between points rather than just the clicked vertices. Missing
+ * elevations are written back into the shared vertex objects on the way, so
+ * exported GPX files also carry the filled <ele> values.
  */
-async function fillElevations(indices?: number[]): Promise<void> {
-  const targets = (indices ?? route.points.map((_, i) => i)).filter((i) => !Number.isFinite(route.points[i].elevation));
-  const results = await Promise.all(targets.map(async (i) => {
-    const point = route.points[i];
-    const elevation = await elevationAt(point.lon, point.lat);
-    const current = route.points[i];
-    if (elevation !== undefined && current.lat === point.lat && current.lon === point.lon && !Number.isFinite(current.elevation)) {
-      route.points[i] = { ...current, elevation };
-    }
-  }));
-  void results;
+async function refreshRouteStats() {
+  const token = ++statsToken;
+  setStatsLoading(true);
+  const profile = routeProfilePoints(route.points, STATS_PROFILE_STEP_METERS);
+  const jobs: { point: RoutePoint; promise: Promise<number | undefined> }[] = [];
+  for (const point of profile) {
+    if (!Number.isFinite(point.elevation)) jobs.push({ point, promise: elevationAt(point.lon, point.lat) });
+  }
+  const elevations = await Promise.all(jobs.map((j) => j.promise));
+  for (let i = 0; i < jobs.length; i++) {
+    const elevation = elevations[i];
+    if (elevation !== undefined) jobs[i].point.elevation = elevation;
+  }
+  if (token !== statsToken) return;
+  setStatsLoading(false);
+
+  routeStats = summarizeProfile(profile);
+  updateUI();
 }
 
 function refreshMarkers() {
@@ -133,9 +172,8 @@ function refreshMarkers() {
         document.removeEventListener('pointermove', move);
         document.removeEventListener('pointerup', up);
         map.dragPan.enable();
-        await fillElevations([index]);
+        await refreshRouteStats();
         refreshRouteLayer();
-        updateUI();
         commitSnapshot();
       };
       document.addEventListener('pointermove', move);
@@ -147,8 +185,8 @@ function refreshMarkers() {
 
 function snapshot() { return structuredClone(route); }
 function commitSnapshot() { history.push(snapshot()); if (history.length > 50) history.shift(); future.length = 0; }
-function undo() { const previous = history.pop(); if (!previous) return; future.push(snapshot()); route = previous; selectedIndex = null; routeName.value = route.name; refreshRouteLayer(); updateUI(); }
-function redo() { const next = future.pop(); if (!next) return; history.push(snapshot()); route = next; selectedIndex = null; routeName.value = route.name; refreshRouteLayer(); updateUI(); }
+function undo() { const previous = history.pop(); if (!previous) return; future.push(snapshot()); route = previous; selectedIndex = null; routeName.value = route.name; refreshRouteLayer(); updateUI(); void refreshRouteStats(); }
+function redo() { const next = future.pop(); if (!next) return; history.push(snapshot()); route = next; selectedIndex = null; routeName.value = route.name; refreshRouteLayer(); updateUI(); void refreshRouteStats(); }
 
 function startDrawing() { drawing = true; $('draw-route').textContent = 'Drawing…'; $('draw-route').classList.add('active'); $('draw-hint').classList.remove('hidden'); map.getCanvas().style.cursor = 'crosshair'; }
 function stopDrawing() { drawing = false; $('draw-route').textContent = 'Draw route'; $('draw-route').classList.remove('active'); $('draw-hint').classList.add('hidden'); map.getCanvas().style.cursor = ''; }
@@ -160,7 +198,7 @@ map.on('click', (event: MapMouseEvent) => {
   selectedIndex = route.points.length - 1;
   refreshRouteLayer();
   updateUI();
-  fillElevations([route.points.length - 1]).then(() => { refreshRouteLayer(); updateUI(); });
+  void refreshRouteStats();
 });
 map.on('dblclick', (event: MapMouseEvent) => {
   if (!drawing) return;
@@ -169,36 +207,46 @@ map.on('dblclick', (event: MapMouseEvent) => {
     const a = route.points[route.points.length - 1], b = route.points[route.points.length - 2];
     if (Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lon - b.lon) < 1e-9) route.points.pop();
   }
-  stopDrawing(); refreshRouteLayer(); updateUI();
+  stopDrawing(); refreshRouteLayer(); updateUI(); void refreshRouteStats();
 });
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && drawing) { stopDrawing(); return; }
   const metaOrCtrl = event.metaKey || event.ctrlKey;
   if (metaOrCtrl && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
-  if (event.key === 'Delete' && selectedIndex !== null) { commitSnapshot(); route.points.splice(selectedIndex, 1); selectedIndex = null; refreshRouteLayer(); updateUI(); }
+  if (event.key === 'Delete' && selectedIndex !== null) { commitSnapshot(); route.points.splice(selectedIndex, 1); selectedIndex = null; refreshRouteLayer(); updateUI(); void refreshRouteStats(); }
 });
 
-// ⌘/Ctrl + click and drag rotates the camera bearing.
+// ⌘/Ctrl + click and drag orients the camera like Google Maps:
+// drag up/down to tilt (pitch), drag left/right to rotate the bearing.
 map.on('mousedown', (event: MapMouseEvent) => {
   const original = event.originalEvent;
   if (original.button !== 0) return;
-  if (!(original.metaKey || original.ctrlKey)) return;
+  if (!(original.metaKey || original.ctrlKey)) {
+    rotatedThisGesture = false;
+    return;
+  }
   original.preventDefault();
   rotating = true;
-  rotatedThisGesture = false;
+  rotatedThisGesture = true; // swallow this gesture's own synthetic 'click' (see map 'click')
   map.dragPan.disable();
   const canvas = map.getCanvas();
-  const startAngle = Math.atan2(event.point.y - canvas.clientHeight / 2, event.point.x - canvas.clientWidth / 2);
+  const rect = canvas.getBoundingClientRect();
+  const startX = event.point.x;
+  const startY = event.point.y;
   const startBearing = map.getBearing();
+  const startPitch = map.getPitch();
+  const rotPerPx = 180 / rect.width;   // full-width drag ≈ 180° of bearing
+  const tiltPerPx = 70 / rect.height;  // full-height drag ≈ 70° of pitch
+  const clampPitch = (p: number) => (p < 0 ? 0 : p > 85 ? 85 : p);
   map.getCanvas().style.cursor = 'grabbing';
   const move = (e: MouseEvent) => {
-    const rect = canvas.getBoundingClientRect();
-    const angle = Math.atan2(e.clientY - rect.top - rect.height / 2, e.clientX - rect.left - rect.width / 2);
-    let delta = (angle - startAngle) * (180 / Math.PI);
-    delta = ((delta % 360) + 540) % 360 - 180; // wrap to [-180, 180]
-    map.jumpTo({ bearing: startBearing + delta });
-    if (Math.abs(angle - startAngle) > 0.01) rotatedThisGesture = true;
+    const dx = e.clientX - rect.left - startX;
+    const dy = e.clientY - rect.top - startY;
+    let bearing = startBearing + dx * rotPerPx;
+    bearing = ((bearing % 360) + 540) % 360 - 180; // wrap to [-180, 180]
+    const pitch = clampPitch(startPitch - dy * tiltPerPx); // drag up tilts back, drag down tilts down
+    map.jumpTo({ bearing, pitch });
   };
   const up = () => {
     rotating = false;
@@ -206,7 +254,6 @@ map.on('mousedown', (event: MapMouseEvent) => {
     canvas.style.cursor = '';
     document.removeEventListener('mousemove', move);
     document.removeEventListener('mouseup', up);
-    if (slopeEnabled) renderSlopeOverlay();
   };
   document.addEventListener('mousemove', move);
   document.addEventListener('mouseup', up);
@@ -215,7 +262,7 @@ map.on('mousedown', (event: MapMouseEvent) => {
 $('draw-route').addEventListener('click', () => drawing ? stopDrawing() : startDrawing());
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
-$('new-route').addEventListener('click', () => { commitSnapshot(); stopDrawing(); route = { name: 'My Route', points: [] }; selectedIndex = null; routeName.value = route.name; refreshRouteLayer(); updateUI(); });
+$('new-route').addEventListener('click', () => { commitSnapshot(); stopDrawing(); route = { name: 'My Route', points: [] }; selectedIndex = null; routeName.value = route.name; routeStats = EMPTY_STATS; setStatsLoading(false); refreshRouteLayer(); updateUI(); });
 routeName.addEventListener('input', () => { route.name = routeName.value || 'My Route'; });
 $('fit-route').addEventListener('click', fitRoute);
 
@@ -236,8 +283,7 @@ $('slope-toggle').addEventListener('click', () => {
   slopeEnabled = !slopeEnabled;
   $('slope-toggle').classList.toggle('active', slopeEnabled);
   $('slope-legend').classList.toggle('hidden', !slopeEnabled);
-  if (slopeEnabled) renderSlopeOverlay();
-  else slopeOverlay.classList.add('hidden');
+  if (map.getLayer('slope-shading')) map.setLayoutProperty('slope-shading', 'visibility', slopeEnabled ? 'visible' : 'none');
 });
 
 $('imagery-toggle').addEventListener('click', () => {
@@ -251,11 +297,17 @@ $('imagery-toggle').addEventListener('click', () => {
 $('gpx-input').addEventListener('change', async (event) => {
   const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file) return;
   try {
-    const imported = parseGPX(await file.text());
+    const content = await file.text();
+    const doc = new DOMParser().parseFromString(content, 'application/xml');
+    const imported = parseGPX(content);
+    if (doc.documentElement.getAttribute('creator') === 'GPX Plotter') {
+      // Files we exported carry DEM-sampled elevations; they may be stale, so ignore them and re-query the terrain.
+      imported.points = imported.points.map(({ lat, lon }) => ({ lat, lon }));
+    }
     commitSnapshot(); route = imported; selectedIndex = null; routeName.value = route.name;
     refreshRouteLayer(); updateUI(); fitRoute();
-    await fillElevations();
-    refreshRouteLayer(); updateUI();
+    await refreshRouteStats();
+    refreshRouteLayer();
   } catch (error) { alert(error instanceof Error ? error.message : 'Unable to import GPX.'); }
   finally { input.value = ''; }
 });
@@ -275,104 +327,17 @@ function fitRoute() {
   map.fitBounds(bounds, { padding: 80, duration: 700, maxZoom: 15 });
 }
 
-let slopeToken = 0;
-
-/** Shade the visible terrain by slope angle using DEM tiles. */
-async function renderSlopeOverlay() {
-  if (!slopeEnabled || !map.loaded()) return;
-  const token = ++slopeToken;
-  const zoom = map.getZoom();
-  let renderZ = clamp(Math.round(zoom + 1), 9, DEM_MAX_ZOOM);
-
-  const canvas = map.getCanvas();
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  const corners = [
-    map.unproject([0, 0]),
-    map.unproject([width, 0]),
-    map.unproject([0, height]),
-    map.unproject([width, height]),
-  ];
-  const lngs = corners.map((c) => c.lng);
-  const lats = corners.map((c) => c.lat);
-
-  let t0 = lngLatToTile(Math.min(...lngs), Math.max(...lats), renderZ);
-  let t1 = lngLatToTile(Math.max(...lngs), Math.min(...lats), renderZ);
-  let x0 = Math.floor(t0.x) - 1, x1 = Math.floor(t1.x) + 1;
-  let y0 = Math.floor(t0.y) - 1, y1 = Math.floor(t1.y) + 1;
-  while ((x1 - x0 + 1) * (y1 - y0 + 1) > 256 && renderZ > 9) {
-    renderZ -= 1;
-    t0 = lngLatToTile(Math.min(...lngs), Math.max(...lats), renderZ);
-    t1 = lngLatToTile(Math.max(...lngs), Math.min(...lats), renderZ);
-    x0 = Math.floor(t0.x) - 1; x1 = Math.floor(t1.x) + 1;
-    y0 = Math.floor(t0.y) - 1; y1 = Math.floor(t1.y) + 1;
-  }
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 256) return;
-
-  const canvases = new Map<string, HTMLCanvasElement>();
-  const jobs: Promise<void>[] = [];
-  for (let x = x0; x <= x1; x++) {
-    for (let y = y0; y <= y1; y++) {
-      const key = `${renderZ}/${x}/${y}`;
-      jobs.push(slopeCanvasForTile(renderZ, x, y).then((tile) => { if (tile) canvases.set(key, tile); }).catch(() => undefined));
-    }
-  }
-  await Promise.all(jobs);
-  if (token !== slopeToken) return;
-  slopeOverlay.classList.remove('hidden');
-  drawSlopeOverlay(canvases, renderZ, zoom);
-}
-
-function drawSlopeOverlay(canvases: Map<string, HTMLCanvasElement>, renderZ: number, mapZoom: number) {
-  const context = slopeOverlay.getContext('2d');
-  if (!context) return;
-  const dpr = window.devicePixelRatio || 1;
-  const width = map.getCanvas().clientWidth;
-  const height = map.getCanvas().clientHeight;
-  const targetWidth = Math.round(width * dpr);
-  const targetHeight = Math.round(height * dpr);
-  if (slopeOverlay.width !== targetWidth) slopeOverlay.width = targetWidth;
-  if (slopeOverlay.height !== targetHeight) slopeOverlay.height = targetHeight;
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, width, height);
-
-  const bearing = map.getBearing();
-  const pitch = map.getPitch();
-  const center = map.getCenter();
-  const centerWorld = worldMercator(center.lng, center.lat, mapZoom);
-  const tileSize = 512 * Math.pow(2, mapZoom - renderZ);
-
-  context.save();
-  context.translate(width / 2, height / 2);
-  context.rotate((-bearing * Math.PI) / 180);
-  context.scale(1, Math.cos((pitch * Math.PI) / 180));
-  context.translate(-centerWorld.x, -centerWorld.y);
-
-  canvases.forEach((canvas, key) => {
-    const [z, x, y] = key.split('/').map(Number);
-    const nw = tileNWLngLat(x, y, z);
-    const world = worldMercator(nw.lng, nw.lat, mapZoom);
-    context.drawImage(canvas, world.x, world.y, tileSize, tileSize);
-  });
-  context.restore();
-}
-
 function formatElevation(meters: number | undefined) { return meters === undefined ? '—' : `${Math.round(metersToFeet(meters)).toLocaleString()} ft`; }
 function updateUI() {
-  const distance = routeDistanceMeters(route.points); const stats = elevationStats(route.points);
+  const distance = routeDistanceMeters(route.points);
   $('distance').textContent = route.points.length >= 2 ? `${metersToMiles(distance).toFixed(2)} mi` : '—';
-  $('gain').textContent = formatElevation(stats.gain); $('loss').textContent = formatElevation(stats.loss);
-  $('min-elevation').textContent = formatElevation(stats.min); $('max-elevation').textContent = formatElevation(stats.max);
+  $('gain').textContent = formatElevation(routeStats.gain);
+  $('loss').textContent = formatElevation(routeStats.loss);
+  $('min-elevation').textContent = formatElevation(routeStats.min);
+  $('max-elevation').textContent = formatElevation(routeStats.max);
   $('point-count').textContent = String(route.points.length);
-  const slopeValues = route.points.slice(1).map((p, i) => segmentSlopeDegrees(route.points[i], p)).filter((v): v is number => v !== undefined);
-  $('max-slope').textContent = slopeValues.length ? `${Math.round(Math.max(...slopeValues))}°` : '—';
-  $('slope-note').textContent = slopeValues.length
-    ? 'Maximum route segment angle (DEM-filled elevation)'
-    : route.points.some((p) => Number.isFinite(p.elevation))
-      ? 'Add a second point to measure slope'
-      : 'Elevation will be queried from the terrain DEM';
-}
-
-function clamp(value: number, min: number, max: number) {
-  return value < min ? min : value > max ? max : value;
+  $('max-slope').textContent = routeStats.maxSlope === undefined ? '—' : `${Math.round(routeStats.maxSlope)}°`;
+  $('slope-note').textContent = routeStats.gain === undefined
+    ? 'Terrain stats will appear as the route grows'
+    : 'Gain/loss/low/high follow the terrain along the route';
 }

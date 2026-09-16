@@ -46,5 +46,82 @@ export function segmentSlopeDegrees(a: RoutePoint, b: RoutePoint): number | unde
   return Math.atan2(Math.abs((b.elevation as number) - (a.elevation as number)), horizontal) * 180 / Math.PI;
 }
 
+export interface ProfileSummary {
+  gain?: number;
+  loss?: number;
+  min?: number;
+  max?: number;
+  maxSlope?: number;
+}
+
+/**
+ * Elevation statistics over a dense terrain profile (the output of
+ * `routeProfilePoints` with elevations filled from the DEM). Accumulates gain
+ * and loss sample-to-sample and tracks the steepest segment angle, so the
+ * numbers reflect the terrain crossed *between* route vertices.
+ */
+export function summarizeProfile(profile: RoutePoint[]): ProfileSummary {
+  const valid = profile.filter((p): p is RoutePoint & { elevation: number } => Number.isFinite(p.elevation));
+  if (valid.length < 2) return {};
+  let gain = 0;
+  let loss = 0;
+  let maxSlope: number | undefined;
+  for (let i = 1; i < valid.length; i++) {
+    const delta = valid[i].elevation - valid[i - 1].elevation;
+    if (delta > 0) gain += delta;
+    else if (delta < 0) loss += -delta;
+    const slope = segmentSlopeDegrees(valid[i - 1], valid[i]);
+    if (slope !== undefined && (maxSlope === undefined || slope > maxSlope)) maxSlope = slope;
+  }
+  return {
+    gain,
+    loss,
+    min: Math.min(...valid.map((p) => p.elevation)),
+    max: Math.max(...valid.map((p) => p.elevation)),
+    maxSlope,
+  };
+}
+
 export function metersToMiles(m: number) { return m / 1609.344; }
 export function metersToFeet(m: number) { return m * 3.280839895; }
+
+// Web-Mercator helpers so profile samples follow the straight lines drawn on the map.
+export function mercatorX(lngDeg: number): number { return (lngDeg + 180) / 360; }
+export function mercatorY(latDeg: number): number {
+  const sin = Math.sin((latDeg * Math.PI) / 180);
+  return 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI);
+}
+export function inverseMercator(y: number, x: number): { lat: number; lng: number } {
+  const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * (180 / Math.PI);
+  return { lat, lng: x * 360 - 180 };
+}
+
+/**
+ * Resample the route at a fixed ground spacing so elevation stats reflect the
+ * terrain crossed along the lines between points, not just the vertices. Short
+ * segments are kept as-is; long segments are interpolated along their drawn
+ * (Mercator-straight) path. Interpolated samples have no elevation, so callers
+ * fill them from the DEM before computing stats.
+ */
+export function routeProfilePoints(points: RoutePoint[], stepMeters: number): RoutePoint[] {
+  const profile: RoutePoint[] = [];
+  if (!points.length) return profile;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    profile.push(a);
+    const length = haversineMeters(a, b);
+    if (length <= stepMeters) continue;
+    const steps = Math.round(length / stepMeters);
+    let ax = mercatorX(a.lon); const ay = mercatorY(a.lat);
+    let bx = mercatorX(b.lon); const by = mercatorY(b.lat);
+    if (bx - ax > 0.5) bx -= 1; else if (bx - ax < -0.5) bx += 1; // antimeridian wrap
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps;
+      const { lat, lng } = inverseMercator(ay + (by - ay) * t, ax + (bx - ax) * t);
+      profile.push({ lat, lon: lng });
+    }
+  }
+  profile.push(points[points.length - 1]);
+  return profile;
+}

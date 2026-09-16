@@ -51,25 +51,8 @@ async function fetchTileData(z: number, x: number, y: number): Promise<TileData>
     const url = TERRAIN_TILE_URL.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
     const response = await fetch(url);
     if (!response.ok) throw new Error(`DEM tile ${key} failed with ${response.status}`);
-    const bitmap = await createImageBitmap(await response.blob());
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    if (!context) throw new Error('Canvas 2D context unavailable');
-    context.drawImage(bitmap, 0, 0);
-    const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
-    bitmap.close();
-
-    const count = image.data.length / 4;
-    const elevations = new Float32Array(count);
-    for (let i = 0; i < count; i++) {
-      const r = image.data[i * 4];
-      const g = image.data[i * 4 + 1];
-      const b = image.data[i * 4 + 2];
-      elevations[i] = -10000 + (r * 256 * 256 + g * 256 + b) * 0.1;
-    }
-    const tile: TileData = { width: bitmap.width, height: bitmap.height, elevations };
+    const { width, height, data } = await decodeTilePixels(await response.blob());
+    const tile: TileData = { width, height, elevations: decodeElevations(data) };
     if (tileCache.size > 400) tileCache.clear();
     tileCache.set(key, tile);
     return tile;
@@ -77,6 +60,19 @@ async function fetchTileData(z: number, x: number, y: number): Promise<TileData>
 
   pending.set(key, job);
   return job;
+}
+
+/** Terrain-RGB pixel data → float32 elevations (meters): -10000 + (R*65536 + G*256 + B) * 0.1. */
+export function decodeElevations(data: Uint8ClampedArray): Float32Array {
+  const count = data.length / 4;
+  const elevations = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const r = data[i * 4];
+    const g = data[i * 4 + 1];
+    const b = data[i * 4 + 2];
+    elevations[i] = -10000 + (r * 256 * 256 + g * 256 + b) * 0.1;
+  }
+  return elevations;
 }
 
 /** Bilinear terrain elevation (meters) at a lng/lat, or undefined on failure. */
@@ -99,8 +95,53 @@ export async function elevationAt(lng: number, lat: number): Promise<number | un
     const top = at(0, 0) * (1 - dx) + at(1, 0) * dx;
     const bottom = at(0, 1) * (1 - dx) + at(1, 1) * dx;
     return top * (1 - dy) + bottom * dy;
-  } catch {
+  } catch (error) {
+    console.error('elevationAt failed for', lng, lat, error);
     return undefined;
+  }
+}
+
+interface TilePixels { width: number; height: number; data: Uint8ClampedArray; }
+
+function canvasFromImage(source: CanvasImageSource, width: number, height: number): TilePixels {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('Canvas 2D context unavailable');
+  context.drawImage(source, 0, 0);
+  const image = context.getImageData(0, 0, width, height);
+  return { width, height, data: image.data };
+}
+
+/** Decode a DEM tile blob to raw RGBA, via ImageBitmap with an <img> fallback. */
+async function decodeTilePixels(blob: Blob): Promise<TilePixels> {
+  try {
+    const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none', imageOrientation: 'none' });
+    try {
+      return canvasFromImage(bitmap, bitmap.width, bitmap.height);
+    } finally {
+      bitmap.close();
+    }
+  } catch (bitmapError) {
+    // Some engines (e.g. older Safari) cannot decode WebP via createImageBitmap,
+    // but a plain <img> decodes it reliably.
+    try {
+      const url = URL.createObjectURL(blob);
+      try {
+        const image = new Image();
+        await new Promise<void>((resolve, reject) => {
+          image.onload = () => resolve();
+          image.onerror = () => reject(new Error('DEM tile image could not be decoded'));
+          image.src = url;
+        });
+        return canvasFromImage(image, image.naturalWidth, image.naturalHeight);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (imageError) {
+      throw new AggregateError([bitmapError, imageError], 'All DEM tile decode paths failed');
+    }
   }
 }
 
@@ -127,6 +168,42 @@ function blankSlopeCanvas(width: number, height: number) {
   return context ? { canvas, context } : null;
 }
 
+/**
+ * Colorize a DEM elevation grid by slope angle into RGBA bytes (avalanche-style
+ * bands: <20° green, <30° yellow, <35° orange, <40° red, <45° purple, else
+ * near-black). Each pixel at (j,i) writes bytes at (j*width + i) * 4 — prior
+ * versions indexed with j*width + i*4, which only painted the first rows of the
+ * tile. `ppx` is meters per grid pixel; a wrong (too-large) value flattens all
+ * slopes toward green.
+ */
+export function slopeRgba(
+  elevations: ArrayLike<number>,
+  width: number,
+  height: number,
+  ppx: number,
+  step = 4,
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(width * height * 4);
+  for (let j = 0; j < height; j++) {
+    for (let i = 0; i < width; i++) {
+      const iL = clamp(i - step, 0, width - 1);
+      const iR = clamp(i + step, 0, width - 1);
+      const jU = clamp(j - step, 0, height - 1);
+      const jD = clamp(j + step, 0, height - 1);
+      const dzx = elevations[j * width + iR] - elevations[j * width + iL];
+      const dzy = elevations[jD * width + i] - elevations[jU * width + i];
+      const slope = Math.atan(Math.hypot(dzx, dzy) / (2 * step * ppx)) * (180 / Math.PI);
+      const [r, g, b, a] = slopeColor(slope);
+      const o = (j * width + i) * 4;
+      out[o] = r;
+      out[o + 1] = g;
+      out[o + 2] = b;
+      out[o + 3] = a;
+    }
+  }
+  return out;
+}
+
 /** Colorized slope raster for a DEM tile at integer zoom z (256px scale). */
 export async function slopeCanvasForTile(z: number, x: number, y: number): Promise<HTMLCanvasElement | null> {
   const { lng, lat } = tileNWLngLat(x, y, z);
@@ -137,29 +214,9 @@ export async function slopeCanvasForTile(z: number, x: number, y: number): Promi
   if (!alloc) return null;
   const { canvas, context } = alloc;
   const image = context.createImageData(width, height);
-  const out = image.data;
-  const e = data.elevations;
-  const ppx = metersPerPixel(z, lat + (180 / Math.pow(2, z)) / 2);
-  const step = 4; // smooth gradient, reduces DEM pixel noise
-
-  for (let j = 0; j < height; j++) {
-    const row = j * width;
-    for (let i = 0; i < width; i++) {
-      const iL = clamp(i - step, 0, width - 1);
-      const iR = clamp(i + step, 0, width - 1);
-      const jU = clamp(j - step, 0, height - 1);
-      const jD = clamp(j + step, 0, height - 1);
-      const dzx = e[j * width + iR] - e[j * width + iL];
-      const dzy = e[jD * width + i] - e[jU * width + i];
-      const slope = Math.atan(Math.hypot(dzx, dzy) / (2 * step * ppx)) * (180 / Math.PI);
-      const [r, g, b, a] = slopeColor(slope);
-      const o = i * 4;
-      out[row + o] = r;
-      out[row + o + 1] = g;
-      out[row + o + 2] = b;
-      out[row + o + 3] = a;
-    }
-  }
+  // Meters per DEM pixel: tile width at the tile's latitude, divided by the tile's pixel size.
+  const ppx = metersPerPixel(z, lat + (180 / Math.pow(2, z)) / 2) / data.width;
+  image.data.set(slopeRgba(data.elevations, width, height, ppx));
   context.putImageData(image, 0, 0);
   return canvas;
 }
