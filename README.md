@@ -10,9 +10,12 @@ A small client-side GPX route editor built with TypeScript, Vite, MapLibre GL JS
 - Drags route points to edit them.
 - Deletes selected points with Delete.
 - Undo/redo.
-- Calculates distance and imported elevation gain/loss/min/max.
-- Toggles 3D terrain using MapTiler Terrain RGB.
+- Calculates distance, gain, loss, low, high, and max slope by sampling MapTiler terrain DEM along the drawn lines.
+- Toggles 3D terrain using MapTiler Terrain RGB, with cmd/ctrl+drag tilt & rotate.
+- Slope-angle color shading and relief hillshade overlays.
+- Satellite basemap switch.
 - Exports a GPX 1.1 track.
+- Unit tests (Vitest) and a GitHub Actions CI workflow that runs on every PR.
 - Requires no backend, database, or login.
 
 ## 1. Add your MapTiler API key
@@ -124,10 +127,8 @@ https://docs.maptiler.com/guides/maps-apis/maps-platform/how-to-protect-your-map
 
 ## Next features worth adding
 
-- Elevation lookup for newly drawn points.
+- **Multiple routes + waypoint markers** — named, color-coded routes (edit one "active" route while others render read-only; per-route and combined stats; multi-track GPX export) plus independent named waypoints (icons + labels, draggable, exported as `<wpt>`). Management & UI design to be explored.
 - Interactive elevation profile.
-- Multiple tracks/routes.
-- Waypoints.
 - Route point insertion between existing points.
 - Map style switcher (Outdoor / Topo / Satellite / Winter).
 - GPX metadata preservation.
