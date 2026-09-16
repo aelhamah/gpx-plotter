@@ -121,8 +121,23 @@ shading) cannot be verified there — use a real browser for visual checks.
 
 ## Deployment
 
+The site is served from the **`gh-pages` branch** (Pages source: *Deploy from a
+branch → `gh-pages` / root*). Set the `VITE_MAPTILER_API_KEY` repository secret
+(Settings → Secrets and variables → Actions) — builds inline it into the bundle.
+Allow-list the Pages origin on your MapTiler key.
+
 - CI (`.github/workflows/pr.yml`) builds and tests on pushes and PRs.
-- Deploy (`.github/workflows/deploy.yml`) publishes `dist/` to GitHub Pages on
-  push to `main`. Enable **Settings → Pages → Source: GitHub Actions**, and
-  allow-list the Pages origin on your MapTiler key.
-- `vite.config.ts` sets `base: './'` so assets resolve on project Pages sites.
+- Deploy (`.github/workflows/deploy.yml`) publishes the main build to the root of
+  `gh-pages` on every push to `main`.
+- PR Preview (`.github/workflows/preview.yml`) deploys each PR commit to
+  `preview/<branch>/` on `gh-pages`, comments the URL on the PR, re-deploys on
+  every new commit, and removes the preview when the PR closes. Previews are
+  skipped for forks (no secrets).
+
+| Build | URL |
+| --- | --- |
+| Main | `https://<owner>.github.io/<repo>/` |
+| Preview | `https://<owner>.github.io/<repo>/preview/<branch>/` |
+
+- `vite.config.ts` sets `base: './'` so the same bundle works at the root and in
+  a preview subdirectory.

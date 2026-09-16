@@ -258,8 +258,11 @@ placeholder.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
   `colors`, `names`, `simplify`, `config`).
 - CI (`.github/workflows/pr.yml`) builds and tests on pushes/PRs.
-- Deployment (`.github/workflows/deploy.yml`) publishes `dist/` to GitHub Pages
-  on pushes to `main`.
+- Deployment (`.github/workflows/deploy.yml`) publishes the main build to the
+  `gh-pages` branch root on pushes to `main`; GitHub Pages serves that branch.
+- PR previews (`.github/workflows/preview.yml`) publish each PR commit to
+  `preview/<branch>/` on the same `gh-pages` branch (so main and previews coexist
+  on one Pages site) and comment the URL on the PR.
 
 ## 14. Known limitations
 
