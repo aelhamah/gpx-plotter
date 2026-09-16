@@ -1,0 +1,113 @@
+name: PR Preview
+
+# Deploy a branch-specific build for every commit on a pull request, then leave
+# a link on the PR. Previews live alongside the main site on the gh-pages
+# branch at /preview/<branch>/ and are removed when the PR closes.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_MAPTILER_API_KEY: ${{ secrets.VITE_MAPTILER_API_KEY }}
+
+      - name: Compute preview path
+        id: meta
+        run: |
+          branch=$(printf '%s' '${{ github.event.pull_request.head.ref }}' | sed 's#[^A-Za-z0-9._-]#-#g')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Publish preview to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          destination_dir: preview/${{ steps.meta.outputs.branch }}
+          keep_files: true
+          commit_message: "Deploy preview for ${{ steps.meta.outputs.branch }}"
+
+      - name: Comment the preview link on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
+          PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/preview/${{ steps.meta.outputs.branch }}/
+        run: |
+          marker='<!-- gpx-plotter-preview -->'
+          body="$marker
+          ### Preview deployed
+
+          \`$BRANCH\` → $PREVIEW_URL"
+          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | contains("gpx-plotter-preview")) | .id' | tail -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+          fi
+
+  cleanup:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute preview path
+        id: meta
+        run: |
+          branch=$(printf '%s' '${{ github.event.pull_request.head.ref }}' | sed 's#[^A-Za-z0-9._-]#-#g')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Remove the preview from gh-pages
+        env:
+          BRANCH: ${{ steps.meta.outputs.branch }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
+            echo "gh-pages branch does not exist yet; nothing to clean up."
+            exit 0
+          fi
+          git fetch origin gh-pages
+          git checkout gh-pages
+          git rm -r --ignore-unmatch "preview/$BRANCH"
+          if git diff --cached --quiet; then
+            echo "No preview for $BRANCH to remove."
+            exit 0
+          fi
+          git commit -m "Remove preview for $BRANCH"
+          git push origin gh-pages
