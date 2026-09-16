@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { downsamplePoints } from '../src/simplify';
+import { defaultPointBudget, downsamplePoints } from '../src/simplify';
 
 const line = (count: number) => Array.from({ length: count }, (_, i) => ({ lat: 40 + i * 0.0001, lon: -105 + i * 0.0001 }));
 
@@ -38,5 +38,26 @@ describe('downsamplePoints', () => {
     expect(downsamplePoints([], 100)).toEqual([]);
     expect(downsamplePoints([{ lat: 0, lon: 0 }], 100)).toHaveLength(1);
     expect(downsamplePoints(line(10), 1)).toHaveLength(10);
+  });
+});
+
+describe('defaultPointBudget', () => {
+  it('scales the budget with distance at roughly one point per 10 m', () => {
+    expect(defaultPointBudget(7110, 13360)).toBe(711);
+    expect(defaultPointBudget(20000, 50000)).toBe(2000);
+  });
+
+  it('never suggests more points than the track has', () => {
+    expect(defaultPointBudget(50000, 800)).toBe(800);
+  });
+
+  it('falls back to the point count when there is no usable distance', () => {
+    expect(defaultPointBudget(0, 1234)).toBe(1234);
+    expect(defaultPointBudget(Number.NaN, 1234)).toBe(1234);
+    expect(defaultPointBudget(-5, 900)).toBe(900);
+  });
+
+  it('keeps a two-point floor', () => {
+    expect(defaultPointBudget(3, 500)).toBe(2);
   });
 });

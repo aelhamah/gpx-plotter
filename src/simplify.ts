@@ -53,3 +53,12 @@ export function downsamplePoints<T extends { lat: number; lon: number }>(points:
 
 /** Points above this count trigger the import downsampling dialog. */
 export const DOWNSAMPLE_PROMPT_THRESHOLD = 500;
+
+/** Default spacing between downsampled points, so longer tracks keep more points. */
+export const DOWNSAMPLE_DEFAULT_SPACING_METERS = 10;
+
+/** Suggest a point budget that keeps roughly one point every `spacingMeters`. */
+export function defaultPointBudget(distanceMeters: number, pointCount: number, spacingMeters = DOWNSAMPLE_DEFAULT_SPACING_METERS): number {
+  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) return pointCount;
+  return Math.min(pointCount, Math.max(2, Math.round(distanceMeters / spacingMeters)));
+}

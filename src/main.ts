@@ -5,7 +5,7 @@ import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
 import { colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, type UnitSystem } from './geo';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
-import { DOWNSAMPLE_PROMPT_THRESHOLD, downsamplePoints } from './simplify';
+import { DOWNSAMPLE_PROMPT_THRESHOLD, defaultPointBudget, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
 import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
 import { routeColorForId, TRACE_COLOR } from './colors';
@@ -697,8 +697,13 @@ function openImportDialog(pending: PendingImport) {
   slider.min = '2';
   slider.max = String(largest);
   slider.step = '1';
-  slider.value = String(Math.min(largest, 1000));
-  $('import-summary').textContent = `${pending.fileName} · ${formatCount(pending.points)} points`;
+  const distances = pending.data.routes.map((route) => routeDistanceMeters(route.points));
+  const longest = distances.indexOf(Math.max(...distances));
+  const longestRoute = pending.data.routes[longest];
+  const preferred = longestRoute ? defaultPointBudget(distances[longest], longestRoute.points.length) : largest;
+  slider.value = String(Math.min(largest, preferred));
+  const totalDistance = distances.reduce((sum, distance) => sum + distance, 0);
+  $('import-summary').textContent = `${pending.fileName} · ${formatCount(pending.points)} points · ${formatDistance(totalDistance, unitSystem)}`;
   updateImportPreview();
   $('import-dialog').classList.remove('hidden');
 }
