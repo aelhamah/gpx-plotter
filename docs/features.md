@@ -79,7 +79,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   and a single waypoint is placed (the mode then exits).
 - **Drag waypoints** to reposition them.
 - **Rename waypoints** by double-clicking the marker or its label.
-- **Delete** the selected waypoint with the Delete key.
+- **Delete** the selected waypoint with Delete or Backspace.
 - **Elevation labels**: each waypoint label shows its name and terrain
   elevation, sampled from the DEM once and kept up to date.
 - **Peak snapping**: a waypoint dropped within ~250 m of a mapped peak snaps to
@@ -161,7 +161,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   | Click map | Add a route point (drawing) or waypoint (waypoint mode) |
   | Enter | Finish the current drawing |
   | Esc | Cancel drawing / waypoint mode / the import dialog |
-  | Delete | Remove the selected point or waypoint |
+  | Delete / Backspace | Remove the selected point or waypoint |
   | ⌘/Ctrl-Z | Undo |
   | ⇧⌘/Ctrl-Z | Redo |
   | ⌘/Ctrl-drag | Tilt / rotate the camera |
