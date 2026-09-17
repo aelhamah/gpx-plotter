@@ -12,6 +12,7 @@ import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation,
 import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
+import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
 import './style.css';
 
 let routes: Route[] = [];
@@ -60,6 +61,27 @@ function setDocumentName(name: string) {
   document.title = documentName === DEFAULT_MAP_NAME
     ? 'GPX Route Plotter'
     : `${documentName} — GPX Route Plotter`;
+  persistWorkspace();
+}
+
+let mapView: WorkspaceView | undefined;
+
+function currentView(): WorkspaceView {
+  const center = map.getCenter();
+  return { center: { lng: center.lng, lat: center.lat }, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+}
+
+/** Persist the workspace so a refresh restores routes, waypoints, and preferences. */
+function persistWorkspace() {
+  saveWorkspace({
+    routes,
+    waypoints,
+    nextRouteId,
+    documentName: documentName === DEFAULT_MAP_NAME ? undefined : documentName,
+    selectedRouteId,
+    unitSystem,
+    view: mapView ?? currentView(),
+  });
 }
 
 if (!MAPTILER_API_KEY) {
@@ -79,6 +101,22 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.AttributionControl(), 'bottom-right');
+
+// Restore the saved workspace (routes, waypoints, name, units, view) at startup.
+let restoredView: WorkspaceView | undefined;
+const savedWorkspace = loadWorkspace();
+if (savedWorkspace) {
+  routes = savedWorkspace.routes;
+  waypoints = savedWorkspace.waypoints;
+  nextRouteId = savedWorkspace.nextRouteId;
+  unitSystem = savedWorkspace.unitSystem ?? unitSystem;
+  const restoredId = savedWorkspace.selectedRouteId;
+  selectedRouteId = restoredId !== undefined && routes.some((route) => route.id === restoredId)
+    ? restoredId
+    : routes[0]?.id ?? null;
+  restoredView = savedWorkspace.view;
+  if (savedWorkspace.documentName) setDocumentName(savedWorkspace.documentName);
+}
 
 // Serve color-graded slope raster tiles to MapLibre via a custom protocol, so the
 // shading stays perfectly aligned through pan/pitch/rotate (no canvas reprojection).
@@ -102,6 +140,13 @@ map.on('load', () => {
   map.touchZoomRotate.enableRotation();
   addDataLayers();
   updateUI();
+  if (restoredView) map.jumpTo(restoredView);
+  if (activeRoute()) void refreshRouteStats();
+});
+
+map.on('moveend', () => {
+  mapView = currentView();
+  persistWorkspace();
 });
 
 map.on('style.load', () => {
@@ -230,6 +275,7 @@ async function ensureWaypointElevation(index: number) {
   if (elevation === undefined || !waypoints[index]) return;
   waypoints[index] = { ...waypoints[index], elevation };
   refreshMarkers();
+  persistWorkspace();
 }
 
 function refreshMarkers() {
@@ -268,6 +314,7 @@ function refreshMarkers() {
           await refreshRouteStats();
           refreshRoutesLayer();
           commitSnapshot();
+          persistWorkspace();
         };
         document.addEventListener('pointermove', move);
         document.addEventListener('pointerup', up, { once: true });
@@ -375,6 +422,7 @@ function refreshMarkers() {
           if (dragging) {
             commitSnapshot();
             void ensureWaypointElevation(index);
+            persistWorkspace();
           }
         };
         document.addEventListener('pointermove', move);
@@ -402,6 +450,7 @@ function restore(state: AppState) {
   updateUI();
   void refreshRouteStats();
   waypoints.forEach((_, index) => void ensureWaypointElevation(index));
+  persistWorkspace();
 }
 function undo() { const previous = history.pop(); if (!previous) return; future.push(snapshot()); restore(previous); }
 function redo() { const next = future.pop(); if (!next) return; history.push(snapshot()); restore(next); }
@@ -463,6 +512,7 @@ function finishRoute() {
   refreshRoutesLayer();
   updateUI();
   void refreshRouteStats();
+  persistWorkspace();
 }
 function setWaypointMode(on: boolean) {
   waypointMode = on;
@@ -487,6 +537,7 @@ function addWaypoint(event: MapMouseEvent) {
   refreshMarkers();
   updateUI();
   void ensureWaypointElevation(waypoints.length - 1);
+  persistWorkspace();
 }
 
 function addRoutePoint(event: MapMouseEvent) {
@@ -500,6 +551,7 @@ function addRoutePoint(event: MapMouseEvent) {
   updateUI();
   updateDrawBar();
   void refreshRouteStats();
+  persistWorkspace();
 }
 
 map.on('click', (event: MapMouseEvent) => {
@@ -550,6 +602,7 @@ window.addEventListener('keydown', (event) => {
       selectedWaypointIndex = null;
       refreshMarkers();
       updateUI();
+      persistWorkspace();
     } else if (selectedIndex !== null) {
       const route = activeRoute();
       if (route) {
@@ -559,6 +612,7 @@ window.addEventListener('keydown', (event) => {
         refreshRoutesLayer();
         updateUI();
         void refreshRouteStats();
+        persistWorkspace();
       }
     }
   }
@@ -608,7 +662,7 @@ map.on('mousedown', (event: MapMouseEvent) => {
 
 $('draw-route').addEventListener('click', () => drawing ? stopDrawing() : startDrawing());
 $('add-waypoint').addEventListener('click', () => setWaypointMode(!waypointMode));
-$('new-route').addEventListener('click', () => { commitSnapshot(); routes.push(newRoute()); selectRoute(routes[routes.length - 1].id); startDrawing(); updateUI(); });
+$('new-route').addEventListener('click', () => { commitSnapshot(); routes.push(newRoute()); selectRoute(routes[routes.length - 1].id); startDrawing(); updateUI(); persistWorkspace(); });
 $('draw-finish').addEventListener('click', finishRoute);
 $('draw-cancel').addEventListener('click', () => stopDrawing());
 $('undo').addEventListener('click', undo);
@@ -692,6 +746,7 @@ function commitWaypointName(index: number, raw: string) {
   const markerButton = waypointMarkerElements[index];
   if (label) { label.textContent = waypointLabelText(index); label.title = waypoints[index].name; }
   if (markerButton) markerButton.title = waypoints[index].name;
+  persistWorkspace();
 }
 
 function openRouteRename(index: number) {
@@ -715,6 +770,7 @@ function commitRouteName(index: number, raw: string) {
     widget.label.title = name;
   }
   fillRouteList();
+  persistWorkspace();
 }
 
 $('fit-route').addEventListener('click', fitAll);
@@ -866,6 +922,7 @@ function setUnitSystem(system: UnitSystem) {
   $('units-imperial').classList.toggle('active', system === 'imperial');
   updateUI();
   drawProfileChart();
+  persistWorkspace();
 }
 
 $('terrain-toggle').addEventListener('click', () => {
@@ -964,6 +1021,7 @@ async function applyImport(data: ParsedGPX, stripElevations: boolean, target?: n
   await refreshRouteStats();
   refreshRoutesLayer();
   for (let index = firstWaypoint; index < waypoints.length; index++) void ensureWaypointElevation(index);
+  persistWorkspace();
 }
 
 async function confirmImport() {
@@ -1012,6 +1070,43 @@ $('export-gpx').addEventListener('click', () => {
   anchor.click(); URL.revokeObjectURL(url);
 });
 
+$('clear-workspace').addEventListener('click', openClearDialog);
+
+const clearDialog = $('clear-dialog');
+function openClearDialog() {
+  const routePart = routes.length === 0 ? '' : routes.length === 1 ? '1 route' : `${routes.length} routes`;
+  const waypointPart = waypoints.length === 0 ? '' : waypoints.length === 1 ? '1 waypoint' : `${waypoints.length} waypoints`;
+  const items = [routePart, waypointPart].filter(Boolean).join(' and ');
+  $('clear-summary').textContent = items
+    ? `This removes ${items}, resets the map name and units, and deletes the saved location data. It cannot be undone.`
+    : 'Nothing to clear — the workspace is already empty.';
+  clearDialog.classList.remove('hidden');
+}
+function closeClearDialog() { clearDialog.classList.add('hidden'); }
+function confirmClearAll() {
+  closeClearDialog();
+  routes = [];
+  waypoints = [];
+  selectedRouteId = null;
+  selectedIndex = null;
+  selectedWaypointIndex = null;
+  nextRouteId = 1;
+  history.length = 0;
+  future.length = 0;
+  if (unitSystem !== defaultUnitSystem()) setUnitSystem(defaultUnitSystem());
+  setDocumentName(DEFAULT_MAP_NAME);
+  clearWorkspace();
+  refreshRoutesLayer();
+  updateUI();
+  void refreshRouteStats();
+  drawProfileChart();
+}
+
+$('clear-cancel').addEventListener('click', closeClearDialog);
+$('clear-confirm').addEventListener('click', confirmClearAll);
+$('clear-dialog').addEventListener('click', (event) => { if (event.target === clearDialog) closeClearDialog(); });
+window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !clearDialog.classList.contains('hidden')) closeClearDialog(); });
+
 mapNameInput.addEventListener('input', () => setDocumentName(mapNameInput.value));
 
 function fitPoints(points: { lat: number; lon: number }[]) {
@@ -1053,6 +1148,7 @@ function fillRouteList() {
       refreshRoutesLayer();
       updateUI();
       void refreshRouteStats();
+      persistWorkspace();
     });
     item.append(swatch, name, remove);
     item.addEventListener('click', () => { commitSnapshot(); selectRoute(route.id); });
