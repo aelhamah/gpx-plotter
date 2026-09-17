@@ -45,6 +45,20 @@ const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
 
+// --- Map name --------------------------------------------------------------
+const mapNameInput = $<HTMLInputElement>('map-name');
+const DEFAULT_MAP_NAME = 'My Map';
+let documentName = DEFAULT_MAP_NAME;
+
+/** Set the name for this map: drives the tab title, the export filename, and the GPX metadata name. */
+function setDocumentName(name: string) {
+  documentName = name.trim() || DEFAULT_MAP_NAME;
+  mapNameInput.value = documentName;
+  document.title = documentName === DEFAULT_MAP_NAME
+    ? 'GPX Route Plotter'
+    : `${documentName} — GPX Route Plotter`;
+}
+
 if (!MAPTILER_API_KEY) {
   mapStatus.textContent = 'MapTiler key missing — add it in src/config.ts, then reload.';
 }
@@ -936,6 +950,7 @@ $('gpx-input').addEventListener('change', async (event) => {
     const doc = new DOMParser().parseFromString(content, 'application/xml');
     const imported = parseGPX(content);
     const stripElevations = doc.documentElement.getAttribute('creator') === 'GPX Plotter';
+    setDocumentName(imported.metadataName ?? file.name.replace(/\.gpx$/i, ''));
     const largest = imported.routes.reduce((max, route) => Math.max(max, route.points.length), 0);
     if (largest > DOWNSAMPLE_PROMPT_THRESHOLD) {
       const points = imported.routes.reduce((sum, route) => sum + route.points.length, 0);
@@ -949,12 +964,15 @@ $('gpx-input').addEventListener('change', async (event) => {
 $('export-gpx').addEventListener('click', () => {
   const usable = routes.filter((route) => route.points.length >= 2);
   if (!usable.length && !waypoints.length) { alert('Add at least two route points (or a waypoint) before exporting.'); return; }
-  const blob = new Blob([exportGPX(routes, waypoints)], { type: 'application/gpx+xml;charset=utf-8' });
+  const hasCustomName = documentName !== DEFAULT_MAP_NAME;
+  const blob = new Blob([exportGPX(routes, waypoints, hasCustomName ? documentName : undefined)], { type: 'application/gpx+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url;
-  const base = (usable[0]?.name || 'route').replace(/[^a-z0-9-_]+/gi, '-').replace(/^-|-$/g, '') || 'route';
+  const base = (hasCustomName ? documentName : usable[0]?.name || 'route').replace(/[^a-z0-9-_]+/gi, '-').replace(/^-|-$/g, '') || 'route';
   anchor.download = `${base}.gpx`;
   anchor.click(); URL.revokeObjectURL(url);
 });
+
+mapNameInput.addEventListener('input', () => setDocumentName(mapNameInput.value));
 
 function fitPoints(points: { lat: number; lon: number }[]) {
   if (!points.length) return;

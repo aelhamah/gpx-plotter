@@ -52,6 +52,19 @@ describe('exportGPX → parseGPX round trip', () => {
     const parsed = parseGPX(xml);
     expect(parsed.waypoints[0].elevation).toBeCloseTo(2134.5, 2);
   });
+  it('writes a supplied map name into the metadata', () => {
+    const xml = exportGPX([route('Track A', [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }])], [], 'Grand Loop');
+    expect(xml).toContain('<metadata>\n    <name>Grand Loop</name>\n  </metadata>');
+  });
+  it('falls back to the first route name for metadata when no map name is given', () => {
+    const xml = exportGPX([route('Maroon Bells', [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }])], []);
+    expect(xml).toContain('<name>Maroon Bells</name>');
+    expect(parseGPX(xml).metadataName).toBe('Maroon Bells');
+  });
+  it('round-trips a custom map name through the metadata', () => {
+    const xml = exportGPX([route('Track A', [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }])], [], 'Grand Loop');
+    expect(parseGPX(xml).metadataName).toBe('Grand Loop');
+  });
 });
 
 describe('parseGPX', () => {

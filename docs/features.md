@@ -141,6 +141,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 
 ## Interface
 
+- **Map name** field at the top of the sidebar names the whole document: it
+  drives the browser-tab title, the exported `.gpx` filename, and the
+  `<metadata><name>` written into the file (restored on re-import). Importing a
+  GPX pre-fills it from the file's metadata name or filename.
 - Translucent, blurred sidebar floating over a full-bleed map with click-through
   gaps.
 - Icon toolbars with hover tooltips (including shortcut hints such as
