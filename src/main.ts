@@ -4,6 +4,7 @@ import type { GeoJSONSource } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
 import { colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, type UnitSystem } from './geo';
+import { geocode, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
 import { DOWNSAMPLE_PROMPT_THRESHOLD, defaultPointBudget, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
@@ -663,6 +664,138 @@ function commitRouteName(index: number, raw: string) {
 }
 
 $('fit-route').addEventListener('click', fitAll);
+
+// --- Search bar ---------------------------------------------------------------
+const searchBar = $('search-bar');
+const searchInput = $<HTMLInputElement>('search-input');
+const searchResults = $('search-results');
+let searchMarker: Marker | null = null;
+let searchToken = 0;
+let searchIndex = 0;
+let searchItems: GeocodeResult[] = [];
+let searchTimer: number | undefined;
+const SEARCH_DEBOUNCE_MS = 250;
+
+function hideSearchResults() {
+  searchResults.classList.add('hidden');
+  searchResults.setAttribute('aria-expanded', 'false');
+  searchItems = [];
+  searchIndex = 0;
+}
+
+function clearSearchMarker() {
+  if (searchMarker) { searchMarker.remove(); searchMarker = null; }
+}
+
+function setSearchIndex(index: number) {
+  const rows = searchResults.querySelectorAll('.search-result');
+  if (!rows.length) return;
+  searchIndex = (index + rows.length) % rows.length;
+  rows.forEach((row, i) => row.classList.toggle('active', i === searchIndex));
+}
+
+function debounceSearch(query: string) {
+  window.clearTimeout(searchTimer);
+  if (!query.trim()) { clearSearchMarker(); hideSearchResults(); return; }
+  if (query.trim().length < 2) { hideSearchResults(); return; }
+  searchTimer = window.setTimeout(() => { void runSearch(query); }, SEARCH_DEBOUNCE_MS);
+}
+
+async function runSearch(query: string) {
+  const token = ++searchToken;
+  const results = await geocode(query);
+  if (token !== searchToken) return;
+  searchItems = results;
+  searchIndex = 0;
+  renderSearchResults(query.trim());
+}
+
+function renderSearchResults(query: string) {
+  searchResults.innerHTML = '';
+  if (!searchItems.length) {
+    const empty = document.createElement('div');
+    empty.className = 'search-empty';
+    empty.textContent = `No peaks or places found for “${query}”.`;
+    searchResults.append(empty);
+  } else {
+    searchItems.forEach((result, index) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `search-result ${index === searchIndex ? 'active' : ''}`;
+      row.setAttribute('role', 'option');
+      const primary = document.createElement('span');
+      primary.className = 'search-result-primary';
+      const name = document.createElement('span');
+      name.className = 'search-result-name';
+      name.textContent = result.name || result.region;
+      const badge = document.createElement('span');
+      badge.className = 'search-result-type';
+      badge.textContent = result.typeLabel;
+      primary.append(name, badge);
+      row.append(primary);
+      if (result.region && result.region !== result.name) {
+        const region = document.createElement('span');
+        region.className = 'search-result-region';
+        region.textContent = result.region;
+        row.append(region);
+      }
+      row.addEventListener('click', (event) => { event.stopPropagation(); selectSearchResult(result); });
+      row.addEventListener('pointerenter', () => setSearchIndex(index));
+      searchResults.append(row);
+    });
+  }
+  searchResults.classList.remove('hidden');
+  searchResults.setAttribute('aria-expanded', 'true');
+}
+
+function selectSearchResult(result: GeocodeResult) {
+  searchInput.value = result.name || result.region;
+  hideSearchResults();
+  searchInput.blur();
+  clearSearchMarker();
+  const element = document.createElement('div');
+  element.className = 'search-marker';
+  searchMarker = new maplibregl.Marker({ element }).setLngLat([result.center.lon, result.center.lat]).addTo(map);
+  if (result.bbox) {
+    const [west, south, east, north] = result.bbox;
+    map.fitBounds(new maplibregl.LngLatBounds([west, south], [east, north]), { padding: 80, duration: 700, maxZoom: 15 });
+  } else {
+    map.jumpTo({ center: [result.center.lon, result.center.lat], zoom: 13 });
+  }
+}
+
+searchInput.addEventListener('input', () => debounceSearch(searchInput.value));
+searchInput.addEventListener('focus', () => { if (searchInput.value.trim().length >= 2) void runSearch(searchInput.value); });
+searchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowDown') {
+    if (searchResults.classList.contains('hidden')) return;
+    event.preventDefault();
+    setSearchIndex(searchIndex + 1);
+  } else if (event.key === 'ArrowUp') {
+    if (searchResults.classList.contains('hidden')) return;
+    event.preventDefault();
+    setSearchIndex(searchIndex - 1);
+  } else if (event.key === 'Enter') {
+    if (searchResults.classList.contains('hidden')) {
+      if (searchInput.value.trim().length >= 2) void runSearch(searchInput.value);
+      return;
+    }
+    event.preventDefault();
+    const result = searchItems[searchIndex] ?? searchItems[0];
+    if (result) selectSearchResult(result);
+  } else if (event.key === 'Escape') {
+    if (searchResults.classList.contains('hidden')) return;
+    event.preventDefault();
+    clearSearchMarker();
+    hideSearchResults();
+    searchInput.value = '';
+    searchInput.blur();
+  }
+});
+document.addEventListener('click', (event) => {
+  if (searchBar && !searchBar.contains(event.target as Node)) hideSearchResults();
+});
+map.on('dragstart', () => hideSearchResults());
 
 $('units-metric').addEventListener('click', () => setUnitSystem('metric'));
 $('units-imperial').addEventListener('click', () => setUnitSystem('imperial'));

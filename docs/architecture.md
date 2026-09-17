@@ -10,7 +10,7 @@ The app is a **static, single-page, client-side application**. There is no
 server component: the browser parses GPX files, samples terrain from MapTiler
 tiles, computes statistics, renders the map with MapLibre GL JS, and generates
 the export file locally. The only network traffic is to MapTiler for map styles,
-vector/raster basemap tiles, and Terrain-RGB DEM tiles.
+vector/raster basemap tiles, Terrain-RGB DEM tiles, and geocoding search requests.
 
 Consequences:
 
@@ -37,6 +37,7 @@ src/main.ts           Application hub: map, state, DOM wiring, markers, chart
 src/gpx.ts            GPX parse + serialize, core data types
 src/geo.ts            Geodesy, elevation stats, route resampling, chart math
 src/dem.ts            MapTiler Terrain-RGB decoding + slope raster generation
+src/geocode.ts        MapTiler geocoding search (peaks, towns, landforms)
 src/simplify.ts       Track downsampling (import of large files)
 src/units.ts          Metric/imperial defaults + formatting
 src/colors.ts         Route color palette + profile trace color
@@ -102,6 +103,27 @@ Pure math, no DOM:
   avalanche bands (`<20°`, `20–30°`, `30–35°`, `35–40°`, `40–45°`, `45°+`).
 - Decoding tries `createImageBitmap` first and falls back to an `<img>` for
   engines that cannot decode WebP bitmaps.
+
+### `src/geocode.ts` — geocoding search
+
+Pure fetch/parse, no DOM or MapLibre:
+
+- `geocodeUrl(query, limit)` — builds the MapTiler forward-geocoding URL, pinned
+  to `GEOCODE_TYPES` (`municipality,place,locality,poi,major_landform`) so
+  results stay relevant to hiking (towns/municipalities, peaks/POIs, and
+  mountain ranges).
+- `geocode(query)` — `fetch`es the API, normalizes features, and never throws:
+  blanks, non-OK responses, and network failures all return `[]`.
+- `normalizeFeature` — maps a raw GeoJSON feature to a `GeocodeResult`
+  (`name`, `region`, friendly `typeLabel`, `center`, optional `bbox`), skipping
+  non-Point geometry or invalid coordinates.
+- `placeTypeLabel` — human-friendly badges, preferring the OSM `place_designation`
+  (City/Town/Village) over the broader place type.
+
+`main.ts` owns the search-bar DOM: debounced type-ahead, ↑/↓/Enter/Esc keyboard
+handling, and `selectSearchResult()`, which frames the map (`fitBounds` when the
+feature has a `bbox`, otherwise a point zoom) and shows a temporary, non-waypoint
+marker.
 
 ### `src/simplify.ts` — importing large tracks
 

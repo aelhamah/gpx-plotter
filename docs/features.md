@@ -18,6 +18,22 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   and rotating.
 - **Fit to view** control that frames all routes and waypoints.
 
+## Search
+
+- **Map search bar** pinned to the top of the map for finding peaks,
+  towns/municipalities, and mountain ranges.
+- Backed by the **MapTiler Geocoding API** (the same account/key as the
+  basemaps), filtered to `municipality`, `place`, `locality`, `poi`, and
+  `major_landform` place types so results stay relevant to hiking.
+- **Type-ahead results** appear as you type (debounced). Pick with a click,
+  the ↑/↓ arrow keys, or press Enter for the highlighted (first) match; Esc
+  or clicking elsewhere closes the list.
+- **Fit to location**: selecting a result frames the area — bounding-box fit
+  for towns and ranges, a point zoom for peaks — and drops a temporary marker
+  that is cleared by the next search or Esc.
+- Degrades gracefully: blank queries, no matches, and network failures all
+  show a quiet empty state instead of errors.
+
 ## Routes
 
 - **Multiple routes**, each with a stable id, name, and color from a
@@ -130,6 +146,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **62 unit tests** across 8 files covering geodesy, GPX parse/serialize, DEM
-  decoding, units, colors, names, config, and downsampling.
+- **79 unit tests** across 10 files covering geodesy, GPX parse/serialize, DEM
+  decoding, units, colors, names, config, downsampling, drag thresholds, and
+  geocoding.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

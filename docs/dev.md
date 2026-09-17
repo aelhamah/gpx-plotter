@@ -34,7 +34,8 @@ gate, and the test suite is the behavior gate. Run both before committing.
 ## Project conventions
 
 - **Pure logic lives in small modules** (`geo.ts`, `gpx.ts`, `dem.ts`,
-  `simplify.ts`, `units.ts`, `colors.ts`, `names.ts`) with no DOM or MapLibre
+  `geocode.ts`, `simplify.ts`, `units.ts`, `colors.ts`, `names.ts`) with no DOM
+  or MapLibre
   dependencies where possible. This is deliberate: it keeps the code unit
   testable in jsdom without a real map.
 - **`main.ts` is the hub** for anything stateful, DOM-related, or map-related.
@@ -63,6 +64,7 @@ tests/
   colors.test.ts     palette determinism/wrapping
   names.test.ts      fallback naming
   config.test.ts     URL assembly
+  geocode.test.ts    geocoding URL assembly, feature normalization, fetch handling
   simplify.test.ts   downsampling + distance-based budget
 ```
 

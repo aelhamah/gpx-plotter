@@ -3,8 +3,9 @@
 **Live app:** https://aelhamah.github.io/gpx-plotter/
 
 A browser-based GPX editor: draw, import, inspect, and export hiking/running
-routes on a 3D MapTiler terrain, with live distance, climb, and slope stats plus
-an interactive elevation profile.
+routes on a 3D MapTiler terrain, with live distance, climb, and slope stats, an
+interactive elevation profile, and a search bar for finding peaks, towns, and
+mountain ranges.
 
 It is a purely static, client-side app — **no backend, database, or login**. The
 whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
@@ -25,13 +26,13 @@ whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
 │ src/main.ts  —  the application hub                                    │
 │  • map init + layers + terrain                                         │
 │  • in-memory state (routes, waypoints, selection, history)             │
-│  • all DOM wiring, markers, dialogs, profile chart                     │
+│  • all DOM wiring, markers, dialogs, profile chart, map search         │
 └───────────────────────────────────────────────────────────────────────┘
-        │            │           │            │           │
-        ▼            ▼           ▼            ▼           ▼
-   gpx.ts       geo.ts       dem.ts      simplify.ts   units.ts / colors.ts
-   parse &      geodesy &    Terrain-RGB  downsample    formatting &
-   serialize    profiles     sampling     large tracks  palette
+        │            │           │            │           │         │
+        ▼            ▼           ▼            ▼           ▼         ▼
+   gpx.ts       geo.ts       dem.ts      simplify.ts   units.ts   geocode.ts
+   parse &      geodesy &    Terrain-RGB  downsample    formatting  MapTiler
+   serialize    profiles     sampling     large tracks  & palette   search
 ```
 
 **Data flow**
@@ -49,6 +50,9 @@ whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
    `Marker`s render draggable route points, route labels, and waypoints.
 5. **Export** — `exportGPX()` writes a multi-track/waypoint GPX 1.1 file and the
    browser downloads it.
+6. **Search** — typing in the map search bar forwards the query to MapTiler
+   geocoding (filtered to municipalities, towns, POIs, and landforms); picking a
+   result fits the camera and drops a temporary marker.
 
 **State & undo/redo** live in `main.ts` as plain module variables. `snapshot()`
 deep-clones `{ routes, waypoints }`; `commitSnapshot()` pushes onto a bounded
@@ -59,7 +63,7 @@ history stack so ⌘/Ctrl-Z and ⇧⌘/Ctrl-Z replay whole documents.
 Runtime:
 
 - [MapLibre GL JS](https://maplibre.org/) — open-source WebGL map renderer (vector styles, terrain, custom protocols, markers).
-- [MapTiler](https://www.maptiler.com/) — basemap styles (Outdoor/Satellite), Terrain-RGB DEM tiles, and hillshade data used through MapLibre. See the [MapTiler documentation](https://docs.maptiler.com/).
+- [MapTiler](https://www.maptiler.com/) — basemap styles (Outdoor/Satellite), Terrain-RGB DEM tiles, hillshade data, and the geocoding search API, all used through MapLibre or plain `fetch`. See the [MapTiler documentation](https://docs.maptiler.com/).
 
 Build & dev:
 
