@@ -10,7 +10,8 @@ The app is a **static, single-page, client-side application**. There is no
 server component: the browser parses GPX files, samples terrain from MapTiler
 tiles, computes statistics, renders the map with MapLibre GL JS, and generates
 the export file locally. The only network traffic is to MapTiler for map styles,
-vector/raster basemap tiles, Terrain-RGB DEM tiles, and geocoding search requests.
+vector/raster basemap tiles, Terrain-RGB DEM tiles, geocoding search requests,
+and (for drawing/waypoint snapping) the outdoor and planet vector tilesets.
 
 Consequences:
 
@@ -37,6 +38,9 @@ src/main.ts           Application hub: map, state, DOM wiring, markers, chart
 src/gpx.ts            GPX parse + serialize, core data types
 src/geo.ts            Geodesy, elevation stats, route resampling, chart math
 src/dem.ts            MapTiler Terrain-RGB decoding + slope raster generation
+src/mvt.ts            Minimal MapTiler vector tile (MVT) decoder
+src/snap.ts           Pure snapping math (points → trails / peaks)
+src/snapSources.ts    Trail + peak tile fetching and caching for snapping
 src/geocode.ts        MapTiler geocoding search (peaks, towns, landforms)
 src/simplify.ts       Track downsampling (import of large files)
 src/units.ts          Metric/imperial defaults + formatting
@@ -122,6 +126,50 @@ Pure math, no DOM:
   avalanche bands (`<20°`, `20–30°`, `30–35°`, `35–40°`, `40–45°`, `45°+`).
 - Decoding tries `createImageBitmap` first and falls back to an `<img>` for
   engines that cannot decode WebP bitmaps.
+
+### `src/mvt.ts` — MapTiler vector tile decoding
+
+A small, dependency-free Mapbox Vector Tile decoder for the two tilesets used in
+snapping:
+
+- Parses a tile's layer names, feature geometries, and properties from the raw
+  PBF bytes (varint + zigzag decoding, command-integer command counts).
+- Properties are resolved in a **second pass**: real MapTiler tiles can emit
+  features *before* their keys/values dictionaries, so raw features are buffered
+  and their tag indices resolved once the dictionaries arrive. Value types follow
+  the spec: field 4 is `values`, field 5 `extent`, and numeric values use field 6
+  (`sint_value`, zigzag-encoded).
+- `layerByName(tile, name)` pulls one layer's features as `{ type, props, parts }`
+  (type 1 = Point, 2 = LineString, 3 = Polygon), and `tilePointToLngLat()`
+  converts a point from tile coordinates to geodetic `{ lon, lat }` at the tile's
+  (x, y, z).
+
+### `src/snap.ts` — snapping math (pure)
+
+No I/O or DOM. Given `(lng, lat)` and a set of candidate geometries, finds the
+best snap target:
+
+- `nearestOnLine(plng, plat, line)` — projects the point onto each segment of a
+  polyline in meter space (`projectToSegment`) and returns the closest on-line
+  point plus its `distanceMeters`.
+- `nearestSnap(lng, lat, candidates)` — picks the nearest candidate among trail
+  lines and points, respecting thresholds `TRAIL_SNAP_METERS = 40` and
+  `PEAK_SNAP_METERS = 250`. No candidate within range → `null`.
+
+### `src/snapSources.ts` — trail & peak tile sourcing
+
+Fetches and caches the vector tiles the snap layers need:
+
+- Trail geometry comes from the **outdoor** tileset (the same `class: 'trail'`
+  layer the basemap renders) and peaks from the **planet** tileset's
+  `mountain_peak` layer, both at zoom 13. URLs are built in `config.ts`
+  (`OUTDOOR_TILE_URL` / `PLANET_TILE_URL`).
+- `trailsNearPoint(lng, lat)` decodes the containing tile via `mvt.ts`, returns
+  every trail linestring in it as an array of `{ lon, lat }` snap points, and
+  `peaksNearPoint(lng, lat)` returns nearby peaks with `name` and `elevation`
+  (meters) from their properties.
+- A small LRU cache (64 tiles) on top of the same client-side decoding path; any
+  fetch/decode failure degrades to `[]` so drawing always works offline.
 
 ### `src/geocode.ts` — geocoding search
 
@@ -270,9 +318,16 @@ new content.
 
 - **Draw mode** (`drawing`): clicking the map appends points to the active route.
   A floating draw bar shows the live point count and enables **Finish** once
-  there are ≥ 2 points; Enter finishes, Esc cancels.
+  there are ≥ 2 points; Enter finishes, Esc cancels. Each new point is pushed
+  immediately and then refined asynchronously by `snapRoutePointToTrail()`: the
+  containing outdoor tile is decoded and, if the point is within 40 m of a
+  `trail` line, the point moves onto the trail. The refine is checked both ways
+  (the point must still be the last one and the route still the active one) so a
+  stale result can never rewrite a newer point.
 - **Waypoint mode** (`waypointMode`): one click places a single waypoint, then
-  the mode exits automatically.
+  the mode exits automatically. `snapWaypointToPeak()` runs the same way against
+  `mountain_peak` points (250 m radius); a snapped waypoint inherits the peak's
+  name and elevation.
 - **Selection**: clicking a point marker or waypoint selects it (showing the
   edit affordance); clicking empty map deselects.
 - **Dragging**: route points and waypoints are draggable; the drag disables
@@ -313,9 +368,13 @@ placeholder.
 
 ## 14. Known limitations
 
-- All state is in memory; nothing persists across reloads.
+- All state lives in memory and is autosaved to `localStorage`; a cleared cache
+  or a different browser loses the workspace (GPX export is the portable copy).
 - Elevation stats and the profile depend on DEM availability and are only as
   accurate as the ~30 m sampling.
+- Trail/peak snapping depends on the MapTiler tilesets being reachable and
+  complete; when they are not, drawing and waypoints degrade to raw placement
+  with no error surfaced.
 - Very large "keep every point" imports still create one DOM marker per point
   and can be slow.
 - GPX metadata (time, heart rate, etc.) beyond coordinates/elevation/name is not

@@ -13,6 +13,8 @@ import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
 import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
+import { PEAK_SNAP_METERS, TRAIL_SNAP_METERS, nearestSnap, type SnapPoint } from './snap';
+import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import './style.css';
 
 let routes: Route[] = [];
@@ -475,7 +477,7 @@ function updateDrawBar() {
   $('draw-count').textContent = String(count);
   ($('draw-finish') as HTMLButtonElement).disabled = count < 2;
   $('draw-status').textContent = count < 2
-    ? 'Click to add points — press Enter or click Finish to end'
+    ? 'Click to add points — snaps to trails, press Enter or click Finish to end'
     : 'Press Enter or click Finish to end';
 }
 
@@ -519,7 +521,7 @@ function setWaypointMode(on: boolean) {
   $('add-waypoint').classList.toggle('active', on);
   if (on) {
     stopDrawing();
-    drawHint.textContent = 'Click to place a waypoint · Esc to cancel';
+    drawHint.textContent = 'Click to place a waypoint · snaps to peaks · Esc to cancel';
     drawHint.classList.remove('hidden');
     map.getCanvas().style.cursor = 'copy';
   } else {
@@ -530,13 +532,37 @@ function setWaypointMode(on: boolean) {
 
 function addWaypoint(event: MapMouseEvent) {
   commitSnapshot();
-  waypoints.push({ lat: event.lngLat.lat, lon: event.lngLat.lng, name: `Waypoint ${waypoints.length + 1}` });
-  selectedWaypointIndex = waypoints.length - 1;
+  const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
+  const index = waypoints.length;
+  waypoints.push({ ...raw, name: `Waypoint ${index + 1}` });
+  selectedWaypointIndex = index;
   selectedIndex = null;
   setWaypointMode(false);
   refreshMarkers();
   updateUI();
-  void ensureWaypointElevation(waypoints.length - 1);
+  void ensureWaypointElevation(index);
+  persistWorkspace();
+  void snapWaypointToPeak(index, raw);
+}
+
+/** After a waypoint is placed, refine it onto the nearest peak within reach. */
+async function snapWaypointToPeak(index: number, raw: SnapPoint) {
+  const peaks = await peaksNearPoint(raw.lon, raw.lat);
+  if (peaks.length === 0) return;
+  const result = nearestSnap(raw, peaks.map((peak) => [peak.center]), PEAK_SNAP_METERS);
+  if (!result) return;
+  const peak = peaks.find(
+    (candidate) => candidate.center.lon === result.point.lon && candidate.center.lat === result.point.lat,
+  );
+  const current = waypoints[index];
+  if (!current || current.lon !== raw.lon || current.lat !== raw.lat) return;
+  current.lon = result.point.lon;
+  current.lat = result.point.lat;
+  if (peak?.name) current.name = peak.name;
+  if (peak?.elevation !== undefined) current.elevation = peak.elevation;
+  refreshMarkers();
+  updateUI();
+  void ensureWaypointElevation(index);
   persistWorkspace();
 }
 
@@ -544,9 +570,28 @@ function addRoutePoint(event: MapMouseEvent) {
   const route = activeRoute();
   if (!route) return;
   commitSnapshot();
-  route.points.push({ lat: event.lngLat.lat, lon: event.lngLat.lng });
+  const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
+  route.points.push({ ...raw });
   selectedIndex = route.points.length - 1;
   selectedWaypointIndex = null;
+  refreshRoutesLayer();
+  updateUI();
+  updateDrawBar();
+  void refreshRouteStats();
+  persistWorkspace();
+  void snapRoutePointToTrail(route, route.points.length - 1, raw);
+}
+
+/** After a drawn point lands, snap it onto the nearest trail within reach. */
+async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint) {
+  const trails = await trailsNearPoint(raw.lon, raw.lat);
+  if (trails.length === 0) return;
+  const result = nearestSnap(raw, trails, TRAIL_SNAP_METERS);
+  if (!result) return;
+  const current = route.points[index];
+  if (!current || current.lon !== raw.lon || current.lat !== raw.lat) return;
+  current.lon = result.point.lon;
+  current.lat = result.point.lat;
   refreshRoutesLayer();
   updateUI();
   updateDrawBar();

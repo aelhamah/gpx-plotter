@@ -49,6 +49,9 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   deterministic palette (colors wrap when routes outnumber colors).
 - **Draw a route** by clicking the map. A floating draw bar shows the live point
   count, a **Finish** button (enabled at ≥ 2 points), and **Cancel**.
+- **Trail snapping**: route points drawn within ~40 m of a known trail snap onto
+  the trail, using the same `outdoor` trail tileset the basemap renders. The
+  drawn line visibly hugs marked trails while you plot.
 - **New route** creates a route and drops straight into drawing.
 - **Drag route points** to reshape a route; elevation is re-sampled after a drag.
 - **Rename routes** from the sidebar or by double-clicking the route's map label.
@@ -65,6 +68,8 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Delete** the selected waypoint with the Delete key.
 - **Elevation labels**: each waypoint label shows its name and terrain
   elevation, sampled from the DEM once and kept up to date.
+- **Peak snapping**: a waypoint dropped within ~250 m of a mapped peak snaps to
+  the summit, inheriting the peak's name and elevation from the planet tileset.
 - **Waypoint count** section summarising how many waypoints exist.
 - **Selection affordance**: the selected waypoint is highlighted with a border
   and an edit (✎) label; clicking empty map clears the selection.
@@ -168,7 +173,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **94 unit tests** across 11 files covering geodesy, GPX parse/serialize, DEM
+- **117 unit tests** across 14 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
-  geocoding, and workspace storage.
+  geocoding, workspace storage, the MVT tile decoder, and trail/peak snapping.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.
