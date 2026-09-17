@@ -40,10 +40,27 @@ const future: AppState[] = [];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
-const routeName = $('route-name') as HTMLInputElement;
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
+
+// --- Map name --------------------------------------------------------------
+const mapNameInput = $<HTMLInputElement>('map-name');
+const mapNameField = $('map-name-field');
+const mapNameDisplay = $('map-name-display');
+const mapNameText = $('map-name-text');
+const DEFAULT_MAP_NAME = 'My Map';
+let documentName = DEFAULT_MAP_NAME;
+
+/** Set the name for this map: drives the tab title, the export filename, and the GPX metadata name. */
+function setDocumentName(name: string) {
+  documentName = name.trim() || DEFAULT_MAP_NAME;
+  mapNameInput.value = documentName;
+  mapNameText.textContent = documentName;
+  document.title = documentName === DEFAULT_MAP_NAME
+    ? 'GPX Route Plotter'
+    : `${documentName} — GPX Route Plotter`;
+}
 
 if (!MAPTILER_API_KEY) {
   mapStatus.textContent = 'MapTiler key missing — add it in src/config.ts, then reload.';
@@ -285,7 +302,6 @@ function refreshMarkers() {
       routes[index].name = name;
       text.textContent = name;
       label.title = name;
-      if (routes[index].id === selectedRouteId) routeName.value = name;
       fillRouteList();
     });
     renameInput.addEventListener('blur', () => {
@@ -597,19 +613,58 @@ $('draw-finish').addEventListener('click', finishRoute);
 $('draw-cancel').addEventListener('click', () => stopDrawing());
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
-routeName.addEventListener('input', () => {
-  const route = activeRoute();
-  if (!route) return;
-  const name = routeName.value || 'Unnamed route';
-  route.name = name;
-  const widget = routeNameWidgets[routes.indexOf(route)];
-  if (widget) {
-    widget.input.value = name;
-    widget.text.textContent = name;
-    widget.label.title = name;
-  }
-  fillRouteList();
+
+/** Wire the pairwise name-display / hidden-input pattern used by the map name field. */
+function wireNameFieldEdit(opts: {
+  field: HTMLElement;
+  display: HTMLElement;
+  input: HTMLInputElement;
+  start: () => void;
+  commit: () => void;
+  revert: () => void;
+}) {
+  opts.display.addEventListener('click', () => {
+    if (opts.field.classList.contains('disabled')) return;
+    opts.start();
+  });
+  opts.input.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') opts.input.blur();
+    else if (event.key === 'Escape') { opts.revert(); opts.input.blur(); }
+  });
+  opts.input.addEventListener('blur', () => {
+    if (!opts.field.classList.contains('editing')) return;
+    opts.commit();
+  });
+}
+
+wireNameFieldEdit({
+  field: mapNameField,
+  display: mapNameDisplay,
+  input: mapNameInput,
+  start: () => {
+    mapNameEditBase = documentName;
+    syncMapNameField();
+    mapNameField.classList.add('editing');
+    mapNameInput.focus();
+    mapNameInput.select();
+  },
+  commit: () => {
+    mapNameField.classList.remove('editing');
+    syncMapNameField();
+  },
+  revert: () => {
+    mapNameField.classList.remove('editing');
+    setDocumentName(mapNameEditBase);
+  },
 });
+
+let mapNameEditBase = DEFAULT_MAP_NAME;
+
+function syncMapNameField() {
+  mapNameInput.value = documentName;
+  mapNameText.textContent = documentName;
+}
 function sizeRenameInput(input: HTMLInputElement, value: string) {
   input.style.width = `${Math.max(value.length, 6) + 2}ch`;
 }
@@ -659,7 +714,6 @@ function commitRouteName(index: number, raw: string) {
     widget.text.textContent = name;
     widget.label.title = name;
   }
-  if (routes[index].id === selectedRouteId) routeName.value = name;
   fillRouteList();
 }
 
@@ -936,6 +990,7 @@ $('gpx-input').addEventListener('change', async (event) => {
     const doc = new DOMParser().parseFromString(content, 'application/xml');
     const imported = parseGPX(content);
     const stripElevations = doc.documentElement.getAttribute('creator') === 'GPX Plotter';
+    setDocumentName(imported.metadataName ?? file.name.replace(/\.gpx$/i, ''));
     const largest = imported.routes.reduce((max, route) => Math.max(max, route.points.length), 0);
     if (largest > DOWNSAMPLE_PROMPT_THRESHOLD) {
       const points = imported.routes.reduce((sum, route) => sum + route.points.length, 0);
@@ -949,12 +1004,15 @@ $('gpx-input').addEventListener('change', async (event) => {
 $('export-gpx').addEventListener('click', () => {
   const usable = routes.filter((route) => route.points.length >= 2);
   if (!usable.length && !waypoints.length) { alert('Add at least two route points (or a waypoint) before exporting.'); return; }
-  const blob = new Blob([exportGPX(routes, waypoints)], { type: 'application/gpx+xml;charset=utf-8' });
+  const hasCustomName = documentName !== DEFAULT_MAP_NAME;
+  const blob = new Blob([exportGPX(routes, waypoints, hasCustomName ? documentName : undefined)], { type: 'application/gpx+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url;
-  const base = (usable[0]?.name || 'route').replace(/[^a-z0-9-_]+/gi, '-').replace(/^-|-$/g, '') || 'route';
+  const base = (hasCustomName ? documentName : usable[0]?.name || 'route').replace(/[^a-z0-9-_]+/gi, '-').replace(/^-|-$/g, '') || 'route';
   anchor.download = `${base}.gpx`;
   anchor.click(); URL.revokeObjectURL(url);
 });
+
+mapNameInput.addEventListener('input', () => setDocumentName(mapNameInput.value));
 
 function fitPoints(points: { lat: number; lon: number }[]) {
   if (!points.length) return;
@@ -1001,7 +1059,6 @@ function fillRouteList() {
     routesList.append(item);
   });
   routesEmpty.classList.toggle('hidden', routes.length > 0);
-  routeName.disabled = !activeRoute();
 }
 
 function updateUI() {
@@ -1021,7 +1078,6 @@ function updateUI() {
     : routeStats.gain === undefined
       ? 'Terrain stats will appear as the route grows'
       : 'Gain/loss/low/high follow the terrain along the route';
-  routeName.value = route?.name ?? '';
   fillRouteList();
 }
 

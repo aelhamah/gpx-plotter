@@ -59,8 +59,10 @@ or the map and coordinates the pure modules:
 - **Map lifecycle**: creates the `maplibregl.Map`, adds navigation/attribution
   controls, registers the custom `slope://` protocol, and (re)builds data
   sources/layers on `load` and on every `style.load`.
-- **State**: `routes`, `waypoints`, selection indices, mode flags, units, and
-  the undo/redo stacks.
+- **State**: `routes`, `waypoints`, selection indices, mode flags, units, the
+  undo/redo stacks, and the document/map name (`documentName`, set via the
+  top-of-sidebar "Map name" field — it drives the tab title, the export
+  filename, and the GPX metadata name).
 - **Rendering**: updates GeoJSON sources, rebuilds DOM `Marker`s for route
   points, route labels, waypoints, and the profile hover marker.
 - **Interaction**: map click/drag handlers, keyboard shortcuts, toolbar
@@ -72,11 +74,14 @@ or the map and coordinates the pure modules:
 
 - Defines the core types: `RoutePoint`, `Route`, `Waypoint`, `ParsedGPX`.
 - `parseGPX(xml)` reads `<trk>/<trkseg>/<trkpt>`, falls back to `<rte>/<rtept>`,
-  and reads `<wpt>` waypoints (namespaces ignored via `getElementsByTagNameNS('*', …)`).
+  reads `<wpt>` waypoints, and surfaces the file-level `<metadata><name>` as
+  `metadataName` (namespaces ignored via `getElementsByTagNameNS('*', …)`).
   It preserves `<ele>` and throws on invalid XML or empty files.
-- `exportGPX(routes, waypoints)` writes a GPX 1.1 document with one `<trk>` per
-  route plus `<wpt>` elements, marked `creator="GPX Plotter"`. That creator
-  string is later used on import to detect files produced by this app.
+- `exportGPX(routes, waypoints, name?)` writes a GPX 1.1 document with one
+  `<trk>` per route plus `<wpt>` elements, marked `creator="GPX Plotter"`. The
+  optional `name` lands in `<metadata><name>` (falling back to the first route's
+  name) so the map name round-trips through re-import. That creator string is
+  later used on import to detect files produced by this app.
 
 ### `src/geo.ts` — geodesy and profiles
 

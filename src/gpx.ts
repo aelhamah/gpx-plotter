@@ -40,6 +40,8 @@ function pointFrom(node: Element): RoutePoint | null {
 export interface ParsedGPX {
   routes: { name: string; points: RoutePoint[] }[];
   waypoints: Waypoint[];
+  /** The GPX <metadata><name>, when present — the file-level/map name. */
+  metadataName?: string;
 }
 
 export function parseGPX(xmlText: string): ParsedGPX {
@@ -85,17 +87,20 @@ export function parseGPX(xmlText: string): ParsedGPX {
     });
   });
 
+  const metadata = Array.from(doc.getElementsByTagNameNS('*', 'metadata'))[0];
+  const metadataName = metadata ? textOf(metadata, 'name') : undefined;
+
   if (!routes.some((route) => route.points.length) && !waypoints.length) {
     throw new Error('No track, route, or waypoint data was found in this GPX file.');
   }
-  return { routes: routes.filter((route) => route.points.length), waypoints };
+  return { routes: routes.filter((route) => route.points.length), waypoints, ...(metadataName ? { metadataName } : {}) };
 }
 
 function xmlEscape(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-export function exportGPX(routes: Route[], waypoints: Waypoint[]): string {
+export function exportGPX(routes: Route[], waypoints: Waypoint[], name?: string): string {
   const tracks = routes.map((route) => {
     const points = route.points.map((p) => {
       const elevation = p.elevation === undefined ? '' : `\n        <ele>${p.elevation.toFixed(2)}</ele>`;
@@ -109,5 +114,6 @@ export function exportGPX(routes: Route[], waypoints: Waypoint[]): string {
     return `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lon.toFixed(7)}">\n    <name>${xmlEscape(w.name || 'Waypoint')}</name>${elevation}\n  </wpt>`;
   }).join('\n');
 
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="GPX Plotter" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n  <metadata>\n    <name>${xmlEscape(routes[0]?.name || 'My Route')}</name>\n  </metadata>\n${tracks ? `${tracks}\n` : ''}${wpts ? `${wpts}\n` : ''}</gpx>\n`;
+  const metadataName = xmlEscape(name ?? routes[0]?.name ?? 'My Route');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="GPX Plotter" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n  <metadata>\n    <name>${metadataName}</name>\n  </metadata>\n${tracks ? `${tracks}\n` : ''}${wpts ? `${wpts}\n` : ''}</gpx>\n`;
 }
