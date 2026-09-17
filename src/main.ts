@@ -715,8 +715,11 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && drawing) { finishRoute(); return; }
   const metaOrCtrl = event.metaKey || event.ctrlKey;
   if (metaOrCtrl && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
-  if (event.key === 'Delete') {
+  // macOS keyboards label the Backspace key "delete", so accept both so the
+  // selected point/waypoint is removed regardless of platform.
+  if (event.key === 'Delete' || event.key === 'Backspace') {
     if (selectedWaypointIndex !== null) {
+      event.preventDefault();
       commitSnapshot();
       waypoints.splice(selectedWaypointIndex, 1);
       selectedWaypointIndex = null;
@@ -726,6 +729,7 @@ window.addEventListener('keydown', (event) => {
     } else if (selectedIndex !== null) {
       const route = activeRoute();
       if (route) {
+        event.preventDefault();
         commitSnapshot();
         route.points.splice(selectedIndex, 1);
         selectedIndex = null;
