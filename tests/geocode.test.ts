@@ -35,12 +35,46 @@ const peakWithoutElevation = {
   properties: { categories: ['peak'] },
 };
 
+const trailFeature = {
+  id: 'address.24163432',
+  text: 'Eagle Valley Trail',
+  place_name: 'Eagle Valley Trail, Eagle, Colorado 81631, United States',
+  place_type: ['address'],
+  properties: { kind: 'street' },
+  geometry: { type: 'Point', coordinates: [-106.5471, 39.6365] },
+  bbox: [-106.8, 39.5, -106.3, 39.7],
+  context: [
+    { id: 'county.144', text: 'Eagle' },
+    { id: 'region.2138', text: 'Colorado' },
+    { id: 'country.213', text: 'United States' },
+  ],
+};
+
+const trailheadFeature = {
+  id: 'poi.4242',
+  text: 'Kilpacker Trailhead',
+  place_name: 'Kilpacker Trailhead, Dolores, Colorado, United States',
+  place_type: ['poi'],
+  properties: { categories: ['parking'], feature_tags: { amenity: 'parking' } },
+  geometry: { type: 'Point', coordinates: [-108.06, 37.79] },
+};
+
+const backcountryRoadFeature = {
+  id: 'address.555',
+  text: 'Lead King Basin Road',
+  place_name: 'Lead King Basin Road, Gunnison, Colorado, United States',
+  place_type: ['address'],
+  properties: { kind: 'street' },
+  geometry: { type: 'Point', coordinates: [-107.13, 39.08] },
+};
+
 describe('geocodeUrl', () => {
   it('encodes the query and pins the key, type filter, and limit', () => {
     const url = geocodeUrl('Mount Rainier');
     expect(url.startsWith('https://api.maptiler.com/geocoding/Mount%20Rainier.json')).toBe(true);
     expect(url).toContain('key=');
     expect(url).toContain(`types=${GEOCODE_TYPES}`);
+    expect(url).toContain('address');
     expect(url).toContain('limit=6');
     expect(url).not.toContain('proximity=');
   });
@@ -78,6 +112,26 @@ describe('normalizeFeature', () => {
 
   it('omits elevation when the peak has no elevation tag', () => {
     expect(normalizeFeature(peakWithoutElevation)?.elevation).toBeUndefined();
+  });
+
+  it('labels named trails indexed as addresses', () => {
+    const result = normalizeFeature(trailFeature);
+    expect(result?.typeLabel).toBe('Trail');
+    expect(result?.name).toBe('Eagle Valley Trail');
+    expect(result?.region).toBe('Eagle, Colorado, USA');
+    expect(result?.bbox).toEqual([-106.8, 39.5, -106.3, 39.7]);
+  });
+
+  it('labels trailhead POIs', () => {
+    const result = normalizeFeature(trailheadFeature);
+    expect(result?.typeLabel).toBe('Trailhead');
+    expect(result?.name).toBe('Kilpacker Trailhead');
+  });
+
+  it('keeps backcountry roads but labels them as streets', () => {
+    const result = normalizeFeature(backcountryRoadFeature);
+    expect(result?.typeLabel).toBe('Street');
+    expect(result?.name).toBe('Lead King Basin Road');
   });
 
   it('skips non-Point geometries', () => {

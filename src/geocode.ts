@@ -1,7 +1,13 @@
 import { MAPTILER_API_KEY } from './config';
 
-/** Place types the app surfaces in search: municipalities, towns, peaks/POIs, and mountain ranges. */
-export const GEOCODE_TYPES = 'municipality,place,locality,poi,major_landform';
+/**
+ * Place types the app surfaces in search: municipalities, towns, peaks/POIs,
+ * mountain ranges, and `address`. MapTiler indexes named trails, paths, and
+ * backcountry roads under `address` (kind `street`), so including it is what
+ * makes trail names ("Boneyard Trail") and places like "Lead King Basin Road"
+ * searchable. Named trails are relabeled "Trail" in `normalizeFeature`.
+ */
+export const GEOCODE_TYPES = 'municipality,place,locality,poi,major_landform,address';
 const DEFAULT_LIMIT = 6;
 
 export interface GeocodeOptions {
@@ -58,6 +64,11 @@ const TYPE_LABELS: Record<string, string> = {
 const SETTLEMENT_TYPES = new Set(['municipality', 'place', 'locality']);
 const SHORT_COUNTRY: Record<string, string> = { 'United States': 'USA', 'United Kingdom': 'UK' };
 
+/** Named trails/paths are indexed as `address` features; this flags the trail-like ones. */
+const TRAIL_NAME = /trail|path|loop|greenway|walkway|footpath/i;
+/** Trailheads are POIs whose name contains "trailhead". */
+const TRAILHEAD_NAME = /trailhead/i;
+
 /** Human-friendly badge for a feature's kind; prefer the OSM place designation when known. */
 export function placeTypeLabel(placeType: string | undefined, placeDesignation?: string): string {
   if (placeDesignation && TYPE_LABELS[placeDesignation]) return TYPE_LABELS[placeDesignation];
@@ -106,11 +117,22 @@ export function normalizeFeature(feature: RawFeature): GeocodeResult | null {
   const name = feature.text ?? placeName;
   const type = feature.place_type?.[0];
   const properties = feature.properties;
+  const isAddress = feature.place_type?.includes('address') ?? false;
+  const isTrail = isAddress && TRAIL_NAME.test(name);
   const isSettlement = SETTLEMENT_TYPES.has(type ?? '');
   const region = isSettlement ? regionText(name, placeName) : regionFromContext(feature.context);
   const natural = properties?.feature_tags?.natural;
   const isPeak = natural === 'peak' || (properties?.categories ?? []).some((category) => category === 'peak');
-  const typeLabel = isPeak ? 'Peak' : placeTypeLabel(type, properties?.place_designation);
+  const isTrailhead = !isPeak && type === 'poi' && TRAILHEAD_NAME.test(name);
+  const typeLabel = isPeak
+    ? 'Peak'
+    : isTrailhead
+      ? 'Trailhead'
+      : isTrail
+        ? 'Trail'
+        : isAddress
+          ? 'Street'
+          : placeTypeLabel(type, properties?.place_designation);
   const elevation = isPeak ? parseElevation(properties?.feature_tags?.ele) : undefined;
   const bbox = feature.bbox && feature.bbox.length >= 4 ? (feature.bbox.slice(0, 4) as [number, number, number, number]) : undefined;
   return {

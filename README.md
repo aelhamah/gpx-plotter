@@ -4,8 +4,8 @@
 
 A browser-based GPX editor: draw, import, inspect, and export hiking/running
 routes on a 3D MapTiler terrain, with live distance, climb, and slope stats, an
-interactive elevation profile, and a search bar for finding peaks, towns, and
-mountain ranges.
+interactive elevation profile, and a search bar for finding peaks, towns,
+mountain ranges, trails, and trailheads.
 
 It is a purely static, client-side app — **no backend, database, or login**. The
 whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
@@ -51,9 +51,10 @@ whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
 5. **Export** — `exportGPX()` writes a multi-track/waypoint GPX 1.1 file and the
    browser downloads it.
 6. **Search** — typing in the map search bar forwards the query to MapTiler
-   geocoding (filtered to municipalities, towns, POIs, and landforms), biased by
-   the current map center so local results rank first; picking a result fits the
-   camera and drops a temporary marker.
+   geocoding (filtered to municipalities, towns, POIs, landforms, and
+   streets/trails), biased by the current map center so local results rank
+   first; picking a result fits the camera and drops a temporary marker. Named
+   trails and trailheads are badged **Trail** / **Trailhead**.
 
 **State & undo/redo** live in `main.ts` as plain module variables. `snapshot()`
 deep-clones `{ routes, waypoints }`; `commitSnapshot()` pushes onto a bounded
