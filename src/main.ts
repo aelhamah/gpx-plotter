@@ -40,7 +40,6 @@ const future: AppState[] = [];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
-const routeNameInput = $('route-name') as HTMLInputElement;
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
@@ -303,7 +302,6 @@ function refreshMarkers() {
       routes[index].name = name;
       text.textContent = name;
       label.title = name;
-      if (routes[index].id === selectedRouteId) routeNameInput.value = name;
       fillRouteList();
     });
     renameInput.addEventListener('blur', () => {
@@ -616,21 +614,6 @@ $('draw-cancel').addEventListener('click', () => stopDrawing());
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
 
-// Live-mirror the route name into the map label and list as you type.
-routeNameInput.addEventListener('input', () => {
-  const route = activeRoute();
-  if (!route) return;
-  const name = routeNameInput.value || 'Unnamed route';
-  route.name = name;
-  const widget = routeNameWidgets[routes.indexOf(route)];
-  if (widget) {
-    widget.input.value = name;
-    widget.text.textContent = name;
-    widget.label.title = name;
-  }
-  fillRouteList();
-});
-
 /** Wire the pairwise name-display / hidden-input pattern used by the map name field. */
 function wireNameFieldEdit(opts: {
   field: HTMLElement;
@@ -731,7 +714,6 @@ function commitRouteName(index: number, raw: string) {
     widget.text.textContent = name;
     widget.label.title = name;
   }
-  if (routes[index].id === selectedRouteId) routeNameInput.value = name;
   fillRouteList();
 }
 
@@ -1096,8 +1078,6 @@ function updateUI() {
     : routeStats.gain === undefined
       ? 'Terrain stats will appear as the route grows'
       : 'Gain/loss/low/high follow the terrain along the route';
-  routeNameInput.value = route?.name ?? '';
-  routeNameInput.disabled = !route;
   fillRouteList();
 }
 
