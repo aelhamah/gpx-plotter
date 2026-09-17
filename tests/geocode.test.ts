@@ -4,19 +4,35 @@ import { geocode, geocodeUrl, GEOCODE_TYPES, normalizeFeature, placeTypeLabel, t
 const townFeature = {
   id: 'municipality.46425',
   text: 'Chamonix-Mont-Blanc',
-  place_name: 'Chamonix-Mont-Blanc, Haute-Savoie, France',
+  place_name: 'Chamonix-Mont-Blanc, France',
   place_type: ['municipality'],
-  place_designation: 'city',
+  properties: { place_designation: 'town' },
   geometry: { type: 'Point', coordinates: [6.8694, 45.9237] },
   bbox: [6.752, 45.87, 7.052, 46.09],
 };
 
 const peakFeature = {
   id: 'poi.123',
-  text: 'Mount Rainier',
-  place_formatted: 'Mount Rainier, WA, United States of America',
+  text: 'Little Bear Peak',
+  place_name: 'Little Bear Peak, Alamosa, United States',
   place_type: ['poi'],
-  geometry: { type: 'Point', coordinates: [-121.7576, 46.8523] },
+  properties: { categories: ['peak'], feature_tags: { natural: 'peak', ele: '4280' } },
+  geometry: { type: 'Point', coordinates: [-105.497, 37.567] },
+  context: [
+    { id: 'county.23768', text: 'Alamosa' },
+    { id: 'region.2138', text: 'Colorado' },
+    { id: 'country.213', text: 'United States' },
+  ],
+};
+
+const peakWithoutCounty = {
+  ...peakFeature,
+  context: [{ id: 'region.2138', text: 'Colorado' }, { id: 'country.213', text: 'United States' }],
+};
+
+const peakWithoutElevation = {
+  ...peakFeature,
+  properties: { categories: ['peak'] },
 };
 
 describe('geocodeUrl', () => {
@@ -26,27 +42,42 @@ describe('geocodeUrl', () => {
     expect(url).toContain('key=');
     expect(url).toContain(`types=${GEOCODE_TYPES}`);
     expect(url).toContain('limit=6');
+    expect(url).not.toContain('proximity=');
+  });
+
+  it('adds the proximity parameter when a map position is given', () => {
+    const url = geocodeUrl('Mount Rainier', { proximity: { lon: -121.7576, lat: 46.8523 } });
+    expect(url).toContain('proximity=-121.7576,46.8523');
   });
 });
 
 describe('normalizeFeature', () => {
-  it('maps a feature with a bounding box to a full result', () => {
+  it('maps a settlement with a bounding box and a compact region', () => {
     const result = normalizeFeature(townFeature);
     expect(result).toEqual({
       id: 'municipality.46425',
       name: 'Chamonix-Mont-Blanc',
-      region: 'Haute-Savoie, France',
-      typeLabel: 'City',
+      region: 'France',
+      typeLabel: 'Town',
       center: { lon: 6.8694, lat: 45.9237 },
       bbox: [6.752, 45.87, 7.052, 46.09],
     });
   });
 
-  it('leaves bbox undefined when the feature has none (e.g. a peak)', () => {
+  it('rebuilds the region from context for peaks (county + state + country)', () => {
     const result = normalizeFeature(peakFeature);
+    expect(result?.region).toBe('Alamosa, Colorado, USA');
+    expect(result?.typeLabel).toBe('Peak');
+    expect(result?.elevation).toBe(4280);
     expect(result?.bbox).toBeUndefined();
-    expect(result?.typeLabel).toBe('Point of interest');
-    expect(result?.region).toBe('WA, United States of America');
+  });
+
+  it('falls back to state + country when a peak has no county context', () => {
+    expect(normalizeFeature(peakWithoutCounty)?.region).toBe('Colorado, USA');
+  });
+
+  it('omits elevation when the peak has no elevation tag', () => {
+    expect(normalizeFeature(peakWithoutElevation)?.elevation).toBeUndefined();
   });
 
   it('skips non-Point geometries', () => {
@@ -83,20 +114,24 @@ describe('geocode', () => {
   };
 
   it('returns normalized results and skips unusable features', async () => {
-    mockFetch([townFeature, { geometry: { type: 'LineString' } }]);
-    const results = await geocode('chamonix');
+    mockFetch([peakFeature, { geometry: { type: 'LineString' } }]);
+    const results = await geocode('little bear peak');
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject<GeocodeResult>({
-      name: 'Chamonix-Mont-Blanc',
-      center: { lon: 6.8694, lat: 45.9237 },
-      bbox: [6.752, 45.87, 7.052, 46.09],
+      name: 'Little Bear Peak',
+      typeLabel: 'Peak',
+      region: 'Alamosa, Colorado, USA',
+      elevation: 4280,
+      center: { lon: -105.497, lat: 37.567 },
     });
   });
 
-  it('strips a leading prefix when place_formatted is used', async () => {
-    mockFetch([peakFeature]);
-    const results = await geocode('mount rainier');
-    expect(results[0].region).toBe('WA, United States of America');
+  it('passes the map position as proximity', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ features: [peakFeature] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await geocode('little bear peak', { proximity: { lon: -105.56, lat: 37.57 } });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('proximity=-105.56,37.57');
   });
 
   it('returns [] for a non-OK response', async () => {
