@@ -69,6 +69,15 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Selection affordance**: the selected waypoint is highlighted with a border
   and an edit (✎) label; clicking empty map clears the selection.
 
+## Persistence
+
+- **Workspace autosave**: routes, waypoints, the map name, units, and the map
+  view are saved to `localStorage` as you work, so refreshing the page restores
+  your progress.
+- **Clear**: a "Clear" button in the sidebar footer opens a confirmation dialog
+  and wipes all routes, waypoints, saved data, the map name, and units.
+- **GPX export** remains the portable way to keep a workspace on disk.
+
 ## Import
 
 - **GPX tracks and routes**: reads `<trk>/<trkseg>/<trkpt>` and falls back to
@@ -159,7 +168,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **82 unit tests** across 10 files covering geodesy, GPX parse/serialize, DEM
-  decoding, units, colors, names, config, downsampling, drag thresholds, and
-  geocoding.
+- **94 unit tests** across 11 files covering geodesy, GPX parse/serialize, DEM
+  decoding, units, colors, names, config, downsampling, drag thresholds,
+  geocoding, and workspace storage.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

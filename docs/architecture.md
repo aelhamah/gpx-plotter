@@ -62,13 +62,27 @@ or the map and coordinates the pure modules:
 - **State**: `routes`, `waypoints`, selection indices, mode flags, units, the
   undo/redo stacks, and the document/map name (`documentName`, set via the
   top-of-sidebar "Map name" field — it drives the tab title, the export
-  filename, and the GPX metadata name).
+  filename, and the GPX metadata name). The workspace (routes, waypoints, name,
+  units, view) is autosaved to `localStorage` with the "Clear" footer button
+  resetting it.
 - **Rendering**: updates GeoJSON sources, rebuilds DOM `Marker`s for route
   points, route labels, waypoints, and the profile hover marker.
 - **Interaction**: map click/drag handlers, keyboard shortcuts, toolbar
   buttons, rename inputs, and the import dialog.
 - **Stats & profile**: resamples the active route, fills DEM elevations, writes
   the sidebar numbers, and draws the elevation chart to a canvas.
+
+### `src/storage.ts` — workspace persistence
+
+No DOM, no map access. Reads and writes the whole workspace as a versioned JSON
+blob under a single `localStorage` key:
+
+- `saveWorkspace(data)` serializes the current routes, waypoints, id counter,
+  map name, units, and map view.
+- `loadWorkspace()` restores it, validating the version and shape and filling
+  sane defaults; any corruption or version mismatch yields `null`.
+- `clearWorkspace()` forgets the saved state (used by the "Clear" flow).
+- All calls degrade gracefully when `localStorage` is unavailable or full.
 
 ### `src/gpx.ts` — GPX parsing and serialization
 
