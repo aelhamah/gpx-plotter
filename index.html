@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A simple browser-based GPX route plotter." />
     <title>GPX Route Plotter</title>
-    <script type="module" crossorigin src="./assets/index-CrnQ0tZK.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CENOtpkQ.css">
+    <script type="module" crossorigin src="./assets/index-DVy4v-Yu.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-0DXVzAbS.css">
   </head>
   <body>
     <div id="app">
@@ -129,6 +129,10 @@
             <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4l4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span>Export GPX</span>
           </button>
+          <button id="clear-workspace" class="button button-secondary with-icon" type="button" title="Clear all routes, waypoints, and saved data">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Clear</span>
+          </button>
         </div>
       </aside>
 
@@ -207,6 +211,16 @@
           <div class="modal-actions">
             <button id="import-cancel" class="button button-secondary" type="button">Cancel</button>
             <button id="import-confirm" class="button button-primary" type="button">Import</button>
+          </div>
+        </div>
+      </div>
+    <div id="clear-dialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="clear-title">
+        <div class="modal">
+          <div class="section-title" id="clear-title">Clear everything?</div>
+          <p id="clear-summary" class="modal-summary"></p>
+          <div class="modal-actions">
+            <button id="clear-cancel" class="button button-secondary" type="button">Cancel</button>
+            <button id="clear-confirm" class="button button-danger" type="button">Clear</button>
           </div>
         </div>
       </div>
