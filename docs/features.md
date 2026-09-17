@@ -49,9 +49,15 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   deterministic palette (colors wrap when routes outnumber colors).
 - **Draw a route** by clicking the map. A floating draw bar shows the live point
   count, a **Finish** button (enabled at ≥ 2 points), and **Cancel**.
-- **Trail snapping**: route points drawn within ~40 m of a known trail snap onto
-  the trail, using the same `outdoor` trail tileset the basemap renders. The
-  drawn line visibly hugs marked trails while you plot.
+- **Trail snapping**: route points drawn within ~40 m of a mapped trail snap onto
+  it. Trails come from the same `outdoor` tileset the basemap renders plus
+  path-like `transportation` lines, so ordinary OSM paths that aren't part of a
+  marked route still snap (e.g. Redneck Ridge and the Eagle Valley Trail).
+- **Hover preview**: while drawing, a dashed line and a blue dot show where the
+  next point will land (snapped to the trail) before you click.
+- **Follows the trail**: when a point lands within ~15 m of a trail and the
+  previous one is on it too, the trail's own vertices are inserted between them,
+  so the route runs along the trail instead of cutting straight across.
 - **New route** creates a route and drops straight into drawing.
 - **Drag route points** to reshape a route; elevation is re-sampled after a drag.
 - **Rename routes** from the sidebar or by double-clicking the route's map label.
@@ -173,7 +179,8 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **117 unit tests** across 14 files covering geodesy, GPX parse/serialize, DEM
+- **128 unit tests** across 15 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
-  geocoding, workspace storage, the MVT tile decoder, and trail/peak snapping.
+  geocoding, workspace storage, the MVT tile decoder, trail/peak snapping, and
+  trail-network routing.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

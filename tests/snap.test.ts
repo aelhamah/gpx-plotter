@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   distanceMeters,
+  nearestLine,
   nearestOnLine,
   nearestSnap,
   PEAK_SNAP_METERS,
   projectToSegment,
+  TRAIL_FOLLOW_METERS,
   TRAIL_SNAP_METERS,
 } from '../src/snap';
 
@@ -94,5 +96,32 @@ describe('nearestSnap', () => {
     const hit = nearestSnap({ lon: -104.995, lat: 39.0004 }, [sloped], TRAIL_SNAP_METERS);
     expect(hit).not.toBeNull();
     expect(hit!.distanceMeters).toBeLessThan(TRAIL_SNAP_METERS);
+  });
+});
+
+describe('nearestLine', () => {
+  const trail = [
+    { lon: -105, lat: 39 },
+    { lon: -104.99, lat: 39 },
+  ];
+
+  it('returns the matched line and the projected segment', () => {
+    const hit = nearestLine({ lon: -104.995, lat: 39.0002 }, [trail], TRAIL_SNAP_METERS);
+    expect(hit).not.toBeNull();
+    expect(hit!.line).toBe(trail);
+    expect(hit!.result.segment).toBeDefined();
+    expect(hit!.result.segment!.t).toBeCloseTo(0.5, 1);
+    expect(hit!.result.segment!.a).toEqual(trail[0]);
+    expect(hit!.result.segment!.b).toEqual(trail[1]);
+  });
+
+  it('has no segment for a single-point line (peaks)', () => {
+    const hit = nearestLine({ lon: -105, lat: 39.0005 }, [[{ lon: -105, lat: 39 }]], PEAK_SNAP_METERS);
+    expect(hit).not.toBeNull();
+    expect(hit!.result.segment).toBeUndefined();
+  });
+
+  it('exposes a follow threshold well inside the snap threshold', () => {
+    expect(TRAIL_FOLLOW_METERS).toBeLessThan(TRAIL_SNAP_METERS);
   });
 });

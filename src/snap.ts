@@ -9,6 +9,8 @@
 
 /** Max distance (m) a drawn route point may be from a trail to snap onto it. */
 export const TRAIL_SNAP_METERS = 40;
+/** Max distance (m) from a trail for the route to run *along* it between points. */
+export const TRAIL_FOLLOW_METERS = 15;
 /** Max distance (m) a placed waypoint may be from a peak to snap onto it. */
 export const PEAK_SNAP_METERS = 250;
 
@@ -48,9 +50,18 @@ export function projectToSegment(p: SnapPoint, a: SnapPoint, b: SnapPoint): Snap
   return { lon: a.lon + (b.lon - a.lon) * t, lat: a.lat + (b.lat - a.lat) * t };
 }
 
+export interface SnapSegment {
+  a: SnapPoint;
+  b: SnapPoint;
+  /** Position of the projection along the segment, 0..1. */
+  t: number;
+}
+
 export interface SnapResult {
   point: SnapPoint;
   distanceMeters: number;
+  /** The segment the point was projected onto (absent for single-point lines). */
+  segment?: SnapSegment;
 }
 
 export function nearestOnLine(p: SnapPoint, line: SnapPoint[], maxMeters: number): SnapResult | null {
@@ -66,7 +77,32 @@ export function nearestOnLine(p: SnapPoint, line: SnapPoint[], maxMeters: number
     const point = projectToSegment(p, a, b);
     const distance = distanceMeters(p, point);
     if (distance <= maxMeters && (best === null || distance < best.distanceMeters)) {
-      best = { point, distanceMeters: distance };
+      const midLat = midLatRadians(a, b);
+      const lonScale = Math.cos(midLat);
+      const abx = (b.lon - a.lon) * lonScale;
+      const aby = b.lat - a.lat;
+      const ab2 = abx * abx + aby * aby;
+      const apx = (point.lon - a.lon) * lonScale;
+      const apy = point.lat - a.lat;
+      const t = ab2 === 0 ? 0 : Math.max(0, Math.min(1, (apx * abx + apy * aby) / ab2));
+      best = { point, distanceMeters: distance, segment: { a, b, t } };
+    }
+  }
+  return best;
+}
+
+export interface LineSnapResult {
+  line: SnapPoint[];
+  result: SnapResult;
+}
+
+/** Nearest snap target along with the polyline it belongs to (needed to follow trails). */
+export function nearestLine(p: SnapPoint, lines: SnapPoint[][], maxMeters: number): LineSnapResult | null {
+  let best: LineSnapResult | null = null;
+  for (const line of lines) {
+    const result = nearestOnLine(p, line, maxMeters);
+    if (result !== null && (best === null || result.distanceMeters < best.result.distanceMeters)) {
+      best = { line, result };
     }
   }
   return best;
@@ -81,12 +117,5 @@ export function nearestSnap(
   lines: SnapPoint[][],
   maxMeters: number,
 ): SnapResult | null {
-  let best: SnapResult | null = null;
-  for (const line of lines) {
-    const candidate = nearestOnLine(p, line, maxMeters);
-    if (candidate !== null && (best === null || candidate.distanceMeters < best.distanceMeters)) {
-      best = candidate;
-    }
-  }
-  return best;
+  return nearestLine(p, lines, maxMeters)?.result ?? null;
 }

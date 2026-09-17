@@ -57,6 +57,42 @@ describe('trailsNearPoint', () => {
     const lines = await trailsNearPoint(-105.6, 39.7);
     expect(lines).toEqual([]);
   });
+
+  it('falls back to path-like transportation lines (trail layer missing)', async () => {
+    const lng = -106.81;
+    const lat = 39.655;
+    const { x, y } = tileCoordsFor(lng, lat, Z);
+    const px = (lon: number, lat2: number) => {
+      const { px: pxv, py } = lngLatToTilePx(lon, lat2, Z, x, y, EXTENT);
+      return [pxv, py];
+    };
+    const pathLine = [px(lng - 0.0005, lat), px(lng + 0.0005, lat)];
+    const roadLine = [px(lng - 0.0005, lat - 0.001), px(lng + 0.0005, lat - 0.001)];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const bytes = String(url).includes('/tiles/outdoor/')
+          ? encodeTile([])
+          : encodeTile([
+              {
+                name: 'transportation',
+                extent: EXTENT,
+                features: [
+                  { type: 2, props: { class: 'path' }, parts: [pathLine] },
+                  { type: 2, props: { class: 'primary' }, parts: [roadLine] },
+                  { type: 1, props: { class: 'path' }, parts: [[[0, 0]]] },
+                ],
+              },
+            ]);
+        return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer as ArrayBuffer };
+      }),
+    );
+
+    const lines = await trailsNearPoint(lng, lat);
+    expect(lines.length).toBe(1);
+    expect(lines[0][0].lon).toBeCloseTo(lng - 0.0005, 4);
+    expect(lines[0][1].lon).toBeCloseTo(lng + 0.0005, 4);
+  });
 });
 
 describe('peaksNearPoint', () => {
