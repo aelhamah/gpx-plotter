@@ -51,8 +51,9 @@ whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
 5. **Export** — `exportGPX()` writes a multi-track/waypoint GPX 1.1 file and the
    browser downloads it.
 6. **Search** — typing in the map search bar forwards the query to MapTiler
-   geocoding (filtered to municipalities, towns, POIs, and landforms); picking a
-   result fits the camera and drops a temporary marker.
+   geocoding (filtered to municipalities, towns, POIs, and landforms), biased by
+   the current map center so local results rank first; picking a result fits the
+   camera and drops a temporary marker.
 
 **State & undo/redo** live in `main.ts` as plain module variables. `snapshot()`
 deep-clones `{ routes, waypoints }`; `commitSnapshot()` pushes onto a bounded

@@ -703,7 +703,8 @@ function debounceSearch(query: string) {
 
 async function runSearch(query: string) {
   const token = ++searchToken;
-  const results = await geocode(query);
+  const center = map.getCenter();
+  const results = await geocode(query, { proximity: { lon: center.lng, lat: center.lat } });
   if (token !== searchToken) return;
   searchItems = results;
   searchIndex = 0;

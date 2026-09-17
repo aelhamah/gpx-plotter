@@ -108,15 +108,21 @@ Pure math, no DOM:
 
 Pure fetch/parse, no DOM or MapLibre:
 
-- `geocodeUrl(query, limit)` — builds the MapTiler forward-geocoding URL, pinned
-  to `GEOCODE_TYPES` (`municipality,place,locality,poi,major_landform`) so
-  results stay relevant to hiking (towns/municipalities, peaks/POIs, and
-  mountain ranges).
-- `geocode(query)` — `fetch`es the API, normalizes features, and never throws:
-  blanks, non-OK responses, and network failures all return `[]`.
+- `geocodeUrl(query, options)` — builds the MapTiler forward-geocoding URL,
+  pinned to `GEOCODE_TYPES` (`municipality,place,locality,poi,major_landform`)
+  so results stay relevant to hiking (towns/municipalities, peaks/POIs, and
+  mountain ranges). An optional `proximity` (the current map center) biases the
+  API's ranking toward where the user is looking, so local peaks outrank
+  far-flung namesakes.
+- `geocode(query, options)` — `fetch`es the API, normalizes features, and never
+  throws: blanks, non-OK responses, and network failures all return `[]`.
 - `normalizeFeature` — maps a raw GeoJSON feature to a `GeocodeResult`
   (`name`, `region`, friendly `typeLabel`, `center`, optional `bbox`), skipping
-  non-Point geometry or invalid coordinates.
+  non-Point geometry or invalid coordinates. Peaks are detected via
+  `feature_tags.natural === "peak"` / the `peak` category and labeled **Peak**;
+  for non-settlements the region is rebuilt from the county/state/country
+  context (`"Alamosa, Colorado, USA"`), since `place_name` often drops the
+  state.
 - `placeTypeLabel` — human-friendly badges, preferring the OSM `place_designation`
   (City/Town/Village) over the broader place type.
 
