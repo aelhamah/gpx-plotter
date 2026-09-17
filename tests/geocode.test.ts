@@ -30,6 +30,11 @@ const peakWithoutCounty = {
   context: [{ id: 'region.2138', text: 'Colorado' }, { id: 'country.213', text: 'United States' }],
 };
 
+const peakWithoutElevation = {
+  ...peakFeature,
+  properties: { categories: ['peak'] },
+};
+
 describe('geocodeUrl', () => {
   it('encodes the query and pins the key, type filter, and limit', () => {
     const url = geocodeUrl('Mount Rainier');
@@ -63,11 +68,16 @@ describe('normalizeFeature', () => {
     const result = normalizeFeature(peakFeature);
     expect(result?.region).toBe('Alamosa, Colorado, USA');
     expect(result?.typeLabel).toBe('Peak');
+    expect(result?.elevation).toBe(4280);
     expect(result?.bbox).toBeUndefined();
   });
 
   it('falls back to state + country when a peak has no county context', () => {
     expect(normalizeFeature(peakWithoutCounty)?.region).toBe('Colorado, USA');
+  });
+
+  it('omits elevation when the peak has no elevation tag', () => {
+    expect(normalizeFeature(peakWithoutElevation)?.elevation).toBeUndefined();
   });
 
   it('skips non-Point geometries', () => {
@@ -111,6 +121,7 @@ describe('geocode', () => {
       name: 'Little Bear Peak',
       typeLabel: 'Peak',
       region: 'Alamosa, Colorado, USA',
+      elevation: 4280,
       center: { lon: -105.497, lat: 37.567 },
     });
   });

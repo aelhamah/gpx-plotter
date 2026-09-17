@@ -15,11 +15,13 @@ export interface GeocodeResult {
   name: string;
   region: string;
   typeLabel: string;
+  /** Peak summit elevation in meters, when the feature is a peak. */
+  elevation?: number;
   center: { lon: number; lat: number };
   bbox?: [number, number, number, number];
 }
 
-interface RawPropertyTags { natural?: string; }
+interface RawPropertyTags { natural?: string; ele?: string; }
 interface RawContext { id?: string; text?: string; country_code?: string; }
 interface RawProperties {
   place_designation?: string;
@@ -109,15 +111,24 @@ export function normalizeFeature(feature: RawFeature): GeocodeResult | null {
   const natural = properties?.feature_tags?.natural;
   const isPeak = natural === 'peak' || (properties?.categories ?? []).some((category) => category === 'peak');
   const typeLabel = isPeak ? 'Peak' : placeTypeLabel(type, properties?.place_designation);
+  const elevation = isPeak ? parseElevation(properties?.feature_tags?.ele) : undefined;
   const bbox = feature.bbox && feature.bbox.length >= 4 ? (feature.bbox.slice(0, 4) as [number, number, number, number]) : undefined;
   return {
     id: feature.id ?? `${lon},${lat}`,
     name,
     region,
     typeLabel,
+    elevation,
     center: { lon, lat },
     bbox,
   };
+}
+
+/** Parse MapTiler's elevation tag (meters, as a string) to a number; undefined when absent/invalid. */
+function parseElevation(ele: string | undefined): number | undefined {
+  if (ele === undefined) return undefined;
+  const meters = Number(ele);
+  return Number.isFinite(meters) && meters > 0 ? meters : undefined;
 }
 
 const round5 = (value: number) => Number(value.toFixed(5));

@@ -117,12 +117,12 @@ Pure fetch/parse, no DOM or MapLibre:
 - `geocode(query, options)` — `fetch`es the API, normalizes features, and never
   throws: blanks, non-OK responses, and network failures all return `[]`.
 - `normalizeFeature` — maps a raw GeoJSON feature to a `GeocodeResult`
-  (`name`, `region`, friendly `typeLabel`, `center`, optional `bbox`), skipping
-  non-Point geometry or invalid coordinates. Peaks are detected via
-  `feature_tags.natural === "peak"` / the `peak` category and labeled **Peak**;
-  for non-settlements the region is rebuilt from the county/state/country
-  context (`"Alamosa, Colorado, USA"`), since `place_name` often drops the
-  state.
+  (`name`, `region`, friendly `typeLabel`, optional summit `elevation`, `center`,
+  optional `bbox`), skipping non-Point geometry or invalid coordinates. Peaks
+  are detected via `feature_tags.natural === "peak"` / the `peak` category and
+  labeled **Peak** (summit elevation read from `feature_tags.ele`); for
+  non-settlements the region is rebuilt from the county/state/country context
+  (`"Alamosa, Colorado, USA"`), since `place_name` often drops the state.
 - `placeTypeLabel` — human-friendly badges, preferring the OSM `place_designation`
   (City/Town/Village) over the broader place type.
 
