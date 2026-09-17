@@ -52,9 +52,6 @@ body { overflow: hidden; }
 .name-pencil { flex: 0 0 auto; width: 14px; height: 14px; color: #a3a199; opacity: 0; transition: opacity .12s ease; }
 .name-display:hover .name-pencil { opacity: 1; }
 .name-field.editing .name-display { display: none; }
-.name-field.disabled .name-display { cursor: default; opacity: .55; }
-.name-field.disabled .name-display:hover { background: transparent; border-color: transparent; }
-.name-field.disabled .name-pencil { display: none; }
 .text-input:focus { border-color: #777; }
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .stats div { background: #f5f5f2; border-radius: 8px; padding: 9px 10px; }

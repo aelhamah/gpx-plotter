@@ -41,9 +41,6 @@ const future: AppState[] = [];
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
 const routeNameInput = $('route-name') as HTMLInputElement;
-const routeNameField = $('route-name-field');
-const routeNameDisplay = $('route-name-display');
-const routeNameText = $('route-name-text');
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
@@ -306,7 +303,7 @@ function refreshMarkers() {
       routes[index].name = name;
       text.textContent = name;
       label.title = name;
-      if (routes[index].id === selectedRouteId) syncRouteNameField();
+      if (routes[index].id === selectedRouteId) routeNameInput.value = name;
       fillRouteList();
     });
     renameInput.addEventListener('blur', () => {
@@ -619,7 +616,7 @@ $('draw-cancel').addEventListener('click', () => stopDrawing());
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
 
-// Live-mirror the route name into the map label, list, and sidebar as you type.
+// Live-mirror the route name into the map label and list as you type.
 routeNameInput.addEventListener('input', () => {
   const route = activeRoute();
   if (!route) return;
@@ -634,34 +631,7 @@ routeNameInput.addEventListener('input', () => {
   fillRouteList();
 });
 
-/** Mirror the active route's name into the sidebar route-name display. */
-function syncRouteNameField() {
-  const route = activeRoute();
-  const name = route?.name ?? '';
-  routeNameInput.value = name;
-  routeNameText.textContent = name || 'No route';
-  routeNameField.classList.toggle('disabled', !route);
-}
-
-/** Reflect the active route's name in the map label, list, and sidebar (normalized). */
-function commitSidebarRouteName() {
-  if (!routeNameField.classList.contains('editing')) return;
-  routeNameField.classList.remove('editing');
-  const route = activeRoute();
-  if (route) commitRouteName(routes.indexOf(route), routeNameInput.value);
-  syncRouteNameField();
-}
-
-function revertSidebarRouteName() {
-  routeNameField.classList.remove('editing');
-  const route = activeRoute();
-  if (route) commitRouteName(routes.indexOf(route), routeNameEditBase);
-  syncRouteNameField();
-}
-
-let routeNameEditBase = '';
-
-/** Wire the pairwise name-display / hidden-input pattern used by the map and route name fields. */
+/** Wire the pairwise name-display / hidden-input pattern used by the map name field. */
 function wireNameFieldEdit(opts: {
   field: HTMLElement;
   display: HTMLElement;
@@ -684,25 +654,6 @@ function wireNameFieldEdit(opts: {
     opts.commit();
   });
 }
-
-function startRouteNameEdit() {
-  const route = activeRoute();
-  if (!route) return;
-  routeNameEditBase = route.name;
-  syncRouteNameField();
-  routeNameField.classList.add('editing');
-  routeNameInput.focus();
-  routeNameInput.select();
-}
-
-wireNameFieldEdit({
-  field: routeNameField,
-  display: routeNameDisplay,
-  input: routeNameInput,
-  start: startRouteNameEdit,
-  commit: commitSidebarRouteName,
-  revert: revertSidebarRouteName,
-});
 
 wireNameFieldEdit({
   field: mapNameField,
@@ -780,7 +731,7 @@ function commitRouteName(index: number, raw: string) {
     widget.text.textContent = name;
     widget.label.title = name;
   }
-  if (routes[index].id === selectedRouteId) syncRouteNameField();
+  if (routes[index].id === selectedRouteId) routeNameInput.value = name;
   fillRouteList();
 }
 
@@ -1145,7 +1096,8 @@ function updateUI() {
     : routeStats.gain === undefined
       ? 'Terrain stats will appear as the route grows'
       : 'Gain/loss/low/high follow the terrain along the route';
-  syncRouteNameField();
+  routeNameInput.value = route?.name ?? '';
+  routeNameInput.disabled = !route;
   fillRouteList();
 }
 
