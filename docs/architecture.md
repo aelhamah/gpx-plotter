@@ -42,7 +42,7 @@ src/mvt.ts            Minimal MapTiler vector tile (MVT) decoder
 src/snap.ts           Pure snapping math (points → trails / peaks)
 src/snapSources.ts    Trail + peak tile fetching and caching for snapping
 src/trailGraph.ts     Shortest-path routing along a trail network
-src/geocode.ts        MapTiler geocoding search (peaks, towns, landforms)
+src/geocode.ts        MapTiler geocoding search (peaks, towns, trails, trailheads)
 src/simplify.ts       Track downsampling (import of large files)
 src/units.ts          Metric/imperial defaults + formatting
 src/colors.ts         Route color palette + profile trace color
@@ -198,20 +198,26 @@ Fetches and caches the vector tiles the snap layers need:
 Pure fetch/parse, no DOM or MapLibre:
 
 - `geocodeUrl(query, options)` — builds the MapTiler forward-geocoding URL,
-  pinned to `GEOCODE_TYPES` (`municipality,place,locality,poi,major_landform`)
-  so results stay relevant to hiking (towns/municipalities, peaks/POIs, and
-  mountain ranges). An optional `proximity` (the current map center) biases the
-  API's ranking toward where the user is looking, so local peaks outrank
-  far-flung namesakes.
+  pinned to `GEOCODE_TYPES`
+  (`municipality,place,locality,poi,major_landform,address`) so results stay
+  relevant to hiking (towns/municipalities, peaks/POIs, mountain ranges, and
+  trails/backcountry ways). MapTiler indexes named trails, paths, and
+  backcountry roads as `address` features (kind `street`), so `address` is what
+  makes trail names searchable. An optional `proximity` (the current map center)
+  biases the API's ranking toward where the user is looking, so local features
+  outrank far-flung namesakes.
 - `geocode(query, options)` — `fetch`es the API, normalizes features, and never
   throws: blanks, non-OK responses, and network failures all return `[]`.
 - `normalizeFeature` — maps a raw GeoJSON feature to a `GeocodeResult`
   (`name`, `region`, friendly `typeLabel`, optional summit `elevation`, `center`,
   optional `bbox`), skipping non-Point geometry or invalid coordinates. Peaks
   are detected via `feature_tags.natural === "peak"` / the `peak` category and
-  labeled **Peak** (summit elevation read from `feature_tags.ele`); for
-  non-settlements the region is rebuilt from the county/state/country context
-  (`"Alamosa, Colorado, USA"`), since `place_name` often drops the state.
+  labeled **Peak** (summit elevation read from `feature_tags.ele`); POIs whose
+  name contains "trailhead" are labeled **Trailhead**; `address`/street features
+  whose name looks like a trail (`TRAIL_NAME`) are labeled **Trail**, and other
+  indexed ways **Street**. For non-settlements the region is rebuilt from the
+  county/state/country context (`"Alamosa, Colorado, USA"`), since `place_name`
+  often drops the state.
 - `placeTypeLabel` — human-friendly badges, preferring the OSM `place_designation`
   (City/Town/Village) over the broader place type.
 

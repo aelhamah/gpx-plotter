@@ -21,10 +21,18 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 ## Search
 
 - **Map search bar** pinned to the top of the map for finding peaks,
-  towns/municipalities, and mountain ranges.
+  towns/municipalities, mountain ranges, trails, and trailheads.
 - Backed by the **MapTiler Geocoding API** (the same account/key as the
-  basemaps), filtered to `municipality`, `place`, `locality`, `poi`, and
-  `major_landform` place types so results stay relevant to hiking.
+  basemaps), filtered to `municipality`, `place`, `locality`, `poi`,
+  `major_landform`, and `address` place types so results stay relevant to
+  hiking. MapTiler indexes named trails, paths, and backcountry roads under
+  `address`, so that type is what makes names like "Boneyard Trail" or
+  "Lead King Basin Road" searchable.
+- **Trails and trailheads**: named ways whose name looks like a trail
+  (contains "trail", "path", "loop", etc.) are badged **Trail** and frame the
+  way's bounding box when picked; trailhead places (POIs such as "Kilpacker
+  Trailhead") are badged **Trailhead**; other indexed ways are badged
+  **Street**.
 - **Type-ahead results** appear as you type (debounced). Pick with a click,
   the ↑/↓ arrow keys, or press Enter for the highlighted (first) match; Esc
   or clicking elsewhere closes the list.
@@ -179,7 +187,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **128 unit tests** across 15 files covering geodesy, GPX parse/serialize, DEM
+- **131 unit tests** across 15 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
   geocoding, workspace storage, the MVT tile decoder, trail/peak snapping, and
   trail-network routing.

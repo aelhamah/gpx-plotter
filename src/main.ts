@@ -946,7 +946,7 @@ function renderSearchResults(query: string) {
   if (!searchItems.length) {
     const empty = document.createElement('div');
     empty.className = 'search-empty';
-    empty.textContent = `No peaks or places found for “${query}”.`;
+    empty.textContent = `No trails, peaks, or places found for “${query}”.`;
     searchResults.append(empty);
   } else {
     searchItems.forEach((result, index) => {
