@@ -43,7 +43,18 @@ body { overflow: hidden; }
 .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; font-weight: 800; color: #777; margin-bottom: 10px; }
 .text-input { width: 100%; border: 1px solid #d6d6d1; border-radius: 8px; padding: 9px 10px; font: inherit; outline: none; margin-bottom: 12px; }
 .map-name-section { padding-top: 14px; }
-.map-name-input { margin-bottom: 0; }
+.name-field { position: relative; }
+.name-field .text-input { display: none; margin-bottom: 0; }
+.name-field.editing .text-input { display: block; }
+.name-display { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.name-display:hover { background: #efefea; border-color: #e0e0da; }
+.name-display .name-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.name-pencil { flex: 0 0 auto; width: 14px; height: 14px; color: #a3a199; opacity: 0; transition: opacity .12s ease; }
+.name-display:hover .name-pencil { opacity: 1; }
+.name-field.editing .name-display { display: none; }
+.name-field.disabled .name-display { cursor: default; opacity: .55; }
+.name-field.disabled .name-display:hover { background: transparent; border-color: transparent; }
+.name-field.disabled .name-pencil { display: none; }
 .text-input:focus { border-color: #777; }
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .stats div { background: #f5f5f2; border-radius: 8px; padding: 9px 10px; }

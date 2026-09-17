@@ -40,13 +40,19 @@ const future: AppState[] = [];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
-const routeName = $('route-name') as HTMLInputElement;
+const routeNameInput = $('route-name') as HTMLInputElement;
+const routeNameField = $('route-name-field');
+const routeNameDisplay = $('route-name-display');
+const routeNameText = $('route-name-text');
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
 
 // --- Map name --------------------------------------------------------------
 const mapNameInput = $<HTMLInputElement>('map-name');
+const mapNameField = $('map-name-field');
+const mapNameDisplay = $('map-name-display');
+const mapNameText = $('map-name-text');
 const DEFAULT_MAP_NAME = 'My Map';
 let documentName = DEFAULT_MAP_NAME;
 
@@ -54,6 +60,7 @@ let documentName = DEFAULT_MAP_NAME;
 function setDocumentName(name: string) {
   documentName = name.trim() || DEFAULT_MAP_NAME;
   mapNameInput.value = documentName;
+  mapNameText.textContent = documentName;
   document.title = documentName === DEFAULT_MAP_NAME
     ? 'GPX Route Plotter'
     : `${documentName} — GPX Route Plotter`;
@@ -299,7 +306,7 @@ function refreshMarkers() {
       routes[index].name = name;
       text.textContent = name;
       label.title = name;
-      if (routes[index].id === selectedRouteId) routeName.value = name;
+      if (routes[index].id === selectedRouteId) syncRouteNameField();
       fillRouteList();
     });
     renameInput.addEventListener('blur', () => {
@@ -611,10 +618,12 @@ $('draw-finish').addEventListener('click', finishRoute);
 $('draw-cancel').addEventListener('click', () => stopDrawing());
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
-routeName.addEventListener('input', () => {
+
+// Live-mirror the route name into the map label, list, and sidebar as you type.
+routeNameInput.addEventListener('input', () => {
   const route = activeRoute();
   if (!route) return;
-  const name = routeName.value || 'Unnamed route';
+  const name = routeNameInput.value || 'Unnamed route';
   route.name = name;
   const widget = routeNameWidgets[routes.indexOf(route)];
   if (widget) {
@@ -624,6 +633,104 @@ routeName.addEventListener('input', () => {
   }
   fillRouteList();
 });
+
+/** Mirror the active route's name into the sidebar route-name display. */
+function syncRouteNameField() {
+  const route = activeRoute();
+  const name = route?.name ?? '';
+  routeNameInput.value = name;
+  routeNameText.textContent = name || 'No route';
+  routeNameField.classList.toggle('disabled', !route);
+}
+
+/** Reflect the active route's name in the map label, list, and sidebar (normalized). */
+function commitSidebarRouteName() {
+  if (!routeNameField.classList.contains('editing')) return;
+  routeNameField.classList.remove('editing');
+  const route = activeRoute();
+  if (route) commitRouteName(routes.indexOf(route), routeNameInput.value);
+  syncRouteNameField();
+}
+
+function revertSidebarRouteName() {
+  routeNameField.classList.remove('editing');
+  const route = activeRoute();
+  if (route) commitRouteName(routes.indexOf(route), routeNameEditBase);
+  syncRouteNameField();
+}
+
+let routeNameEditBase = '';
+
+/** Wire the pairwise name-display / hidden-input pattern used by the map and route name fields. */
+function wireNameFieldEdit(opts: {
+  field: HTMLElement;
+  display: HTMLElement;
+  input: HTMLInputElement;
+  start: () => void;
+  commit: () => void;
+  revert: () => void;
+}) {
+  opts.display.addEventListener('click', () => {
+    if (opts.field.classList.contains('disabled')) return;
+    opts.start();
+  });
+  opts.input.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') opts.input.blur();
+    else if (event.key === 'Escape') { opts.revert(); opts.input.blur(); }
+  });
+  opts.input.addEventListener('blur', () => {
+    if (!opts.field.classList.contains('editing')) return;
+    opts.commit();
+  });
+}
+
+function startRouteNameEdit() {
+  const route = activeRoute();
+  if (!route) return;
+  routeNameEditBase = route.name;
+  syncRouteNameField();
+  routeNameField.classList.add('editing');
+  routeNameInput.focus();
+  routeNameInput.select();
+}
+
+wireNameFieldEdit({
+  field: routeNameField,
+  display: routeNameDisplay,
+  input: routeNameInput,
+  start: startRouteNameEdit,
+  commit: commitSidebarRouteName,
+  revert: revertSidebarRouteName,
+});
+
+wireNameFieldEdit({
+  field: mapNameField,
+  display: mapNameDisplay,
+  input: mapNameInput,
+  start: () => {
+    mapNameEditBase = documentName;
+    syncMapNameField();
+    mapNameField.classList.add('editing');
+    mapNameInput.focus();
+    mapNameInput.select();
+  },
+  commit: () => {
+    mapNameField.classList.remove('editing');
+    syncMapNameField();
+  },
+  revert: () => {
+    mapNameField.classList.remove('editing');
+    setDocumentName(mapNameEditBase);
+  },
+});
+
+let mapNameEditBase = DEFAULT_MAP_NAME;
+
+function syncMapNameField() {
+  mapNameInput.value = documentName;
+  mapNameText.textContent = documentName;
+}
 function sizeRenameInput(input: HTMLInputElement, value: string) {
   input.style.width = `${Math.max(value.length, 6) + 2}ch`;
 }
@@ -673,7 +780,7 @@ function commitRouteName(index: number, raw: string) {
     widget.text.textContent = name;
     widget.label.title = name;
   }
-  if (routes[index].id === selectedRouteId) routeName.value = name;
+  if (routes[index].id === selectedRouteId) syncRouteNameField();
   fillRouteList();
 }
 
@@ -1019,7 +1126,6 @@ function fillRouteList() {
     routesList.append(item);
   });
   routesEmpty.classList.toggle('hidden', routes.length > 0);
-  routeName.disabled = !activeRoute();
 }
 
 function updateUI() {
@@ -1039,7 +1145,7 @@ function updateUI() {
     : routeStats.gain === undefined
       ? 'Terrain stats will appear as the route grows'
       : 'Gain/loss/low/high follow the terrain along the route';
-  routeName.value = route?.name ?? '';
+  syncRouteNameField();
   fillRouteList();
 }
 
