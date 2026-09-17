@@ -10,7 +10,8 @@ The app is a **static, single-page, client-side application**. There is no
 server component: the browser parses GPX files, samples terrain from MapTiler
 tiles, computes statistics, renders the map with MapLibre GL JS, and generates
 the export file locally. The only network traffic is to MapTiler for map styles,
-vector/raster basemap tiles, Terrain-RGB DEM tiles, and geocoding search requests.
+vector/raster basemap tiles, Terrain-RGB DEM tiles, geocoding search requests,
+and (for drawing/waypoint snapping) the outdoor and planet vector tilesets.
 
 Consequences:
 
@@ -37,6 +38,10 @@ src/main.ts           Application hub: map, state, DOM wiring, markers, chart
 src/gpx.ts            GPX parse + serialize, core data types
 src/geo.ts            Geodesy, elevation stats, route resampling, chart math
 src/dem.ts            MapTiler Terrain-RGB decoding + slope raster generation
+src/mvt.ts            Minimal MapTiler vector tile (MVT) decoder
+src/snap.ts           Pure snapping math (points → trails / peaks)
+src/snapSources.ts    Trail + peak tile fetching and caching for snapping
+src/trailGraph.ts     Shortest-path routing along a trail network
 src/geocode.ts        MapTiler geocoding search (peaks, towns, landforms)
 src/simplify.ts       Track downsampling (import of large files)
 src/units.ts          Metric/imperial defaults + formatting
@@ -122,6 +127,71 @@ Pure math, no DOM:
   avalanche bands (`<20°`, `20–30°`, `30–35°`, `35–40°`, `40–45°`, `45°+`).
 - Decoding tries `createImageBitmap` first and falls back to an `<img>` for
   engines that cannot decode WebP bitmaps.
+
+### `src/mvt.ts` — MapTiler vector tile decoding
+
+A small, dependency-free Mapbox Vector Tile decoder for the two tilesets used in
+snapping:
+
+- Parses a tile's layer names, feature geometries, and properties from the raw
+  PBF bytes (varint + zigzag decoding, command-integer command counts).
+- Properties are resolved in a **second pass**: real MapTiler tiles can emit
+  features *before* their keys/values dictionaries, so raw features are buffered
+  and their tag indices resolved once the dictionaries arrive. Value types follow
+  the spec: field 4 is `values`, field 5 `extent`, and numeric values use field 6
+  (`sint_value`, zigzag-encoded).
+- `layerByName(tile, name)` pulls one layer's features as `{ type, props, parts }`
+  (type 1 = Point, 2 = LineString, 3 = Polygon), and `tilePointToLngLat()`
+  converts a point from tile coordinates to geodetic `{ lon, lat }` at the tile's
+  (x, y, z).
+
+### `src/snap.ts` — snapping math (pure)
+
+No I/O or DOM. Given `(lng, lat)` and a set of candidate geometries, finds the
+best snap target:
+
+- `nearestOnLine(plng, plat, line)` — projects the point onto each segment of a
+  polyline in meter space (`projectToSegment`) and returns the closest on-line
+  point, its `distanceMeters`, and the matched `segment` (`a`, `b`, `t`).
+- `nearestLine(lng, lat, lines)` — same, but also returns the polyline the match
+  came from; this is what trail-following needs.
+- `nearestSnap(lng, lat, candidates)` — picks the nearest candidate among trail
+  lines and points, respecting thresholds `TRAIL_SNAP_METERS = 40` and
+  `PEAK_SNAP_METERS = 250`. No candidate within range → `null`.
+- `TRAIL_FOLLOW_METERS = 15` — the tighter radius within which the route is
+  allowed to run *along* the trail (see `trailGraph`).
+
+### `src/trailGraph.ts` — routing along trails (pure)
+
+Given the polylines near a click, finds the shortest chain of trail vertices
+between two snapped points so the route hugs the trail:
+
+- Polylines are deduplicated (the same trail can appear in both tilesets) and
+  vertices are indexed by rounded coordinates. Consecutive vertices become
+  weighted edges (edge weight = meter distance).
+- A single OSM way is often split into several features, so loose endpoints
+  within `TRAIL_JOIN_METERS` (25 m) are bridged into one connected network.
+- The two snapped points are added as nodes attached to their projected
+  segment, then Dijkstra finds the shortest path between them.
+- `TRAIL_MAX_DETOUR` (4×) rejects anything that wanders far more than a straight
+  line (or is unreachable), returning `null` so the caller draws straight.
+
+### `src/snapSources.ts` — trail & peak tile sourcing
+
+Fetches and caches the vector tiles the snap layers need:
+
+- Trails come from the **outdoor** tileset's `trail` layer *and* the **planet**
+  tileset's `transportation` layer filtered to path-like classes (`path`,
+  `footway`, `steps`, `track`, `cycleway`, `bridleway`, `pedestrian`,
+  `corridor`). The `trail` layer only carries trails that belong to a route
+  relation, so many ordinary paths (e.g. Redneck Ridge) exist only in
+  `transportation`; reading both is what makes snapping work broadly. Peaks come
+  from the planet `mountain_peak` layer.
+- `trailsNearPoint(lng, lat)` returns every trail/path polyline in the
+  containing tile; `peaksNearPoint(lng, lat)` returns peaks with `name` and
+  `elevation` (meters) from their properties. Both are at zoom 13 and share a
+  96-tile LRU cache (planet tiles are reused between trails and peaks).
+- Any fetch/decode failure degrades to `[]` so drawing always works offline.
 
 ### `src/geocode.ts` — geocoding search
 
@@ -215,6 +285,7 @@ Sources and layers:
 | `terrain` | `raster-dem` | MapTiler Terrain-RGB for 3D terrain + hillshade |
 | `slope` | `raster` (`slope://{z}/{x}/{y}`) | Colorized slope-angle shading |
 | `routes` | `geojson` | Route lines (casing + colored line) |
+| `snap-preview` | `geojson` | Hover snap preview (dashed line + dot) |
 | `profile-trace` | `geojson` | Highlighted trail up to the hovered profile point |
 
 Layer order: `slope-shading` → `route-casing` → `route-line` → `profile-trace`
@@ -270,9 +341,21 @@ new content.
 
 - **Draw mode** (`drawing`): clicking the map appends points to the active route.
   A floating draw bar shows the live point count and enables **Finish** once
-  there are ≥ 2 points; Enter finishes, Esc cancels.
+  there are ≥ 2 points; Enter finishes, Esc cancels. While drawing, hovering
+  computes the same snap and shows a dashed preview line + blue dot (the
+  `snap-preview` source), so the pending point is visible on the trail before the
+  click. Each new point is pushed immediately and then refined asynchronously by
+  `snapRoutePointToTrail()`: the containing outdoor + planet tiles are decoded
+  and, if the point is within 40 m of a trail, it moves onto the trail. When the
+  point is within `TRAIL_FOLLOW_METERS` (15 m) and the previous point is also on
+  the network, `routeAlongTrails()` splices in the trail's own vertices so the
+  route follows the trail between clicks. The refine is checked both ways (the
+  point must still be the last one and the route still the active one) so a stale
+  result can never rewrite a newer point.
 - **Waypoint mode** (`waypointMode`): one click places a single waypoint, then
-  the mode exits automatically.
+  the mode exits automatically. `snapWaypointToPeak()` runs the same way against
+  `mountain_peak` points (250 m radius); a snapped waypoint inherits the peak's
+  name and elevation.
 - **Selection**: clicking a point marker or waypoint selects it (showing the
   edit affordance); clicking empty map deselects.
 - **Dragging**: route points and waypoints are draggable; the drag disables
@@ -303,7 +386,8 @@ placeholder.
 - `npm run build` runs `tsc -b` then `vite build`; `base: './'` makes assets
   relative so the bundle works on GitHub Pages project sites.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
-  `colors`, `names`, `simplify`, `config`).
+  `colors`, `names`, `simplify`, `config`, `storage`, `mvt`, `snap`,
+  `snapSources`, `trailGraph`).
 - CI (`.github/workflows/pr.yml`) builds and tests on pushes/PRs.
 - Deployment (`.github/workflows/deploy.yml`) publishes the main build to the
   `gh-pages` branch root on pushes to `main`; GitHub Pages serves that branch.
@@ -313,9 +397,17 @@ placeholder.
 
 ## 14. Known limitations
 
-- All state is in memory; nothing persists across reloads.
+- All state lives in memory and is autosaved to `localStorage`; a cleared cache
+  or a different browser loses the workspace (GPX export is the portable copy).
 - Elevation stats and the profile depend on DEM availability and are only as
   accurate as the ~30 m sampling.
+- Trail/peak snapping depends on the MapTiler tilesets being reachable and
+  complete; when they are not, drawing and waypoints degrade to raw placement
+  with no error surfaced. Only the single z13 tile containing the click is read
+  (plus the previous point's tile when following), so a trail just across a tile
+  edge may be missed.
+- Following a trail uses only the geometry present in the decoded tiles; if a
+  trail leaves the tile, the route falls back to a straight segment.
 - Very large "keep every point" imports still create one DOM marker per point
   and can be slow.
 - GPX metadata (time, heart rate, etc.) beyond coordinates/elevation/name is not

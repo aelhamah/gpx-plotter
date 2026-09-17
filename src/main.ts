@@ -13,6 +13,9 @@ import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
 import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
+import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
+import { peaksNearPoint, trailsNearPoint } from './snapSources';
+import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
 import './style.css';
 
 let routes: Route[] = [];
@@ -177,6 +180,15 @@ function addDataLayers() {
   }
   if (!map.getLayer('route-line')) {
     map.addLayer({ id: 'route-line', type: 'line', source: 'routes', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['coalesce', ['get', 'color'], '#e11d48'], 'line-width': 4 } });
+  }
+  if (!map.getSource('snap-preview')) {
+    map.addSource('snap-preview', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  }
+  if (!map.getLayer('snap-preview-line')) {
+    map.addLayer({ id: 'snap-preview-line', type: 'line', source: 'snap-preview', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#2563eb', 'line-width': 3, 'line-dasharray': [2, 2], 'line-opacity': 0.9 } });
+  }
+  if (!map.getLayer('snap-preview-dot')) {
+    map.addLayer({ id: 'snap-preview-dot', type: 'circle', source: 'snap-preview', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 7, 'circle-color': '#2563eb', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
   }
   if (!map.getSource('profile-trace')) {
     map.addSource('profile-trace', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -475,7 +487,7 @@ function updateDrawBar() {
   $('draw-count').textContent = String(count);
   ($('draw-finish') as HTMLButtonElement).disabled = count < 2;
   $('draw-status').textContent = count < 2
-    ? 'Click to add points — press Enter or click Finish to end'
+    ? 'Click to add points — snaps to trails, press Enter or click Finish to end'
     : 'Press Enter or click Finish to end';
 }
 
@@ -496,9 +508,42 @@ function startDrawing() {
 }
 function stopDrawing() {
   drawing = false;
+  snapPreviewToken++;
+  setSnapPreview(null);
   $('draw-route').classList.remove('active');
   $('draw-bar').classList.add('hidden');
   map.getCanvas().style.cursor = '';
+}
+
+/** Draw the dashed "this point will snap here" hint on hover while drawing. */
+function setSnapPreview(point: SnapPoint | null) {
+  const source = map.getSource('snap-preview') as GeoJSONSource | undefined;
+  if (!source) return;
+  const features: Feature<LineString | Point>[] = [];
+  if (point) {
+    const route = activeRoute();
+    const last = route && route.points.length > 0 ? route.points[route.points.length - 1] : null;
+    if (last) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [[last.lon, last.lat], [point.lon, point.lat]] },
+      });
+    }
+    features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [point.lon, point.lat] } });
+  }
+  source.setData({ type: 'FeatureCollection', features });
+}
+
+let snapPreviewToken = 0;
+async function updateSnapPreview(event: MapMouseEvent) {
+  if (!drawing) return;
+  const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
+  const token = ++snapPreviewToken;
+  const lines = await trailsNearPoint(raw.lon, raw.lat);
+  if (token !== snapPreviewToken || !drawing) return;
+  const match = nearestLine(raw, lines, TRAIL_SNAP_METERS);
+  setSnapPreview(match ? match.result.point : null);
 }
 
 function finishRoute() {
@@ -519,7 +564,7 @@ function setWaypointMode(on: boolean) {
   $('add-waypoint').classList.toggle('active', on);
   if (on) {
     stopDrawing();
-    drawHint.textContent = 'Click to place a waypoint · Esc to cancel';
+    drawHint.textContent = 'Click to place a waypoint · snaps to peaks · Esc to cancel';
     drawHint.classList.remove('hidden');
     map.getCanvas().style.cursor = 'copy';
   } else {
@@ -530,13 +575,37 @@ function setWaypointMode(on: boolean) {
 
 function addWaypoint(event: MapMouseEvent) {
   commitSnapshot();
-  waypoints.push({ lat: event.lngLat.lat, lon: event.lngLat.lng, name: `Waypoint ${waypoints.length + 1}` });
-  selectedWaypointIndex = waypoints.length - 1;
+  const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
+  const index = waypoints.length;
+  waypoints.push({ ...raw, name: `Waypoint ${index + 1}` });
+  selectedWaypointIndex = index;
   selectedIndex = null;
   setWaypointMode(false);
   refreshMarkers();
   updateUI();
-  void ensureWaypointElevation(waypoints.length - 1);
+  void ensureWaypointElevation(index);
+  persistWorkspace();
+  void snapWaypointToPeak(index, raw);
+}
+
+/** After a waypoint is placed, refine it onto the nearest peak within reach. */
+async function snapWaypointToPeak(index: number, raw: SnapPoint) {
+  const peaks = await peaksNearPoint(raw.lon, raw.lat);
+  if (peaks.length === 0) return;
+  const result = nearestSnap(raw, peaks.map((peak) => [peak.center]), PEAK_SNAP_METERS);
+  if (!result) return;
+  const peak = peaks.find(
+    (candidate) => candidate.center.lon === result.point.lon && candidate.center.lat === result.point.lat,
+  );
+  const current = waypoints[index];
+  if (!current || current.lon !== raw.lon || current.lat !== raw.lat) return;
+  current.lon = result.point.lon;
+  current.lat = result.point.lat;
+  if (peak?.name) current.name = peak.name;
+  if (peak?.elevation !== undefined) current.elevation = peak.elevation;
+  refreshMarkers();
+  updateUI();
+  void ensureWaypointElevation(index);
   persistWorkspace();
 }
 
@@ -544,7 +613,8 @@ function addRoutePoint(event: MapMouseEvent) {
   const route = activeRoute();
   if (!route) return;
   commitSnapshot();
-  route.points.push({ lat: event.lngLat.lat, lon: event.lngLat.lng });
+  const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
+  route.points.push({ ...raw });
   selectedIndex = route.points.length - 1;
   selectedWaypointIndex = null;
   refreshRoutesLayer();
@@ -552,8 +622,58 @@ function addRoutePoint(event: MapMouseEvent) {
   updateDrawBar();
   void refreshRouteStats();
   persistWorkspace();
+  void snapRoutePointToTrail(route, route.points.length - 1, raw);
 }
 
+/**
+ * After a drawn point lands, snap it onto the nearest trail within reach. When
+ * the point is close enough (and so is the previous one), also splice in the
+ * trail's own vertices so the route runs along the trail instead of cutting
+ * straight across.
+ */
+async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint) {
+  const previous = index > 0 ? route.points[index - 1] : null;
+  const [nearNew, nearPrevious] = await Promise.all([
+    trailsNearPoint(raw.lon, raw.lat),
+    previous ? trailsNearPoint(previous.lon, previous.lat) : Promise.resolve<SnapPoint[][]>([]),
+  ]);
+  const lines = dedupeTrailLines([...nearNew, ...nearPrevious]);
+  const match = nearestLine(raw, lines, TRAIL_SNAP_METERS);
+  if (!match) return;
+
+  const current = route.points[index];
+  if (!current || current.lon !== raw.lon || current.lat !== raw.lat) return;
+
+  let inserted = 0;
+  if (previous && match.result.distanceMeters <= TRAIL_FOLLOW_METERS) {
+    const previousMatch = nearestLine(previous, lines, TRAIL_FOLLOW_METERS);
+    if (previousMatch) {
+      const path = routeAlongTrails(lines, previousMatch.result.point, match.result.point);
+      if (path && path.length > 2) {
+        const interior = path.slice(1, -1).map((p) => ({ lon: p.lon, lat: p.lat }));
+        route.points.splice(index, 0, ...interior);
+        inserted = interior.length;
+      }
+    }
+  }
+
+  current.lon = match.result.point.lon;
+  current.lat = match.result.point.lat;
+  if (inserted > 0) selectedIndex = index + inserted;
+  refreshRoutesLayer();
+  updateUI();
+  updateDrawBar();
+  void refreshRouteStats();
+  persistWorkspace();
+}
+
+map.on('mousemove', (event: MapMouseEvent) => {
+  void updateSnapPreview(event);
+});
+map.on('mouseout', () => {
+  snapPreviewToken++;
+  setSnapPreview(null);
+});
 map.on('click', (event: MapMouseEvent) => {
   if (rotating || rotatedThisGesture) return;
   if (waypointMode) { addWaypoint(event); return; }
