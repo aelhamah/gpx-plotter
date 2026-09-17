@@ -8,6 +8,7 @@ import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type 
 import { DOWNSAMPLE_PROMPT_THRESHOLD, defaultPointBudget, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
 import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
+import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
 import './style.css';
@@ -329,30 +330,42 @@ function refreshMarkers() {
     el.addEventListener('dblclick', (event) => { event.stopPropagation(); openWaypointRename(index); });
     label.addEventListener('click', (event) => { event.stopPropagation(); selectedWaypointIndex = index; selectedIndex = null; refreshMarkers(); updateUI(); void ensureWaypointElevation(index); });
     label.addEventListener('dblclick', (event) => { event.stopPropagation(); openWaypointRename(index); });
-    el.addEventListener('pointerdown', (event) => {
-      event.stopPropagation();
-      if (event.button !== 0) return;
-      selectedWaypointIndex = index;
-      selectedIndex = null;
-      refreshMarkers();
-      updateUI();
-      map.dragPan.disable();
-      const move = (e: PointerEvent) => {
-        const rect = map.getCanvas().getBoundingClientRect();
-        const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
-        waypoints[index] = { ...waypoints[index], lat: lngLat.lat, lon: lngLat.lng, elevation: undefined };
-        refreshMarkers();
-      };
-      const up = () => {
-        document.removeEventListener('pointermove', move);
-        document.removeEventListener('pointerup', up);
-        map.dragPan.enable();
-        commitSnapshot();
-        void ensureWaypointElevation(index);
-      };
-      document.addEventListener('pointermove', move);
-      document.addEventListener('pointerup', up, { once: true });
-    });
+    const attachWaypointDrag = (target: HTMLElement) => {
+      target.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let dragging = false;
+        map.dragPan.disable();
+        const move = (e: PointerEvent) => {
+          if (!dragging) {
+            if (!dragThresholdExceeded(e.clientX - startX, e.clientY - startY)) return;
+            dragging = true;
+            selectedWaypointIndex = index;
+            selectedIndex = null;
+            updateUI();
+          }
+          const rect = map.getCanvas().getBoundingClientRect();
+          const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+          waypoints[index] = { ...waypoints[index], lat: lngLat.lat, lon: lngLat.lng, elevation: undefined };
+          refreshMarkers();
+        };
+        const up = () => {
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          map.dragPan.enable();
+          if (dragging) {
+            commitSnapshot();
+            void ensureWaypointElevation(index);
+          }
+        };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up, { once: true });
+      });
+    };
+    attachWaypointDrag(el);
+    attachWaypointDrag(label);
     waypointMarkerElements.push(el);
     waypointMarkerLabels.push(label);
     waypointNameInputs.push(renameInput);
