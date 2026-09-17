@@ -66,9 +66,9 @@ jobs:
         run: |
           marker='<!-- gpx-plotter-preview -->'
           body="$marker
-          ### Preview deployed
+          ### Preview updated
 
-          \`$BRANCH\` → $PREVIEW_URL"
+          \`$BRANCH\` → <a href=\"$PREVIEW_URL\" target=\"_blank\" rel=\"noopener noreferrer\">$BRANCH preview</a>"
           existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
             --jq '.[] | select(.body | contains("gpx-plotter-preview")) | .id' | tail -n1)
           if [ -n "$existing" ]; then
