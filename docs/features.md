@@ -28,6 +28,15 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Type-ahead results** appear as you type (debounced). Pick with a click,
   the ↑/↓ arrow keys, or press Enter for the highlighted (first) match; Esc
   or clicking elsewhere closes the list.
+- **Ranked by map position**: the current map center is sent to the API as a
+  `proximity` bias, so nearby peaks/places rank higher than far-flung
+  namesakes.
+- **Peak detection**: genuine peaks are detected from the data
+  (`natural=peak` / `peak` category) and labeled **Peak** rather than the
+  generic "Point of interest", with their summit elevation shown next to the
+  name ("Peak · 14,042 ft"), while their region is rebuilt from the
+  county/state/country hierarchy ("Alamosa, Colorado, USA" instead of the
+  shorter "Alamosa, United States").
 - **Fit to location**: selecting a result frames the area — bounding-box fit
   for towns and ranges, a point zoom for peaks — and drops a temporary marker
   that is cleared by the next search or Esc.
@@ -146,7 +155,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **79 unit tests** across 10 files covering geodesy, GPX parse/serialize, DEM
+- **82 unit tests** across 10 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds, and
   geocoding.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

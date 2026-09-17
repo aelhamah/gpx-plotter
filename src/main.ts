@@ -703,7 +703,8 @@ function debounceSearch(query: string) {
 
 async function runSearch(query: string) {
   const token = ++searchToken;
-  const results = await geocode(query);
+  const center = map.getCenter();
+  const results = await geocode(query, { proximity: { lon: center.lng, lat: center.lat } });
   if (token !== searchToken) return;
   searchItems = results;
   searchIndex = 0;
@@ -732,6 +733,12 @@ function renderSearchResults(query: string) {
       badge.className = 'search-result-type';
       badge.textContent = result.typeLabel;
       primary.append(name, badge);
+      if (result.elevation !== undefined) {
+        const elevation = document.createElement('span');
+        elevation.className = 'search-result-ele';
+        elevation.textContent = formatElevation(result.elevation, unitSystem);
+        primary.append(elevation);
+      }
       row.append(primary);
       if (result.region && result.region !== result.name) {
         const region = document.createElement('span');
