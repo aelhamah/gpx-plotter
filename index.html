@@ -134,6 +134,11 @@
           <button id="draw-finish" class="draw-finish" type="button" disabled>Finish</button>
           <button id="draw-cancel" class="draw-cancel" type="button">Cancel</button>
         </div>
+        <div id="search-bar" class="search-bar">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <input id="search-input" class="search-input" type="search" placeholder="Search peaks, towns, mountain ranges…" autocomplete="off" spellcheck="false" aria-label="Search for places" aria-expanded="false" aria-controls="search-results" />
+          <div id="search-results" class="search-results hidden" role="listbox"></div>
+        </div>
         <div class="map-icon-controls">
           <div class="map-icon-control">
             <button id="fit-route" class="map-icon-button" type="button" aria-label="Fit view to routes">
