@@ -43,6 +43,7 @@ src/snap.ts           Pure snapping math (points → trails / peaks)
 src/snapSources.ts    Trail + peak tile fetching and caching for snapping
 src/trailGraph.ts     Shortest-path routing along a trail network
 src/geocode.ts        MapTiler geocoding search (peaks, towns, trails, trailheads)
+src/merge.ts          Route merging: join two routes at nearest endpoints, trim seam overlap
 src/simplify.ts       Track downsampling (import of large files)
 src/units.ts          Metric/imperial defaults + formatting
 src/colors.ts         Route color palette + profile trace color
@@ -239,6 +240,17 @@ marker.
   suggested downsampling scales with route length.
 - `DOWNSAMPLE_PROMPT_THRESHOLD` (500) — imports larger than this open the dialog.
 
+### `src/merge.ts` — combining two routes (pure)
+
+- `mergeRoutePoints(a, b, overlapMeters = 10)` — returns one continuous trace.
+  `orientMerge` tries the four start/end pairings and joins the endpoints that
+  are nearest (reversing a route when that pairing is cheapest), then
+  `trimDuplicatedHead` walks the joint outward and drops the second route's
+  duplicated head while the two traces stay within `overlapMeters` of each
+  other and are heading the *same* direction — an opposite-direction return
+  (out-and-back) is always preserved. Straight-line geometry comes from
+  `snap.ts`, so no map or DOM is involved.
+
 ### `src/units.ts`, `src/colors.ts`, `src/names.ts`
 
 - `units.ts`: `defaultUnitSystem()` (imperial for `US` locales, else metric) and
@@ -392,7 +404,7 @@ placeholder.
 - `npm run build` runs `tsc -b` then `vite build`; `base: './'` makes assets
   relative so the bundle works on GitHub Pages project sites.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
-  `colors`, `names`, `simplify`, `config`, `storage`, `mvt`, `snap`,
+  `colors`, `names`, `merge`, `simplify`, `config`, `storage`, `mvt`, `snap`,
   `snapSources`, `trailGraph`).
 - CI (`.github/workflows/pr.yml`) builds and tests on pushes/PRs.
 - Deployment (`.github/workflows/deploy.yml`) publishes the main build to the

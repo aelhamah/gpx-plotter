@@ -133,13 +133,20 @@ code { font-size: 11px; }
 .unit-button { appearance: none; background: #fff; color: #555; border: 0; padding: 6px 9px; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
 .unit-button.active { background: #171717; color: #fff; }
 .routes-list { display: grid; gap: 6px; }
-.route-item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; background: #fafaf8; }
+.route-item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; background: #fafaf8; }
 .route-item:hover { background: #f5f5f2; }
 .route-item.selected { border-color: #d6d6d1; background: #f0f0ec; }
 .route-swatch { width: 12px; height: 12px; border-radius: 999px; }
 .route-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #252525; }
 .route-remove { appearance: none; border: 0; background: transparent; color: #a1a1a1; font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 5px; border-radius: 5px; }
 .route-remove:hover { color: #e11d48; background: #fde8ec; }
+.route-visibility { appearance: none; border: 0; background: transparent; color: #a1a1a1; padding: 2px 5px; border-radius: 5px; cursor: pointer; display: grid; place-items: center; }
+.route-visibility svg { width: 14px; height: 14px; }
+.route-visibility:hover { color: #2563eb; background: #eaf1ff; }
+.route-item.route-hidden .route-swatch, .route-item.route-hidden .route-name { opacity: .4; }
+.route-item.merge-pickable { border-color: #bfdbfe; background: #eff6ff; }
+.route-item.merge-pickable:hover { border-color: #60a5fa; }
+.route-item.merge-picked { border-color: #2563eb; box-shadow: inset 0 0 0 1px #2563eb; }
 .waypoint-marker { width: 22px; height: 22px; display: grid; place-items: center; background: #fff; border: 2px solid transparent; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; font-size: 11px; font-weight: 800; color: #111827; transition: border-color .12s ease, background .12s ease; }
 .waypoint-marker.selected { background: #e11d48; border-color: #e11d48; color: #fff; }
 .waypoint-marker::before { content: "●"; font-size: 8px; }
