@@ -157,9 +157,21 @@ map.on('moveend', () => {
 
 map.on('style.load', () => {
   addDataLayers();
+  applyGlobe();
   applyTerrain();
   updateUI();
 });
+
+/**
+ * Render the map as a globe instead of the flat Web-Mercator plane (see issue #18).
+ * MapLibre v5 bends terrain, routes, and rasters around a sphere, and the sky
+ * atmosphere makes the planet readable when zoomed out. Re-applied on every
+ * `style.load` because swapping basemaps resets the style's projection and sky.
+ */
+function applyGlobe() {
+  map.setProjection({ type: 'globe' });
+  map.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 14, 0] });
+}
 
 function applyTerrain() {
   map.setTerrain(terrainEnabled ? { source: 'terrain', exaggeration: 1.15 } : null);
@@ -183,6 +195,14 @@ function addDataLayers() {
   }
   if (!map.getLayer('route-line')) {
     map.addLayer({ id: 'route-line', type: 'line', source: 'routes', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['coalesce', ['get', 'color'], '#e11d48'], 'line-width': 4 } });
+  }
+  if (!map.getSource('route-points')) {
+    map.addSource('route-points', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  }
+  if (!map.getLayer('route-points')) {
+    // Route points render on the canvas (not as DOM markers) so they stay glued
+    // to the globe and terrain while zooming instead of floating above it.
+    map.addLayer({ id: 'route-points', type: 'circle', source: 'route-points', paint: { 'circle-radius': ['case', ['get', 'selected'], 9, 7], 'circle-color': ['coalesce', ['get', 'color'], '#e11d48'], 'circle-stroke-color': ['case', ['get', 'selected'], '#111111', '#ffffff'], 'circle-stroke-width': 2 } });
   }
   if (!map.getSource('snap-preview')) {
     map.addSource('snap-preview', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -214,6 +234,24 @@ function routesGeoJSON(): FeatureCollection<LineString | Point> {
       geometry: { type: 'LineString', coordinates: route.points.map((p) => [p.lon, p.lat]) },
     }));
   return { type: 'FeatureCollection', features };
+}
+
+/** The active route's vertices as GeoJSON points with an index + selected flag per feature. */
+function routePointsGeoJSON(): FeatureCollection<Point> {
+  const route = activeRoute();
+  const features: Feature<Point>[] = !route || route.visible === false
+    ? []
+    : route.points.map((point, index) => ({
+        type: 'Feature',
+        properties: { color: route.color, pointIndex: index, selected: selectedIndex === index },
+        geometry: { type: 'Point', coordinates: [point.lon, point.lat] },
+      }));
+  return { type: 'FeatureCollection', features };
+}
+
+function refreshRoutePointLayer() {
+  const source = map.getSource('route-points') as GeoJSONSource | undefined;
+  if (source) source.setData(routePointsGeoJSON());
 }
 
 function refreshRoutesLayer() {
@@ -300,43 +338,6 @@ function refreshMarkers() {
   waypointMarkerLabels = [];
   waypointNameInputs = [];
   routeNameWidgets = [];
-  const route = activeRoute();
-  if (route && route.visible !== false) {
-    route.points.forEach((point, index) => {
-      const el = document.createElement('button');
-      el.className = `route-marker ${selectedIndex === index ? 'selected' : ''}`;
-      el.type = 'button';
-      el.style.background = route.color;
-      el.title = `Point ${index + 1}`;
-      el.addEventListener('click', (event) => { event.stopPropagation(); selectedIndex = index; selectedWaypointIndex = null; refreshMarkers(); updateUI(); });
-      el.addEventListener('pointerdown', (event) => {
-        event.stopPropagation();
-        if (event.button !== 0) return;
-        selectedIndex = index;
-        selectedWaypointIndex = null;
-        map.dragPan.disable();
-        const move = (e: PointerEvent) => {
-          const rect = map.getCanvas().getBoundingClientRect();
-          const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
-          route.points[index] = { lat: lngLat.lat, lon: lngLat.lng };
-          refreshRoutesLayer();
-          updateUI();
-        };
-        const up = async () => {
-          document.removeEventListener('pointermove', move);
-          document.removeEventListener('pointerup', up);
-          map.dragPan.enable();
-          await refreshRouteStats();
-          refreshRoutesLayer();
-          commitSnapshot();
-          persistWorkspace();
-        };
-        document.addEventListener('pointermove', move);
-        document.addEventListener('pointerup', up, { once: true });
-      });
-      markers.push(new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([point.lon, point.lat]).addTo(map));
-    });
-  }
   routes.forEach((route, index) => {
     if (!route.points.length || route.visible === false) return;
     const mid = route.points[Math.floor(route.points.length / 2)];
@@ -451,6 +452,7 @@ function refreshMarkers() {
     waypointNameInputs.push(renameInput);
     markers.push(new maplibregl.Marker({ element: wrap, anchor: 'center' }).setLngLat([waypoint.lon, waypoint.lat]).addTo(map));
   });
+  refreshRoutePointLayer();
 }
 
 function snapshot(): AppState { return structuredClone({ routes, waypoints }); }
@@ -718,6 +720,10 @@ async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint
 }
 
 map.on('mousemove', (event: MapMouseEvent) => {
+  if (!drawing && !waypointMode && !rotating && draggingPointIndex === null) {
+    const overPoint = map.queryRenderedFeatures(event.point, { layers: ['route-points'] }).length > 0;
+    map.getCanvas().style.cursor = overPoint ? 'pointer' : '';
+  }
   void updateSnapPreview(event);
 });
 map.on('mouseout', () => {
@@ -726,6 +732,15 @@ map.on('mouseout', () => {
 });
 map.on('click', (event: MapMouseEvent) => {
   if (rotating || rotatedThisGesture) return;
+  const routePoint = map.queryRenderedFeatures(event.point, { layers: ['route-points'] })[0];
+  const routePointIndex = routePoint?.properties?.pointIndex;
+  if (typeof routePointIndex === 'number') {
+    selectedIndex = routePointIndex;
+    selectedWaypointIndex = null;
+    refreshMarkers();
+    updateUI();
+    return;
+  }
   if (waypointMode) { addWaypoint(event); return; }
   if (drawing) { addRoutePoint(event); return; }
   const hit = map.queryRenderedFeatures(event.point, { layers: ['route-line', 'route-casing'] });
@@ -737,6 +752,52 @@ map.on('click', (event: MapMouseEvent) => {
   if (selectedRouteId !== null || selectedWaypointIndex !== null || selectedIndex !== null) {
     selectRoute(null);
   }
+});
+
+// Route points live in the 'route-points' WebGL layer instead of DOM markers,
+// so press-and-drag on one is handled on the canvas (mirrors the ⌘/Ctrl-rotate
+// gesture's mousedown pattern to disable panning before the map starts it).
+let draggingPointIndex: number | null = null;
+map.on('mousedown', (event: MapMouseEvent) => {
+  const original = event.originalEvent;
+  if (original.button !== 0) return;
+  if (rotating || rotatedThisGesture) return;
+  if (original.metaKey || original.ctrlKey) return; // reserved for camera rotation
+  const route = activeRoute();
+  const hit = map.queryRenderedFeatures(event.point, { layers: ['route-points'] })[0];
+  const index = hit?.properties?.pointIndex;
+  if (typeof index !== 'number' || !route || index < 0 || index >= route.points.length) return;
+  original.preventDefault();
+  selectedIndex = index;
+  selectedWaypointIndex = null;
+  refreshMarkers();
+  draggingPointIndex = index;
+  map.dragPan.disable();
+  const canvas = map.getCanvas();
+  const rect = canvas.getBoundingClientRect();
+  canvas.style.cursor = 'grabbing';
+  const move = (e: MouseEvent) => {
+    if (draggingPointIndex === null) return;
+    const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+    route.points[draggingPointIndex] = { ...route.points[draggingPointIndex], lat: lngLat.lat, lon: lngLat.lng };
+    refreshRoutesLayer();
+    updateUI();
+  };
+  const up = () => {
+    const moved = draggingPointIndex !== null;
+    draggingPointIndex = null;
+    map.dragPan.enable();
+    canvas.style.cursor = '';
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    if (!moved) return;
+    void refreshRouteStats();
+    refreshRoutesLayer();
+    commitSnapshot();
+    persistWorkspace();
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up, { once: true });
 });
 
 // The sidebar floats over the map with a click-through backdrop, so wheel
