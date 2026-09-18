@@ -70,6 +70,13 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Drag route points** to reshape a route; elevation is re-sampled after a drag.
 - **Rename routes** from the sidebar or by double-clicking the route's map label.
 - **Remove routes** from the route list.
+- **Merge routes**: combine two routes into one continuous route. Click the
+  merge toolbar icon, then pick two routes — the trace runs from one free end,
+  through the first route, across the joint (joined at the endpoints nearest
+  each other, reversing routes as needed), and out along the second. If the two
+  traces share a stretch of ground near the joint within ~10 m and are walking
+  it in the same direction, the duplicated head is dropped so shared ground is
+  covered once. The originals are kept; Esc cancels.
 - **Select routes** to make one "active" for editing, stats, and the profile;
   the list shows a color swatch per route.
 
@@ -160,7 +167,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   | --- | --- |
   | Click map | Add a route point (drawing) or waypoint (waypoint mode) |
   | Enter | Finish the current drawing |
-  | Esc | Cancel drawing / waypoint mode / the import dialog |
+  | Esc | Cancel drawing / waypoint mode / route merge / the import dialog |
   | Delete / Backspace | Remove the selected point or waypoint |
   | ⌘/Ctrl-Z | Undo |
   | ⇧⌘/Ctrl-Z | Redo |
@@ -187,8 +194,8 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **131 unit tests** across 15 files covering geodesy, GPX parse/serialize, DEM
+- **139 unit tests** across 16 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
-  geocoding, workspace storage, the MVT tile decoder, trail/peak snapping, and
-  trail-network routing.
+  geocoding, route merging, workspace storage, the MVT tile decoder,
+  trail/peak snapping, and trail-network routing.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

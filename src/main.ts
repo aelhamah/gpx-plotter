@@ -6,6 +6,7 @@ import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLIT
 import { colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, type UnitSystem } from './geo';
 import { geocode, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
+import { mergeRoutePoints } from './merge';
 import { DOWNSAMPLE_PROMPT_THRESHOLD, defaultPointBudget, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
 import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
@@ -24,6 +25,8 @@ let selectedRouteId: number | null = null;
 let nextRouteId = 1;
 let drawing = false;
 let waypointMode = false;
+let mergePickMode = false;
+let mergePick: Route | null = null;
 let terrainEnabled = false;
 let reliefEnabled = false;
 let satelliteEnabled = false;
@@ -482,6 +485,51 @@ function selectRoute(id: number | null) {
   void refreshRouteStats();
 }
 
+// --- Merge routes ------------------------------------------------------------
+
+function updateMergePickUI() {
+  $('merge-routes').classList.toggle('active', mergePickMode);
+  mapStatus.textContent = mergePickMode
+    ? mergePick
+      ? `Pick the second route to merge with "${mergePick.name}" — Esc to cancel.`
+      : 'Pick the two routes to merge into one — Esc to cancel.'
+    : '';
+  fillRouteList();
+}
+
+function exitMergePick() {
+  mergePickMode = false;
+  mergePick = null;
+  updateMergePickUI();
+}
+
+function toggleMergePick() {
+  mergePickMode = !mergePickMode;
+  if (mergePickMode) {
+    if (drawing) stopDrawing();
+    if (waypointMode) setWaypointMode(false);
+  } else {
+    mergePick = null;
+  }
+  updateMergePickUI();
+}
+
+/** Join two routes into one continuous route, keeping the originals. */
+function performMerge(first: Route, second: Route) {
+  commitSnapshot();
+  const merged: Route = {
+    ...newRoute(),
+    name: `${first.name} + ${second.name}`,
+    points: mergeRoutePoints(first.points, second.points),
+  };
+  routes.push(merged);
+  mergePickMode = false;
+  mergePick = null;
+  updateMergePickUI();
+  selectRoute(merged.id);
+  persistWorkspace();
+}
+
 function updateDrawBar() {
   const count = activeRoute()?.points.length ?? 0;
   $('draw-count').textContent = String(count);
@@ -492,6 +540,7 @@ function updateDrawBar() {
 }
 
 function startDrawing() {
+  if (mergePickMode) exitMergePick();
   if (waypointMode) setWaypointMode(false);
   if (!activeRoute()) {
     const created = newRoute();
@@ -563,6 +612,7 @@ function setWaypointMode(on: boolean) {
   waypointMode = on;
   $('add-waypoint').classList.toggle('active', on);
   if (on) {
+    if (mergePickMode) exitMergePick();
     stopDrawing();
     drawHint.textContent = 'Click to place a waypoint · snaps to peaks · Esc to cancel';
     drawHint.classList.remove('hidden');
@@ -711,6 +761,7 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     if (drawing) { stopDrawing(); return; }
     if (waypointMode) { setWaypointMode(false); return; }
+    if (mergePickMode) { exitMergePick(); return; }
   }
   if (event.key === 'Enter' && drawing) { finishRoute(); return; }
   const metaOrCtrl = event.metaKey || event.ctrlKey;
@@ -786,6 +837,7 @@ map.on('mousedown', (event: MapMouseEvent) => {
 
 $('draw-route').addEventListener('click', () => drawing ? stopDrawing() : startDrawing());
 $('add-waypoint').addEventListener('click', () => setWaypointMode(!waypointMode));
+$('merge-routes').addEventListener('click', toggleMergePick);
 $('new-route').addEventListener('click', () => { commitSnapshot(); routes.push(newRoute()); selectRoute(routes[routes.length - 1].id); startDrawing(); updateUI(); persistWorkspace(); });
 $('draw-finish').addEventListener('click', finishRoute);
 $('draw-cancel').addEventListener('click', () => stopDrawing());
@@ -1214,6 +1266,8 @@ function confirmClearAll() {
   selectedRouteId = null;
   selectedIndex = null;
   selectedWaypointIndex = null;
+  mergePickMode = false;
+  mergePick = null;
   nextRouteId = 1;
   history.length = 0;
   future.length = 0;
@@ -1251,7 +1305,8 @@ function fillRouteList() {
   routesList.innerHTML = '';
   routes.forEach((route) => {
     const item = document.createElement('div');
-    item.className = `route-item ${route.id === selectedRouteId ? 'selected' : ''}`;
+    const picked = mergePickMode && mergePick?.id === route.id;
+    item.className = `route-item ${route.id === selectedRouteId ? 'selected' : ''} ${mergePickMode ? 'merge-pickable' : ''} ${picked ? 'merge-picked' : ''}`;
     const swatch = document.createElement('span');
     swatch.className = 'route-swatch';
     swatch.style.background = route.color;
@@ -1269,13 +1324,26 @@ function fillRouteList() {
       commitSnapshot();
       routes = routes.filter((r) => r.id !== route.id);
       if (selectedRouteId === route.id) selectedRouteId = null;
+      if (mergePick?.id === route.id) { mergePick = null; updateMergePickUI(); }
       refreshRoutesLayer();
       updateUI();
       void refreshRouteStats();
       persistWorkspace();
     });
     item.append(swatch, name, remove);
-    item.addEventListener('click', () => { commitSnapshot(); selectRoute(route.id); });
+    item.addEventListener('click', () => {
+      if (mergePickMode) {
+        if (!mergePick) {
+          mergePick = route;
+          updateMergePickUI();
+        } else if (mergePick.id !== route.id) {
+          performMerge(mergePick, route);
+        }
+        return;
+      }
+      commitSnapshot();
+      selectRoute(route.id);
+    });
     routesList.append(item);
   });
   routesEmpty.classList.toggle('hidden', routes.length > 0);
