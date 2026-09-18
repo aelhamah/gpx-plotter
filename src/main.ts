@@ -157,9 +157,21 @@ map.on('moveend', () => {
 
 map.on('style.load', () => {
   addDataLayers();
+  applyGlobe();
   applyTerrain();
   updateUI();
 });
+
+/**
+ * Render the map as a globe instead of the flat Web-Mercator plane (see issue #18).
+ * MapLibre v5 bends terrain, routes, and rasters around a sphere, and the sky
+ * atmosphere makes the planet readable when zoomed out. Re-applied on every
+ * `style.load` because swapping basemaps resets the style's projection and sky.
+ */
+function applyGlobe() {
+  map.setProjection({ type: 'globe' });
+  map.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 14, 0] });
+}
 
 function applyTerrain() {
   map.setTerrain(terrainEnabled ? { source: 'terrain', exaggeration: 1.15 } : null);
