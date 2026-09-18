@@ -11,6 +11,8 @@ export interface Route {
   name: string;
   points: RoutePoint[];
   color: string;
+  /** Whether the route is shown on the map. Absent means visible (preserved for old workspaces). */
+  visible?: boolean;
 }
 
 export interface Waypoint {

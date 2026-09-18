@@ -207,7 +207,7 @@ function addDataLayers() {
 
 function routesGeoJSON(): FeatureCollection<LineString | Point> {
   const features: Feature<LineString>[] = routes
-    .filter((route) => route.points.length >= 2)
+    .filter((route) => route.visible !== false && route.points.length >= 2)
     .map((route) => ({
       type: 'Feature',
       properties: { color: route.color, id: route.id },
@@ -301,7 +301,7 @@ function refreshMarkers() {
   waypointNameInputs = [];
   routeNameWidgets = [];
   const route = activeRoute();
-  if (route) {
+  if (route && route.visible !== false) {
     route.points.forEach((point, index) => {
       const el = document.createElement('button');
       el.className = `route-marker ${selectedIndex === index ? 'selected' : ''}`;
@@ -338,7 +338,7 @@ function refreshMarkers() {
     });
   }
   routes.forEach((route, index) => {
-    if (!route.points.length) return;
+    if (!route.points.length || route.visible === false) return;
     const mid = route.points[Math.floor(route.points.length / 2)];
     const label = document.createElement('div');
     label.className = `route-map-label ${route.id === selectedRouteId ? 'editable' : ''}`;
@@ -1296,7 +1296,7 @@ function fitPoints(points: { lat: number; lon: number }[]) {
 
 function fitAll() {
   fitPoints([
-    ...routes.flatMap((route) => route.points),
+    ...routes.filter((route) => route.visible !== false).flatMap((route) => route.points),
     ...waypoints.map((w) => ({ lat: w.lat, lon: w.lon })),
   ]);
 }
@@ -1306,7 +1306,8 @@ function fillRouteList() {
   routes.forEach((route) => {
     const item = document.createElement('div');
     const picked = mergePickMode && mergePick?.id === route.id;
-    item.className = `route-item ${route.id === selectedRouteId ? 'selected' : ''} ${mergePickMode ? 'merge-pickable' : ''} ${picked ? 'merge-picked' : ''}`;
+    const hidden = route.visible === false;
+    item.className = `route-item ${route.id === selectedRouteId ? 'selected' : ''} ${mergePickMode ? 'merge-pickable' : ''} ${picked ? 'merge-picked' : ''} ${hidden ? 'route-hidden' : ''}`;
     const swatch = document.createElement('span');
     swatch.className = 'route-swatch';
     swatch.style.background = route.color;
@@ -1314,6 +1315,28 @@ function fillRouteList() {
     name.className = 'route-name';
     name.textContent = route.name;
     name.title = route.name;
+    const visibility = document.createElement('button');
+    visibility.className = 'route-visibility';
+    visibility.type = 'button';
+    visibility.title = hidden ? `Show ${route.name}` : `Hide ${route.name}`;
+    visibility.addEventListener('click', (event) => {
+      event.stopPropagation();
+      commitSnapshot();
+      route.visible = hidden ? undefined : false;
+      refreshRoutesLayer();
+      updateUI();
+      void refreshRouteStats();
+      persistWorkspace();
+    });
+    const eyeOn = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    eyeOn.setAttribute('viewBox', '0 0 24 24');
+    eyeOn.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/>';
+    const eyeOff = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    eyeOff.setAttribute('viewBox', '0 0 24 24');
+    eyeOff.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+    eyeOn.classList.toggle('hidden', hidden);
+    eyeOff.classList.toggle('hidden', !hidden);
+    visibility.append(eyeOn, eyeOff);
     const remove = document.createElement('button');
     remove.className = 'route-remove';
     remove.type = 'button';
@@ -1330,7 +1353,7 @@ function fillRouteList() {
       void refreshRouteStats();
       persistWorkspace();
     });
-    item.append(swatch, name, remove);
+    item.append(swatch, name, visibility, remove);
     item.addEventListener('click', () => {
       if (mergePickMode) {
         if (!mergePick) {

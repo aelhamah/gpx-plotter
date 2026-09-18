@@ -70,6 +70,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Drag route points** to reshape a route; elevation is re-sampled after a drag.
 - **Rename routes** from the sidebar or by double-clicking the route's map label.
 - **Remove routes** from the route list.
+- **Visibility toggle**: an eye button next to each route hides/shows it on the
+  map (line, point markers, and label) without deleting it; hidden routes are
+  dimmed in the list and skipped by "fit to view". The toggle persists with the
+  workspace and exports still include hidden routes.
 - **Merge routes**: combine two routes into one continuous route. Click the
   merge toolbar icon, then pick two routes — the trace runs from one free end,
   through the first route, across the joint (joined at the endpoints nearest
