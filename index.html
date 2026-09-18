@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A simple browser-based GPX route plotter." />
     <title>GPX Route Plotter</title>
-    <script type="module" crossorigin src="./assets/index-DWzBARYw.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-0DXVzAbS.css">
+    <script type="module" crossorigin src="./assets/index-BWq3W2mN.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BPhBSpHm.css">
   </head>
   <body>
     <div id="app">
@@ -75,6 +75,12 @@
               </button>
               <span class="button-tooltip">Add waypoint</span>
             </div>
+            <div class="icon-button-wrap">
+              <button id="merge-routes" class="button button-secondary icon-button" type="button" aria-label="Merge routes">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v8c0 2 1.5 3 5 3 3.5 0 5-1 5-3V3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 14v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="7" cy="3" r="1.6" fill="currentColor"/><circle cx="17" cy="3" r="1.6" fill="currentColor"/><circle cx="12" cy="21" r="1.6" fill="currentColor"/></svg>
+              </button>
+              <span class="button-tooltip">Merge routes</span>
+            </div>
           </div>
         </div>
         <p id="map-status" class="hint"></p>
@@ -119,6 +125,7 @@
           <p><b>Draw:</b> click to add points; press Enter or click Finish to end.</p>
           <p><b>Move:</b> drag a point or waypoint.</p>
           <p><b>Waypoints:</b> click to select, double-click to rename, Delete to remove.</p>
+          <p><b>Merge:</b> click the merge icon, then pick two routes to combine into one.</p>
           <p><b>Rotate/Tilt:</b> ⌘/Ctrl + click and drag the map; scroll to zoom.</p>
           <p><b>Delete:</b> select a point and press Delete.</p>
           <p><b>Undo/Redo:</b> use ⌘/Ctrl-Z and ⇧⌘/Ctrl-Z.</p>
