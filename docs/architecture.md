@@ -40,6 +40,7 @@ src/geo.ts            Geodesy, elevation stats, route resampling, chart math
 src/dem.ts            MapTiler Terrain-RGB decoding + slope raster generation
 src/mvt.ts            Minimal MapTiler vector tile (MVT) decoder
 src/snap.ts           Pure snapping math (points → trails / peaks)
+src/snapTiles.ts      Snap zoom selection + which tiles a radius reaches
 src/snapSources.ts    Trail + peak tile fetching and caching for snapping
 src/trailGraph.ts     Shortest-path routing along a trail network
 src/geocode.ts        MapTiler geocoding search (peaks, towns, trails, trailheads)
@@ -189,11 +190,36 @@ Fetches and caches the vector tiles the snap layers need:
   relation, so many ordinary paths (e.g. Redneck Ridge) exist only in
   `transportation`; reading both is what makes snapping work broadly. Peaks come
   from the planet `mountain_peak` layer.
-- `trailsNearPoint(lng, lat)` returns every trail/path polyline in the
-  containing tile; `peaksNearPoint(lng, lat)` returns peaks with `name` and
-  `elevation` (meters) from their properties. Both are at zoom 13 and share a
-  96-tile LRU cache (planet tiles are reused between trails and peaks).
-- Any fetch/decode failure degrades to `[]` so drawing always works offline.
+- `trailsNearPoint(lng, lat, zoom?)` returns every trail/path polyline near the
+  point; `peaksNearPoint(lng, lat, zoom?)` returns peaks with `name` and
+  `elevation` (meters) from their properties. They share a 256-tile cache (planet
+  tiles are reused between trails and peaks) and read the tiles `snapTilesFor`
+  selects — normally just the containing tile, plus whichever neighbours the snap
+  radius reaches.
+- A tile that fails to fetch or decode is **evicted** from the cache rather than
+  memoised, so the next click retries instead of leaving snapping dead in that
+  tile for the rest of the session. Tiles that do load still contribute their
+  candidates when a sibling fails.
+- A detail read that comes back empty falls back to zoom 13, so a tileset that
+  thins out at high zoom degrades to the old behavior rather than to no snapping.
+- Any remaining fetch/decode failure degrades to `[]` so drawing always works offline.
+
+### `src/snapTiles.ts` — which tiles to read, and at what zoom (pure)
+
+- `snapZoomFor(mapZoom)` — the zoom to read candidates at: the map's own zoom,
+  rounded, clamped to `[SNAP_BASE_ZOOM = 13, SNAP_MAX_ZOOM = 16]`. Zoom 13 is
+  heavily generalized, so pinning every read there left snapped points visibly
+  off the trail the basemap draws once the user zooms in. Rounding means panning
+  at a fractional zoom reuses the cache.
+- `tileSpanMeters(lat, zoom)` — ground meters per tile (Mercator is conformal, so
+  a tile is square in meters too).
+- `snapTilesFor(lng, lat, zoom, radiusMeters)` — every tile whose nearest edge is
+  within `radiusMeters` of the point, clamped to one ring and to the zoom's index
+  range. A snap threshold is a *radius* but a tile is a fixed square, so reading
+  only the containing tile made anything within 40m of a tile edge unreachable —
+  the working area stopped at an invisible line, which read as the snap region
+  being offset. Returns `[]` past the Mercator limit, where the tile index is not
+  finite.
 
 ### `src/geocode.ts` — geocoding search
 

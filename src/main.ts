@@ -17,6 +17,7 @@ import { normalizeRouteName, normalizeWaypointName } from './names';
 import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
 import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
+import { snapZoomFor } from './snapTiles';
 import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
 import './style.css';
 
@@ -602,11 +603,22 @@ function setSnapPreview(point: SnapPoint | null) {
 }
 
 let snapPreviewToken = 0;
+
+/**
+ * Zoom to read snap candidates at. Snapping at the map's own zoom keeps the
+ * candidate geometry as detailed as the trail the user can see, instead of
+ * always using a heavily generalized zoom 13 that leaves snapped points visibly
+ * off the trail.
+ */
+function snapZoom() {
+  return snapZoomFor(map.getZoom());
+}
+
 async function updateSnapPreview(event: MapMouseEvent) {
   if (!drawing) return;
   const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
   const token = ++snapPreviewToken;
-  const lines = await trailsNearPoint(raw.lon, raw.lat);
+  const lines = await trailsNearPoint(raw.lon, raw.lat, snapZoom());
   if (token !== snapPreviewToken || !drawing) return;
   const match = nearestLine(raw, lines, TRAIL_SNAP_METERS);
   setSnapPreview(match ? match.result.point : null);
@@ -657,7 +669,7 @@ function addWaypoint(event: MapMouseEvent) {
 
 /** After a waypoint is placed, refine it onto the nearest peak within reach. */
 async function snapWaypointToPeak(index: number, raw: SnapPoint) {
-  const peaks = await peaksNearPoint(raw.lon, raw.lat);
+  const peaks = await peaksNearPoint(raw.lon, raw.lat, snapZoom());
   if (peaks.length === 0) return;
   const result = nearestSnap(raw, peaks.map((peak) => [peak.center]), PEAK_SNAP_METERS);
   if (!result) return;
@@ -700,9 +712,10 @@ function addRoutePoint(event: MapMouseEvent) {
  */
 async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint) {
   const previous = index > 0 ? route.points[index - 1] : null;
+  const zoom = snapZoom();
   const [nearNew, nearPrevious] = await Promise.all([
-    trailsNearPoint(raw.lon, raw.lat),
-    previous ? trailsNearPoint(previous.lon, previous.lat) : Promise.resolve<SnapPoint[][]>([]),
+    trailsNearPoint(raw.lon, raw.lat, zoom),
+    previous ? trailsNearPoint(previous.lon, previous.lat, zoom) : Promise.resolve<SnapPoint[][]>([]),
   ]);
   const lines = dedupeTrailLines([...nearNew, ...nearPrevious]);
   const match = nearestLine(raw, lines, TRAIL_SNAP_METERS);

@@ -81,6 +81,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   it. Trails come from the same `outdoor` tileset the basemap renders plus
   path-like `transportation` lines, so ordinary OSM paths that aren't part of a
   marked route still snap (e.g. Redneck Ridge and the Eagle Valley Trail).
+  Candidates are read at the current map zoom (up to 16) so the snap point matches
+  the basemap's geometry rather than the heavily generalized zoom-13 outline, and
+  the working area is continuous — every tile a trail can be within 40 m of is
+  read, not just the one under the cursor.
 - **Hover preview**: while drawing, a dashed line and a blue dot show where the
   next point will land (snapped to the trail) before you click.
 - **Follows the trail**: when a point lands within ~15 m of a trail and the

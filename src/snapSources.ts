@@ -6,21 +6,21 @@
  *                   to a route relation (many ordinary paths are missing there).
  *  - planet (v3)  → "mountain_peak" layer for snapping waypoints onto peaks.
  *
- * Uses the same tileset URLs the map style already references, requesting a
- * single tile around the click's location and decoding it with `mvt`. Tile
- * bytes are cached per source/z/x/y so repeated clicks in one area do not
- * re-fetch. Any failure (network, tile 404, decode) silently yields no
- * candidates.
+ * Uses the same tileset URLs the map style already references, decoding the
+ * tiles around the click's location with `mvt`. Which tiles those are, and at
+ * what zoom, comes from `snapTiles` (tile coverage for the snap radius, zoom
+ * tracking the map). Tile bytes are cached per source/z/x/y so repeated clicks
+ * in one area do not re-fetch. A tile that fails to fetch or decode is dropped
+ * and evicted from the cache, so the next click retries instead of being stuck
+ * with the failure.
  */
 
 import { OUTDOOR_TILE_URL, PLANET_TILE_URL } from './config';
-import { lngLatToTile } from './dem';
 import { decodeTile, layerByName, tilePointToLngLat, type MVTLayer } from './mvt';
-import type { SnapPoint } from './snap';
+import { PEAK_SNAP_METERS, TRAIL_SNAP_METERS, type SnapPoint } from './snap';
+import { SNAP_BASE_ZOOM, snapTilesFor, type TileCoord } from './snapTiles';
 
-const SNAP_ZOOM = 13;
-export const SNAP_ZOOM_LEVEL = SNAP_ZOOM;
-const CACHE_CAP = 96;
+const CACHE_CAP = 256;
 
 /** `transportation` classes that count as a walkable/rideable trail. */
 const TRAIL_CLASSES = new Set([
@@ -49,27 +49,40 @@ interface DecodedTile {
 
 const tileCache = new Map<string, Promise<DecodedTile>>();
 
-async function fetchDecodedTile(source: 'outdoor' | 'planet', lng: number, lat: number): Promise<DecodedTile> {
+async function fetchDecodedTile(source: 'outdoor' | 'planet', tile: TileCoord, zoom: number): Promise<DecodedTile> {
   const urlTemplate = source === 'outdoor' ? OUTDOOR_TILE_URL : PLANET_TILE_URL;
-  const { x, y } = lngLatToTile(lng, lat, SNAP_ZOOM);
-  const maxTile = 2 ** SNAP_ZOOM - 1;
-  const cx = Math.max(0, Math.min(maxTile, Math.floor(x)));
-  const cy = Math.max(0, Math.min(maxTile, Math.floor(y)));
-  const key = `${source}/${SNAP_ZOOM}/${cx}/${cy}`;
+  const key = `${source}/${zoom}/${tile.x}/${tile.y}`;
   let job = tileCache.get(key);
   if (job) return job;
   job = (async () => {
-    const url = urlTemplate.replace('{z}', String(SNAP_ZOOM)).replace('{x}', String(cx)).replace('{y}', String(cy));
+    const url = urlTemplate
+      .replace('{z}', String(zoom))
+      .replace('{x}', String(tile.x))
+      .replace('{y}', String(tile.y));
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Snap tile ${key} failed with ${response.status}`);
-    return { layers: decodeTile(new Uint8Array(await response.arrayBuffer())), z: SNAP_ZOOM, x: cx, y: cy };
+    return { layers: decodeTile(new Uint8Array(await response.arrayBuffer())), z: zoom, x: tile.x, y: tile.y };
   })();
+  // A failed tile must not be remembered: the cache would keep serving the
+  // rejected promise and snapping would stay dead in this tile for the rest of
+  // the session. Evict on rejection so the next click tries again. The catch
+  // also marks `job` as handled, leaving the rejection for the caller.
+  job.catch(() => {
+    if (tileCache.get(key) === job) tileCache.delete(key);
+  });
   if (tileCache.size >= CACHE_CAP) {
     const oldest = tileCache.keys().next().value;
     if (oldest !== undefined) tileCache.delete(oldest);
   }
   tileCache.set(key, job);
   return job;
+}
+
+/** Decode every tile around a point, dropping the ones that fail. */
+async function tilesNear(source: 'outdoor' | 'planet', lng: number, lat: number, zoom: number, radiusMeters: number) {
+  const tiles = snapTilesFor(lng, lat, zoom, radiusMeters);
+  const decoded = await Promise.all(tiles.map((tile) => fetchDecodedTile(source, tile, zoom).catch(() => null)));
+  return decoded.filter((tile): tile is DecodedTile => tile !== null);
 }
 
 function tilePointLine(part: [number, number][], decoded: DecodedTile, extent: number): SnapPoint[] {
@@ -94,48 +107,65 @@ function linesFromLayer(decoded: DecodedTile, layerName: string, keep?: (props: 
   return lines;
 }
 
-async function outdoorTrailLines(lng: number, lat: number): Promise<SnapPoint[][]> {
-  const decoded = await fetchDecodedTile('outdoor', lng, lat);
-  return linesFromLayer(decoded, 'trail');
+async function outdoorTrailLines(lng: number, lat: number, zoom: number, radiusMeters: number): Promise<SnapPoint[][]> {
+  const decoded = await tilesNear('outdoor', lng, lat, zoom, radiusMeters);
+  return decoded.flatMap((tile) => linesFromLayer(tile, 'trail'));
 }
 
-async function transportPathLines(lng: number, lat: number): Promise<SnapPoint[][]> {
-  const decoded = await fetchDecodedTile('planet', lng, lat);
-  return linesFromLayer(decoded, 'transportation', (props) => typeof props.class === 'string' && TRAIL_CLASSES.has(props.class));
+async function transportPathLines(lng: number, lat: number, zoom: number, radiusMeters: number): Promise<SnapPoint[][]> {
+  const decoded = await tilesNear('planet', lng, lat, zoom, radiusMeters);
+  return decoded.flatMap((tile) =>
+    linesFromLayer(tile, 'transportation', (props) => typeof props.class === 'string' && TRAIL_CLASSES.has(props.class)),
+  );
 }
 
-/**
- * Trail polylines near a point (lng/lat), combining the marked `trail` layer
- * with path-like `transportation` lines. Returns [] when both sources fail.
- */
-export async function trailsNearPoint(lng: number, lat: number): Promise<SnapPoint[][]> {
+async function trailsAtZoom(lng: number, lat: number, zoom: number, radiusMeters: number): Promise<SnapPoint[][]> {
   const [marked, paths] = await Promise.all([
-    outdoorTrailLines(lng, lat).catch(() => []),
-    transportPathLines(lng, lat).catch(() => []),
+    outdoorTrailLines(lng, lat, zoom, radiusMeters).catch(() => []),
+    transportPathLines(lng, lat, zoom, radiusMeters).catch(() => []),
   ]);
   return [...marked, ...paths];
 }
 
-/** Peaks near a point, or [] on failure. */
-export async function peaksNearPoint(lng: number, lat: number): Promise<PeakInfo[]> {
-  try {
-    const decoded = await fetchDecodedTile('planet', lng, lat);
-    const peaks = layerByName(decoded.layers, 'mountain_peak');
-    if (!peaks) return [];
-    const list: PeakInfo[] = [];
-    for (const feature of peaks.features) {
+/**
+ * Trail polylines near a point (lng/lat), combining the marked `trail` layer
+ * with path-like `transportation` lines. Every tile within `radiusMeters` is
+ * read, so a trail just across a tile boundary still snaps.
+ *
+ * `zoom` lets the caller ask for detail matching the current map zoom. Tilesets
+ * thin out and are generalized at high zoom, so a detail read that comes back
+ * empty falls back to {@link SNAP_BASE_ZOOM} rather than silently not snapping.
+ */
+export async function trailsNearPoint(lng: number, lat: number, zoom = SNAP_BASE_ZOOM, radiusMeters = TRAIL_SNAP_METERS): Promise<SnapPoint[][]> {
+  const lines = await trailsAtZoom(lng, lat, zoom, radiusMeters);
+  if (lines.length > 0 || zoom <= SNAP_BASE_ZOOM) return lines;
+  return trailsAtZoom(lng, lat, SNAP_BASE_ZOOM, radiusMeters);
+}
+
+async function peaksAtZoom(lng: number, lat: number, zoom: number, radiusMeters: number): Promise<PeakInfo[]> {
+  const decoded = await tilesNear('planet', lng, lat, zoom, radiusMeters);
+  const peaks: PeakInfo[] = [];
+  for (const tile of decoded) {
+    const layer = layerByName(tile.layers, 'mountain_peak');
+    if (!layer) continue;
+    for (const feature of layer.features) {
       if (feature.type !== 1) continue;
       for (const part of feature.parts) {
         const [px, py] = part[0] ?? [0, 0];
-        const { lng, lat } = tilePointToLngLat(decoded.z, decoded.x, decoded.y, peaks.extent, px, py);
+        const { lng, lat } = tilePointToLngLat(tile.z, tile.x, tile.y, layer.extent, px, py);
         const name = typeof feature.props.name === 'string' && feature.props.name ? feature.props.name : undefined;
         const rawElevation = feature.props.ele;
         const elevation = typeof rawElevation === 'number' && Number.isFinite(rawElevation) ? rawElevation : undefined;
-        list.push({ center: { lon: lng, lat }, name, elevation });
+        peaks.push({ center: { lon: lng, lat }, name, elevation });
       }
     }
-    return list;
-  } catch {
-    return [];
   }
+  return peaks;
+}
+
+/** Peaks near a point, or [] on failure. Same detail-zoom fallback as trails. */
+export async function peaksNearPoint(lng: number, lat: number, zoom = SNAP_BASE_ZOOM, radiusMeters = PEAK_SNAP_METERS): Promise<PeakInfo[]> {
+  const peaks = await peaksAtZoom(lng, lat, zoom, radiusMeters);
+  if (peaks.length > 0 || zoom <= SNAP_BASE_ZOOM) return peaks;
+  return peaksAtZoom(lng, lat, SNAP_BASE_ZOOM, radiusMeters);
 }

@@ -68,6 +68,8 @@ tests/
   merge.test.ts      route merge orientation + seam overlap reduction
   simplify.test.ts   downsampling + distance-based budget
   style.test.ts      pointer-events layering in style.css
+  snapTiles.test.ts  snap zoom selection + tile coverage within a radius
+  snapSources.test.ts tile fetching, failure retry, and detail-zoom fallback
 ```
 
 Guidelines:
