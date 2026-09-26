@@ -38,28 +38,41 @@ jobs:
       - name: Create the platform labels if missing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          gh label create web --color 1D76DB \
-            --description "Touches the web app in web/" 2>/dev/null || true
-          gh label create ios --color 555555 \
-            --description "Touches the native iOS app in ios/" 2>/dev/null || true
+          # Checked rather than `gh label create ... || true`, so that a genuine
+          # failure surfaces here instead of as a confusing "label not found"
+          # from the step below.
+          ensure() {
+            if ! gh label list --repo "$REPO" --limit 100 --json name \
+              --jq '.[].name' | grep -qx "$1"; then
+              gh label create "$1" --repo "$REPO" --color "$2" --description "$3"
+            fi
+          }
+          ensure web 1D76DB "Touches the web app in web/"
+          ensure ios 555555 "Touches the native iOS app in ios/"
 
       - name: Sync the labels
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           WEB: ${{ steps.filter.outputs.web }}
           IOS: ${{ steps.filter.outputs.ios }}
         run: |
+          # --repo is required: `gh` otherwise infers the repository from the git
+          # checkout, and this job deliberately has none, since checking out pull
+          # request code under pull_request_target would expose repo secrets.
+          #
           # Move each label to the state this push actually implies, rather than
           # only ever adding, so a PR that stops touching ios loses the label.
           if [ "$WEB" = "true" ]; then
-            gh pr edit "$PR" --add-label web > /dev/null
+            gh pr edit "$PR" --repo "$REPO" --add-label web > /dev/null
           else
-            gh pr edit "$PR" --remove-label web > /dev/null 2>&1 || true
+            gh pr edit "$PR" --repo "$REPO" --remove-label web > /dev/null 2>&1 || true
           fi
           if [ "$IOS" = "true" ]; then
-            gh pr edit "$PR" --add-label ios > /dev/null
+            gh pr edit "$PR" --repo "$REPO" --add-label ios > /dev/null
           else
-            gh pr edit "$PR" --remove-label ios > /dev/null 2>&1 || true
+            gh pr edit "$PR" --repo "$REPO" --remove-label ios > /dev/null 2>&1 || true
           fi
