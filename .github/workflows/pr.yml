@@ -27,6 +27,7 @@ jobs:
     outputs:
       web: ${{ steps.filter.outputs.web }}
       ios: ${{ steps.filter.outputs.ios }}
+      ios_present: ${{ steps.probe.outputs.present }}
     steps:
       - name: Filter changed paths
         id: filter
@@ -39,6 +40,27 @@ jobs:
             ios:
               - 'ios/**'
               - '.github/workflows/**'
+
+      # A workflow-only change sets the ios filter, so the iOS job would try to
+      # build a tree that does not exist yet. Probing here rather than with
+      # hashFiles in the job's own `if` keeps it working, because hashFiles is
+      # not available in a job-level condition.
+      - name: Look for the iOS package
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: ios/RouteKit
+          sparse-checkout-cone-mode: false
+
+      - name: Record whether ios/RouteKit is present
+        id: probe
+        env:
+          SWIFT_PACKAGE: ${{ hashFiles('ios/RouteKit/Package.swift') }}
+        run: |
+          if [ -n "$SWIFT_PACKAGE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
 
   web:
     name: Web (build + test)
@@ -65,11 +87,11 @@ jobs:
   ios:
     name: iOS (swift build + test)
     needs: changes
-    # hashFiles guards against the ios/ tree not existing yet; it starts
-    # matching as soon as RouteKit lands.
+    # ios_present is false until RouteKit lands, so a workflow-only change does
+    # not try to build a tree that does not exist.
     if: >-
       needs.changes.outputs.ios == 'true' &&
-      hashFiles('ios/RouteKit/Package.swift') != ''
+      needs.changes.outputs.ios_present == 'true'
     runs-on: macos-latest
     defaults:
       run:
