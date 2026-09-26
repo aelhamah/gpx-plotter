@@ -43,6 +43,7 @@ src/snap.ts           Pure snapping math (points → trails / peaks)
 src/snapSources.ts    Trail + peak tile fetching and caching for snapping
 src/trailGraph.ts     Shortest-path routing along a trail network
 src/geocode.ts        MapTiler geocoding search (peaks, towns, trails, trailheads)
+src/locate.ts         Pure geolocation math: accuracy halo, camera zoom, permission copy
 src/merge.ts          Route merging: join two routes at nearest endpoints, trim seam overlap
 src/simplify.ts       Track downsampling (import of large files)
 src/units.ts          Metric/imperial defaults + formatting
@@ -255,10 +256,39 @@ marker.
 
 - `units.ts`: `defaultUnitSystem()` (imperial for `US` locales, else metric) and
   all formatting (`formatDistance`, `formatElevation`, `formatSlope`,
-  `formatDistanceAxis`).
+  `formatDistanceAxis`, `formatAccuracy`).
 - `colors.ts`: the deterministic `ROUTE_COLORS` palette (`routeColorForId`) and
   `TRACE_COLOR` for the profile hover trace.
 - `names.ts`: `normalizeRouteName` / `normalizeWaypointName` fallbacks.
+
+### `src/locate.ts` — the "my location" control (pure)
+
+No DOM, no MapLibre, so all of it is unit-testable:
+
+- `accuracyCirclePolygon(lon, lat, radiusMeters, steps = 64)` — a geodesic ring
+  (`position → destination` on the great circle) around the fix, longitudes
+  wrapped into `[-180, 180]` so a fix near the antimeridian does not draw a
+  polygon around the globe.
+- `locationGeoJSON(fix)` — the `location` source: a Point for the dot plus the
+  accuracy Polygon, or an empty collection when the fix is cleared. A polygon
+  (rather than a zoom-scaled circle layer) keeps the halo honest about how far
+  off the fix can be at any zoom.
+- `zoomForAccuracy(accuracyMeters, latitude, maxZoom = 15)` — the zoom that
+  makes the halo about 60 px wide, from the Web Mercator ground resolution
+  (`156543.03392 · cos(lat) / 2^zoom` meters per pixel); a missing accuracy
+  falls back to 30 m.
+- `locateErrorMessage(code)` / `locateUnavailableMessage(reason)` /
+  `locateButtonLabel(unavailable, permission, located)` — the status-line and
+  tooltip copy. Denied permission gets explicit instructions because browsers do
+  not re-prompt a denied site.
+
+`main.ts` owns the browser interaction: the permission watch (Permissions API,
+click-only requests), `getCurrentPosition`, `easeTo` to the fix, the
+`busy`/`denied`/`unavailable`/`active` button states, and `setLocateStatus()`,
+which writes to `#map-status` only while the message is still its own, so it
+never clobbers another subsystem's error. `locationFix` is deliberately outside
+`AppState` and `persistWorkspace()` — device position is never saved or
+undoable.
 
 ## 5. Data model
 
@@ -280,6 +310,7 @@ All mutable state is module-scoped in `main.ts`:
 - `selectedRouteId`, `selectedIndex` (selected route point), `selectedWaypointIndex`
 - `drawing`, `waypointMode`
 - `terrainEnabled`, `reliefEnabled`, `satelliteEnabled`, `slopeEnabled`
+- `locationFix: LocationFix | null` (last device position; memory only, never persisted)
 - `unitSystem`
 - `history: AppState[]`, `future: AppState[]` (bounded to 50 snapshots)
 
@@ -305,9 +336,11 @@ Sources and layers:
 | `routes` | `geojson` | Route lines (casing + colored line) |
 | `snap-preview` | `geojson` | Hover snap preview (dashed line + dot) |
 | `profile-trace` | `geojson` | Highlighted trail up to the hovered profile point |
+| `location` | `geojson` | Device position dot + accuracy halo (`locationFix`) |
 
 Layer order: `slope-shading` → `route-casing` → `route-line` → `profile-trace`
-→ `relief` (hillshade). Visibility is toggled per the feature flags.
+→ `relief` (hillshade) → `location-accuracy` → `location-halo` →
+`location-dot`. Visibility is toggled per the feature flags.
 
 **Custom `slope://` protocol.** `maplibregl.addProtocol('slope', …)` decodes and
 colorizes a DEM tile on demand and returns a PNG. Serving raster tiles through
@@ -405,7 +438,7 @@ placeholder.
   relative so the bundle works on GitHub Pages project sites.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
   `colors`, `names`, `merge`, `simplify`, `config`, `storage`, `mvt`, `snap`,
-  `snapSources`, `trailGraph`).
+  `snapSources`, `trailGraph`, `locate`).
 - CI (`.github/workflows/pr.yml`) builds and tests on pushes/PRs.
 - Deployment (`.github/workflows/deploy.yml`) publishes the main build to the
   `gh-pages` branch root on pushes to `main`; GitHub Pages serves that branch.
@@ -430,3 +463,8 @@ placeholder.
   and can be slow.
 - GPX metadata (time, heart rate, etc.) beyond coordinates/elevation/name is not
   preserved.
+- **"My location" is a one-shot lookup, not tracking.** There is no
+  `watchPosition`, so the dot does not follow you while walking, and accuracy
+  comes from the device (tens of metres on a phone with GPS, often hundreds of
+  metres or a timeout on a desktop). It also needs a secure context, so it is
+  unavailable when the app is served over plain HTTP from a non-localhost host.

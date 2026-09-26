@@ -6,10 +6,11 @@ import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLIT
 import { colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, type UnitSystem } from './geo';
 import { geocode, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
+import { PERMISSION_DENIED, locateButtonLabel, locateErrorMessage, locateUnavailableMessage, locationGeoJSON, zoomForAccuracy, type LocatePermission, type LocateUnavailable, type LocationFix } from './locate';
 import { mergeRoutePoints } from './merge';
 import { DOWNSAMPLE_PROMPT_THRESHOLD, defaultPointBudget, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
-import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
+import { defaultUnitSystem, formatAccuracy, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
 import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
@@ -31,6 +32,8 @@ let terrainEnabled = false;
 let reliefEnabled = false;
 let satelliteEnabled = false;
 let slopeEnabled = false;
+/** Last device position, if the user asked for it. Never persisted with the workspace. */
+let locationFix: LocationFix | null = null;
 let unitSystem: UnitSystem = defaultUnitSystem();
 let selectedIndex: number | null = null;
 let selectedWaypointIndex: number | null = null;
@@ -221,6 +224,18 @@ function addDataLayers() {
   }
   if (!map.getLayer('relief')) {
     map.addLayer({ id: 'relief', type: 'hillshade', source: 'terrain', layout: { visibility: reliefEnabled ? 'visible' : 'none' }, paint: { 'hillshade-shadow-color': '#334155', 'hillshade-highlight-color': '#ffffff', 'hillshade-accent-color': '#64748b', 'hillshade-exaggeration': 0.5 } });
+  }
+  if (!map.getSource('location')) {
+    map.addSource('location', { type: 'geojson', data: locationGeoJSON(locationFix) });
+  }
+  if (!map.getLayer('location-accuracy')) {
+    map.addLayer({ id: 'location-accuracy', type: 'fill', source: 'location', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#2563eb', 'fill-opacity': 0.14 } });
+  }
+  if (!map.getLayer('location-halo')) {
+    map.addLayer({ id: 'location-halo', type: 'circle', source: 'location', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-opacity': 0.85 } });
+  }
+  if (!map.getLayer('location-dot')) {
+    map.addLayer({ id: 'location-dot', type: 'circle', source: 'location', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5.5, 'circle-color': '#2563eb', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 } });
   }
   refreshMarkers();
 }
@@ -1012,6 +1027,92 @@ function commitRouteName(index: number, raw: string) {
 
 $('fit-route').addEventListener('click', fitAll);
 
+// --- My location -------------------------------------------------------------
+// The permission is only ever requested from a click on the button, so the app
+// never asks for the user's position until they ask for it themselves.
+const locateButton = $('locate-me');
+const locateTooltip = locateButton.nextElementSibling as HTMLElement;
+const LOCATE_TIMEOUT_MS = 15000;
+const LOCATE_MAX_AGE_MS = 30000;
+const LOCATE_STATUS_MS = 4000;
+let geolocationPermission: LocatePermission = 'prompt';
+let locateStatusText = '';
+let locateStatusTimer: number | undefined;
+
+locateButton.addEventListener('click', locateMe);
+watchGeolocationPermission();
+refreshLocateButton();
+
+/** Track the permission so the button can explain itself once access is blocked. */
+function watchGeolocationPermission() {
+  if (!navigator.permissions) return;
+  navigator.permissions.query({ name: 'geolocation' }).then((status) => {
+    geolocationPermission = status.state;
+    status.addEventListener('change', () => { geolocationPermission = status.state; refreshLocateButton(); });
+    refreshLocateButton();
+  }).catch(() => { /* permissions API can refuse to report geolocation — prompt on click instead */ });
+}
+
+function locateUnavailableReason(): LocateUnavailable | null {
+  if (!('geolocation' in navigator)) return 'unsupported';
+  if (!window.isSecureContext) return 'insecure';
+  return null;
+}
+
+function locateMe() {
+  const unavailable = locateUnavailableReason();
+  if (unavailable) { setLocateStatus(locateUnavailableMessage(unavailable)); return; }
+  if (geolocationPermission === 'denied') { setLocateStatus(locateErrorMessage(PERMISSION_DENIED)); return; }
+  locateButton.classList.add('busy');
+  navigator.geolocation.getCurrentPosition(onLocated, onLocateFailed, { enableHighAccuracy: true, timeout: LOCATE_TIMEOUT_MS, maximumAge: LOCATE_MAX_AGE_MS });
+}
+
+function onLocated(position: GeolocationPosition) {
+  locateButton.classList.remove('busy');
+  const fix: LocationFix = { lon: position.coords.longitude, lat: position.coords.latitude, accuracyMeters: position.coords.accuracy, at: position.timestamp };
+  setLocationFix(fix);
+  map.easeTo({ center: [fix.lon, fix.lat], zoom: zoomForAccuracy(fix.accuracyMeters, fix.lat), duration: 700 });
+  setLocateStatus(fix.accuracyMeters > 0 ? `Located — accuracy ±${formatAccuracy(fix.accuracyMeters, unitSystem)}.` : 'Located.', true);
+}
+
+function onLocateFailed(error: GeolocationPositionError) {
+  locateButton.classList.remove('busy');
+  if (error.code === PERMISSION_DENIED) geolocationPermission = 'denied';
+  refreshLocateButton();
+  setLocateStatus(locateErrorMessage(error.code));
+}
+
+function setLocationFix(fix: LocationFix | null) {
+  locationFix = fix;
+  const source = map.getSource('location') as GeoJSONSource | undefined;
+  if (source) source.setData(locationGeoJSON(fix));
+  refreshLocateButton();
+}
+
+function refreshLocateButton() {
+  const unavailable = locateUnavailableReason();
+  const located = locationFix !== null;
+  locateButton.classList.toggle('unavailable', unavailable !== null);
+  locateButton.classList.toggle('denied', unavailable === null && geolocationPermission === 'denied');
+  locateButton.classList.toggle('active', unavailable === null && geolocationPermission !== 'denied' && located);
+  const label = locateButtonLabel(unavailable, geolocationPermission, located);
+  locateButton.setAttribute('aria-label', label);
+  locateTooltip.textContent = label;
+}
+
+/** Show a locate message on the status line, leaving unrelated messages intact. */
+function setLocateStatus(message: string, autoClear = false) {
+  window.clearTimeout(locateStatusTimer);
+  const previous = locateStatusText;
+  locateStatusText = message;
+  if (message) {
+    mapStatus.textContent = message;
+    if (autoClear) locateStatusTimer = window.setTimeout(() => { if (locateStatusText === message) setLocateStatus(''); }, LOCATE_STATUS_MS);
+  } else if (mapStatus.textContent === previous) {
+    mapStatus.textContent = '';
+  }
+}
+
 // --- Search bar ---------------------------------------------------------------
 const searchBar = $('search-bar');
 const searchInput = $<HTMLInputElement>('search-input');
@@ -1332,6 +1433,7 @@ function confirmClearAll() {
   nextRouteId = 1;
   history.length = 0;
   future.length = 0;
+  setLocationFix(null);
   if (unitSystem !== defaultUnitSystem()) setUnitSystem(defaultUnitSystem());
   setDocumentName(DEFAULT_MAP_NAME);
   clearWorkspace();

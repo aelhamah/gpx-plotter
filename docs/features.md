@@ -18,6 +18,25 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   and rotating.
 - **Fit to view** control that frames all routes and waypoints.
 
+## My location
+
+- **Locate-me button** directly under the fit control. Pressing it asks the
+  browser for a position, drops a blue dot on the map with a translucent halo
+  sized to the reported accuracy, and eases the camera to the fix — the zoom is
+  picked so the accuracy halo is about 60 px wide (a tight GPS fix zooms in, a
+  coarse one zooms out), capped at zoom 15.
+- **Permission is only requested on click**, never on page load, and the
+  permission state is watched with the Permissions API. The button explains
+  itself: it turns red with a “location blocked — allow it in your browser
+  settings” tooltip once access is denied (a denied site is never re-prompted by
+  the browser), and greys out over plain HTTP or on browsers without geolocation.
+  Every failure — denied, unavailable, timeout — explains itself on the status
+  line instead of failing silently.
+- **Nothing is stored**: the position lives in memory only, is never written to
+  the workspace in `localStorage`, and is dropped by *Clear workspace*.
+- The fix survives basemap swaps (satellite ↔ outdoor) and 3D terrain, since it
+  is re-applied with the rest of the custom layers.
+
 ## Search
 
 - **Map search bar** pinned to the top of the map for finding peaks,
@@ -188,8 +207,8 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   gaps.
 - Icon toolbars with hover tooltips (including shortcut hints such as
   **Undo · ⌘Z**) and segmented button groups.
-- Map controls (fit, terrain, satellite, relief, slope) stacked at the
-  bottom-left; the slope legend at the bottom-right.
+- Map controls (fit, my location, terrain, satellite, relief, slope) stacked at
+  the bottom-left; the slope legend at the bottom-right.
 - Responsive layout tweaks for narrow/mobile viewports.
 
 ## Demo data and quality
@@ -198,8 +217,9 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **139 unit tests** across 16 files covering geodesy, GPX parse/serialize, DEM
+- **160 unit tests** across 17 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
-  geocoding, route merging, workspace storage, the MVT tile decoder,
-  trail/peak snapping, and trail-network routing.
+  geocoding, geolocation (accuracy halo, camera zoom, permission copy), route
+  merging, workspace storage, the MVT tile decoder, trail/peak snapping, and
+  trail-network routing.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

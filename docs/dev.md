@@ -105,6 +105,12 @@ Because the app is map- and DOM-heavy, some checks are manual:
 - Draw a route, drag points, add/move/rename/delete a waypoint, undo/redo.
 - Toggle satellite, terrain, relief, and slope shading (watch for layer loss
   after style swaps).
+- Press the locate button: the browser should prompt for location permission
+  (only on the first press), the blue dot and its accuracy halo should land on
+  the map, and the camera should frame the halo. Block the permission in the
+  browser and press it again — the button turns red and the status line explains
+  how to re-enable it. Over CDP, `Browser.setPermission` +
+  `Emulation.setGeolocationOverride` drive both paths.
 - Check the profile hover trace and the blue dot on the map.
 
 Automated browser probing is possible over the Chrome DevTools Protocol (headless
