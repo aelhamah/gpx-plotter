@@ -395,7 +395,7 @@ Sources and layers:
 | `terrain` | `raster-dem` | MapTiler Terrain-RGB for 3D terrain + hillshade |
 | `slope` | `raster` (`slope://{z}/{x}/{y}`) | Colorized slope-angle shading |
 | `routes` | `geojson` | Route lines (casing + colored line) |
-| `route-arrows` | `geojson` | Direction chevrons at segment midpoints (one per qualifying segment) |
+| `route-arrows` | `geojson` | Direction arrows at segment midpoints (one per qualifying segment) |
 | `snap-preview` | `geojson` | Hover snap preview (dashed line + dot) |
 | `profile-trace` | `geojson` | Highlighted trail up to the hovered profile point |
 | `location` | `geojson` | Device position dot + accuracy halo (`locationFix`) |
@@ -407,27 +407,39 @@ per the feature flags.
 
 **Direction arrows.** `segments.ts` holds the geometry: for each segment it
 computes the midpoint and a bearing in Web Mercator space — the space route lines
-are actually drawn in, so a rotated chevron lines up with the rendered line rather
+are actually drawn in, so a rotated arrow lines up with the rendered line rather
 than the rhumb line through the two points. Bearings wrap across the
 antimeridian. A segment earns an arrow only when it is at least 64 px long on
 screen at the current zoom, so `segmentArrows()` returns fewer arrows as you zoom
 out; `main.ts` recomputes the set on `zoomend`. `arrows.ts` turns that into
 GeoJSON (visible routes only, active route emitted last so it draws on top) and
-owns the `symbol` layer and its canvas chevron icon. Symbols are used rather than
+owns the `symbol` layer and its canvas arrow icon. Symbols are used rather than
 DOM markers so the arrows stay glued to the globe and terrain.
 
-Two details the icon depends on:
+Three details the icon depends on:
 
-- **The chevron is drawn pointing north.** MapLibre renders an icon as authored
+- **The arrow is drawn pointing north.** MapLibre renders an icon as authored
   at `icon-rotate: 0` and turns it clockwise from there, which is the direction
   bearings are measured in, so a north-authored icon makes
   `icon-rotate: ['get', 'bearing']` come out right. An east-authored icon would
   need the 90° offset spelled out in the layer.
 - **One pre-tinted icon per color.** `icon-color` only applies to SDF images, so
-  instead `addArrowImages()` renders a chevron per color (the palette, plus any
+  instead `addArrowImages()` renders an arrow per color (the palette, plus any
   color a route actually carries, in case an import brings its own) and each
-  feature carries an `icon` id. The chevron is filled with the route color and
-  stroked white, because it sits on top of a line of that same color.
+  feature carries an `icon` id. The arrow is filled with the route color and
+  keyed in white, because it sits on top of a line of that same color.
+- **Its proportions come from the route line.** Routes are a 4 px colored line
+  inside an 8 px white casing, so the arrow's shaft is 5 px of that color and the
+  1.5 px white band carries its outer edge to the casing's own 8 px. The arrow
+  then reads as the line swelling into an arrowhead — a plain chevron cannot do
+  that, because its hollow lets the line show through the notch and keylining
+  the notch cuts the line in two. Two consequences: the keyline is stroked
+  *before* the fill so only its outer half survives, and every dimension is
+  authored in on-screen pixels divided by the smallest `icon-size` the layer
+  uses, since a stroke that looks right at full size all but disappears once
+  `icon-size` has scaled the icon down to 0.45. Nothing dims inactive arrows
+  either: route lines are all full opacity, and a translucent arrow would show
+  the casing through its own keyline.
 
 **Custom `slope://` protocol.** `maplibregl.addProtocol('slope', …)` decodes and
 colorizes a DEM tile on demand and returns a PNG. Serving raster tiles through
