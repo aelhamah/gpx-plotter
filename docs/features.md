@@ -30,8 +30,9 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   itself: it turns red with a “location blocked — allow it in your browser
   settings” tooltip once access is denied (a denied site is never re-prompted by
   the browser), and greys out over plain HTTP or on browsers without geolocation.
-  Every failure — denied, unavailable, timeout — explains itself on the status
-  line instead of failing silently.
+  Failures — denied, unavailable, timeout — explain themselves on the status
+  line instead of failing silently; a successful fix says nothing, since the
+  dot, the halo, and the camera move are the feedback.
 - **Nothing is stored**: the position lives in memory only, is never written to
   the workspace in `localStorage`, and is dropped by *Clear workspace*.
 - The fix survives basemap swaps (satellite ↔ outdoor) and 3D terrain, since it
