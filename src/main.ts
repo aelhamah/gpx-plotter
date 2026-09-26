@@ -18,6 +18,7 @@ import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from
 import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
+import { fitPadding } from './fitPadding';
 import './style.css';
 
 let routes: Route[] = [];
@@ -107,6 +108,9 @@ const map = new maplibregl.Map({
   dragRotate: false,
   touchZoomRotate: true,
 });
+
+/** Breathing room `fitBounds` leaves on every edge, before the sidebar is added. */
+const FIT_MARGIN = 80;
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.AttributionControl(), 'bottom-right');
@@ -1213,7 +1217,7 @@ function selectSearchResult(result: GeocodeResult) {
   searchMarker = new maplibregl.Marker({ element }).setLngLat([result.center.lon, result.center.lat]).addTo(map);
   if (result.bbox) {
     const [west, south, east, north] = result.bbox;
-    map.fitBounds(new maplibregl.LngLatBounds([west, south], [east, north]), { padding: 80, duration: 700, maxZoom: 15 });
+    map.fitBounds(new maplibregl.LngLatBounds([west, south], [east, north]), { padding: mapFitPadding(), duration: 700, maxZoom: 15 });
   } else {
     map.jumpTo({ center: [result.center.lon, result.center.lat], zoom: 13 });
   }
@@ -1454,7 +1458,17 @@ function fitPoints(points: { lat: number; lon: number }[]) {
   if (!points.length) return;
   const bounds = new maplibregl.LngLatBounds();
   for (const point of points) bounds.extend([point.lon, point.lat]);
-  map.fitBounds(bounds, { padding: 80, duration: 700, maxZoom: 15 });
+  map.fitBounds(bounds, { padding: mapFitPadding(), duration: 700, maxZoom: 15 });
+}
+
+/**
+ * Breathing room for `fitBounds`, widened by whatever the sidebar covers. The
+ * sidebar floats over the map, so fitting to the full container centres routes
+ * behind it; the covered edge is measured rather than assumed, because the
+ * sidebar is a left column on wide viewports and a bottom sheet under 800px.
+ */
+function mapFitPadding() {
+  return fitPadding(sidebarEl?.getBoundingClientRect() ?? null, map.getContainer().getBoundingClientRect(), FIT_MARGIN);
 }
 
 function fitAll() {

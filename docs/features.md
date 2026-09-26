@@ -16,7 +16,11 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   purple, `45°+` near-black), with an on-map legend. Implemented as a custom
   `slope://` raster protocol so shading stays aligned while panning, tilting,
   and rotating.
-- **Fit to view** control that frames all routes and waypoints.
+- **Fit to view** control that frames all routes and waypoints. Framing accounts
+  for the sidebar, so the route lands centred in the *visible* map rather than
+  half-hidden behind the panel — and it follows the layout, moving the reserved
+  space from the left edge to the bottom when the sidebar becomes a sheet on
+  narrow viewports.
 
 ## My location
 
@@ -66,7 +70,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   shorter "Alamosa, United States").
 - **Fit to location**: selecting a result frames the area — bounding-box fit
   for towns and ranges, a point zoom for peaks — and drops a temporary marker
-  that is cleared by the next search or Esc.
+  that is cleared by the next search or Esc. The fit avoids the sidebar too.
 - Degrades gracefully: blank queries, no matches, and network failures all
   show a quiet empty state instead of errors.
 
