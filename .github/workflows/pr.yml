@@ -29,6 +29,15 @@ jobs:
       ios: ${{ steps.filter.outputs.ios }}
       ios_present: ${{ steps.probe.outputs.present }}
     steps:
+      # Required before the filter, not just for the probe below: on a push event
+      # paths-filter diffs commits with git, so it needs the history. On a
+      # pull_request event it uses the API instead and would have worked without
+      # this, which is why the failure only showed up on main.
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Filter changed paths
         id: filter
         uses: dorny/paths-filter@v3
@@ -45,12 +54,6 @@ jobs:
       # build a tree that does not exist yet. Probing here rather than with
       # hashFiles in the job's own `if` keeps it working, because hashFiles is
       # not available in a job-level condition.
-      - name: Look for the iOS package
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: ios/RouteKit
-          sparse-checkout-cone-mode: false
-
       - name: Record whether ios/RouteKit is present
         id: probe
         env:
@@ -111,19 +114,33 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Fail if a platform job failed
+      - name: Fail if any upstream job failed or was cancelled
         env:
+          CHANGES: ${{ needs.changes.result }}
           WEB: ${{ needs.web.result }}
           IOS: ${{ needs.ios.result }}
         run: |
+          # `changes` has to be checked too. If it fails, both platform jobs are
+          # skipped rather than failed, so a gate that only inspects web/ios
+          # would report success for a run that tested nothing at all.
           status=0
-          if [ "$WEB" = "failure" ] || [ "$IOS" = "failure" ]; then
-            echo "A platform job failed (web=$WEB, ios=$IOS)."
-            status=1
-          elif [ "$WEB" = "cancelled" ] || [ "$IOS" = "cancelled" ]; then
-            echo "A platform job was cancelled (web=$WEB, ios=$IOS)."
-            status=1
+          for job in "changes:$CHANGES" "web:$WEB" "ios:$IOS"; do
+            name=${job%%:*}
+            result=${job#*:}
+            case "$result" in
+              failure)
+                echo "::error::$name failed"
+                status=1
+                ;;
+              cancelled)
+                echo "::error::$name was cancelled"
+                status=1
+                ;;
+            esac
+          done
+          if [ "$status" -eq 0 ]; then
+            echo "All applicable jobs passed (changes=$CHANGES, web=$WEB, ios=$IOS)."
           else
-            echo "OK (web=$WEB, ios=$IOS)."
+            echo "Failed (changes=$CHANGES, web=$WEB, ios=$IOS)."
           fi
           exit "$status"
