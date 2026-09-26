@@ -416,30 +416,23 @@ GeoJSON (visible routes only, active route emitted last so it draws on top) and
 owns the `symbol` layer and its canvas arrow icon. Symbols are used rather than
 DOM markers so the arrows stay glued to the globe and terrain.
 
-Three details the icon depends on:
+Two details the icon depends on:
 
-- **The arrow is drawn pointing north.** MapLibre renders an icon as authored
+- **The chevron is drawn pointing north.** MapLibre renders an icon as authored
   at `icon-rotate: 0` and turns it clockwise from there, which is the direction
   bearings are measured in, so a north-authored icon makes
   `icon-rotate: ['get', 'bearing']` come out right. An east-authored icon would
   need the 90° offset spelled out in the layer.
 - **One pre-tinted icon per color.** `icon-color` only applies to SDF images, so
-  instead `addArrowImages()` renders an arrow per color (the palette, plus any
+  instead `addArrowImages()` renders a chevron per color (the palette, plus any
   color a route actually carries, in case an import brings its own) and each
-  feature carries an `icon` id. The arrow is filled with the route color and
-  keyed in white, because it sits on top of a line of that same color.
-- **Its proportions come from the route line.** Routes are a 4 px colored line
-  inside an 8 px white casing, so the arrow's shaft is 5 px of that color and the
-  1.5 px white band carries its outer edge to the casing's own 8 px. The arrow
-  then reads as the line swelling into an arrowhead — a plain chevron cannot do
-  that, because its hollow lets the line show through the notch and keylining
-  the notch cuts the line in two. Two consequences: the keyline is stroked
-  *before* the fill so only its outer half survives, and every dimension is
-  authored in on-screen pixels divided by the smallest `icon-size` the layer
-  uses, since a stroke that looks right at full size all but disappears once
-  `icon-size` has scaled the icon down to 0.45. Nothing dims inactive arrows
-  either: route lines are all full opacity, and a translucent arrow would show
-  the casing through its own keyline.
+  feature carries an `icon` id. The chevron is filled with the route color and
+  stroked with nothing: it sits on a line of that same color, so a contrasting
+  keyline only ever cut the line in two. The notch is what lets it read as part
+  of the route — the line shows through it — and the chevron is drawn a shade
+  wider than the 4 px line so the flare past the line is visible at a glance.
+  Nothing dims inactive arrows either: route lines are all full opacity, and a
+  translucent arrow would read as a rendering glitch rather than a quieter route.
 
 **Custom `slope://` protocol.** `maplibregl.addProtocol('slope', …)` decodes and
 colorizes a DEM tile on demand and returns a PNG. Serving raster tiles through
