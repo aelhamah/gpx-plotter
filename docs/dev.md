@@ -68,6 +68,7 @@ tests/
   merge.test.ts      route merge orientation + seam overlap reduction
   simplify.test.ts   downsampling + distance-based budget
   style.test.ts      pointer-events layering in style.css
+  fitPadding.test.ts sidebar-aware fitBounds padding
 ```
 
 Guidelines:

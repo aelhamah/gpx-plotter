@@ -42,6 +42,7 @@ src/mvt.ts            Minimal MapTiler vector tile (MVT) decoder
 src/snap.ts           Pure snapping math (points → trails / peaks)
 src/snapSources.ts    Trail + peak tile fetching and caching for snapping
 src/trailGraph.ts     Shortest-path routing along a trail network
+src/fitPadding.ts     Pure: how much of the map the sidebar covers, per edge
 src/geocode.ts        MapTiler geocoding search (peaks, towns, trails, trailheads)
 src/locate.ts         Pure geolocation math: accuracy halo, camera zoom, permission copy
 src/merge.ts          Route merging: join two routes at nearest endpoints, trim seam overlap
@@ -227,6 +228,20 @@ Pure fetch/parse, no DOM or MapLibre:
 handling, and `selectSearchResult()`, which frames the map (`fitBounds` when the
 feature has a `bbox`, otherwise a point zoom) and shows a temporary, non-waypoint
 marker.
+
+### `src/fitPadding.ts` — fitting around the sidebar (pure)
+
+The sidebar floats over a full-bleed map, so a symmetric `fitBounds` padding
+centres routes *behind* it. `sidebarInsets(sidebarRect, containerRect)` measures
+how far in from each map edge the sidebar reaches, and `fitPadding(...)` adds the
+usual 80px margin on top. `main.ts`'s `mapFitPadding()` supplies the two live
+rects and feeds every `fitBounds` call (the fit control, GPX import, and search
+results).
+
+The covered edge is measured rather than assumed because the sidebar changes
+shape: a 330px column on the left on wide viewports, a full-width sheet along
+the bottom (up to 46vh) under 800px. A hard-coded left inset would be wrong in
+the narrow layout, which is why the issue this fixes looked intermittent.
 
 ### `src/simplify.ts` — importing large tracks
 
@@ -440,7 +455,8 @@ placeholder.
   relative so the bundle works on GitHub Pages project sites.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
   `colors`, `names`, `merge`, `simplify`, `config`, `storage`, `mvt`, `snap`,
-  `snapSources`, `trailGraph`, `locate`).
+  `snapSources`, `trailGraph`, `locate`, `fitPadding`) plus a `style.test.ts`
+  guard on the stylesheet's `pointer-events` layering.
 - CI (`.github/workflows/pr.yml`) builds and tests on pushes/PRs.
 - Deployment (`.github/workflows/deploy.yml`) publishes the main build to the
   `gh-pages` branch root on pushes to `main`; GitHub Pages serves that branch.
