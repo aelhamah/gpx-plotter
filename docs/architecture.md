@@ -51,6 +51,8 @@ web/                  The browser app — a self-contained Vite project
   src/snap.ts         Pure snapping math (points → trails / peaks)
   src/snapSources.ts  Trail + peak tile fetching and caching for snapping
   src/trailGraph.ts   Shortest-path routing along a trail network
+  src/segments.ts     Pure: per-segment bearing + midpoint, screen-space thinning
+  src/arrows.ts       Direction-arrow icon, GeoJSON builder, and symbol layer spec
   src/fitPadding.ts   Pure: how much of the map the sidebar covers, per edge
   src/geocode.ts      MapTiler geocoding search (peaks, towns, trails, trailheads)
   src/locate.ts       Pure geolocation math: accuracy halo, camera zoom, permission copy
@@ -367,13 +369,26 @@ Sources and layers:
 | `terrain` | `raster-dem` | MapTiler Terrain-RGB for 3D terrain + hillshade |
 | `slope` | `raster` (`slope://{z}/{x}/{y}`) | Colorized slope-angle shading |
 | `routes` | `geojson` | Route lines (casing + colored line) |
+| `route-arrows` | `geojson` | Direction chevrons at segment midpoints (one per qualifying segment) |
 | `snap-preview` | `geojson` | Hover snap preview (dashed line + dot) |
 | `profile-trace` | `geojson` | Highlighted trail up to the hovered profile point |
 | `location` | `geojson` | Device position dot + accuracy halo (`locationFix`) |
 
-Layer order: `slope-shading` → `route-casing` → `route-line` → `profile-trace`
-→ `relief` (hillshade) → `location-accuracy` → `location-halo` →
-`location-dot`. Visibility is toggled per the feature flags.
+Layer order: `slope-shading` → `route-casing` → `route-line` → `route-points`
+→ `route-arrows` → `profile-trace` → `relief` (hillshade) →
+`location-accuracy` → `location-halo` → `location-dot`. Visibility is toggled
+per the feature flags.
+
+**Direction arrows.** `segments.ts` holds the geometry: for each segment it
+computes the midpoint and a bearing in Web Mercator space — the space route lines
+are actually drawn in, so a rotated chevron lines up with the rendered line rather
+than the rhumb line through the two points. Bearings wrap across the
+antimeridian. A segment earns an arrow only when it is at least 64 px long on
+screen at the current zoom, so `segmentArrows()` returns fewer arrows as you zoom
+out; `main.ts` recomputes the set on `zoomend`. `arrows.ts` turns that into
+GeoJSON (visible routes only, active route emitted last so it draws on top) and
+owns the `symbol` layer and its canvas chevron icon. Symbols are used rather than
+DOM markers so the arrows stay glued to the globe and terrain.
 
 **Custom `slope://` protocol.** `maplibregl.addProtocol('slope', …)` decodes and
 colorizes a DEM tile on demand and returns a PNG. Serving raster tiles through
@@ -471,8 +486,8 @@ placeholder.
   relative so the bundle works on GitHub Pages project sites.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
   `colors`, `names`, `merge`, `simplify`, `config`, `storage`, `mvt`, `snap`,
-  `snapSources`, `trailGraph`, `locate`, `fitPadding`) plus a `style.test.ts`
-  guard on the stylesheet's `pointer-events` layering.
+  `snapSources`, `trailGraph`, `segments`, `arrows`, `locate`, `fitPadding`) plus
+  a `style.test.ts` guard on the stylesheet's `pointer-events` layering.
 - CI (`.github/workflows/pr.yml`) picks the jobs to run from the paths a change
   touches: a `web/` change builds and tests the browser app, an `ios/` change
   builds and tests the native app, and a workflow change runs both. A final
