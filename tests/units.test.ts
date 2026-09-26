@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { defaultUnitSystem, formatAccuracy, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from '../src/units';
+import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from '../src/units';
 
 describe('formatDistance', () => {
   it('formats miles vs kilometers', () => {
@@ -35,20 +35,5 @@ describe('formatDistanceAxis', () => {
 describe('defaultUnitSystem', () => {
   it('always resolves to a valid unit system', () => {
     expect(['metric', 'imperial']).toContain(defaultUnitSystem());
-  });
-});
-
-describe('formatAccuracy', () => {
-  it('uses feet/meters for tight fixes', () => {
-    expect(formatAccuracy(20, 'imperial')).toBe('66 ft');
-    expect(formatAccuracy(20, 'metric')).toBe('20 m');
-  });
-  it('switches to miles/kilometers for coarse fixes', () => {
-    expect(formatAccuracy(5000, 'imperial')).toBe('3.1 mi');
-    expect(formatAccuracy(5000, 'metric')).toBe('5.0 km');
-  });
-  it('handles a missing accuracy', () => {
-    expect(formatAccuracy(0, 'metric')).toBe('—');
-    expect(formatAccuracy(Number.NaN, 'imperial')).toBe('—');
   });
 });

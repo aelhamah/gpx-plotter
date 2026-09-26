@@ -29,11 +29,3 @@ export function formatDistanceAxis(meters: number, system: UnitSystem): string {
   const value = system === 'imperial' ? metersToMiles(meters) : metersToKm(meters);
   return value < 10 ? value.toFixed(1) : Math.round(value).toString();
 }
-
-/** Position accuracy radius: metres/feet while it is small, km/miles once it is not. */
-export function formatAccuracy(meters: number, system: UnitSystem): string {
-  if (!Number.isFinite(meters) || meters <= 0) return '—';
-  return system === 'imperial'
-    ? (meters < 1609.344 ? `${Math.round(metersToFeet(meters))} ft` : `${metersToMiles(meters).toFixed(1)} mi`)
-    : (meters < 1000 ? `${Math.round(meters)} m` : `${metersToKm(meters).toFixed(1)} km`);
-}

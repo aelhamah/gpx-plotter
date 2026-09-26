@@ -10,7 +10,7 @@ import { PERMISSION_DENIED, locateButtonLabel, locateErrorMessage, locateUnavail
 import { mergeRoutePoints } from './merge';
 import { DOWNSAMPLE_PROMPT_THRESHOLD, defaultPointBudget, downsamplePoints } from './simplify';
 import { DEM_MAX_ZOOM, elevationAt, slopeBandColorHex, slopeCanvasForTile } from './dem';
-import { defaultUnitSystem, formatAccuracy, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
+import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation, formatSlope } from './units';
 import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
@@ -1034,10 +1034,8 @@ const locateButton = $('locate-me');
 const locateTooltip = locateButton.nextElementSibling as HTMLElement;
 const LOCATE_TIMEOUT_MS = 15000;
 const LOCATE_MAX_AGE_MS = 30000;
-const LOCATE_STATUS_MS = 4000;
 let geolocationPermission: LocatePermission = 'prompt';
 let locateStatusText = '';
-let locateStatusTimer: number | undefined;
 
 locateButton.addEventListener('click', locateMe);
 watchGeolocationPermission();
@@ -1067,12 +1065,13 @@ function locateMe() {
   navigator.geolocation.getCurrentPosition(onLocated, onLocateFailed, { enableHighAccuracy: true, timeout: LOCATE_TIMEOUT_MS, maximumAge: LOCATE_MAX_AGE_MS });
 }
 
+/** A successful fix is its own feedback: the dot lands on the map and the camera moves. */
 function onLocated(position: GeolocationPosition) {
   locateButton.classList.remove('busy');
   const fix: LocationFix = { lon: position.coords.longitude, lat: position.coords.latitude, accuracyMeters: position.coords.accuracy, at: position.timestamp };
   setLocationFix(fix);
   map.easeTo({ center: [fix.lon, fix.lat], zoom: zoomForAccuracy(fix.accuracyMeters, fix.lat), duration: 700 });
-  setLocateStatus(fix.accuracyMeters > 0 ? `Located — accuracy ±${formatAccuracy(fix.accuracyMeters, unitSystem)}.` : 'Located.', true);
+  setLocateStatus('');
 }
 
 function onLocateFailed(error: GeolocationPositionError) {
@@ -1080,6 +1079,17 @@ function onLocateFailed(error: GeolocationPositionError) {
   if (error.code === PERMISSION_DENIED) geolocationPermission = 'denied';
   refreshLocateButton();
   setLocateStatus(locateErrorMessage(error.code));
+}
+
+/**
+ * Show a locate failure on the status line. Passing `''` clears it again — a
+ * later successful fix should not leave a stale error behind — but only when the
+ * line still holds our own message, so another subsystem's error survives.
+ */
+function setLocateStatus(message: string) {
+  if (mapStatus.textContent === locateStatusText) mapStatus.textContent = '';
+  locateStatusText = message;
+  if (message) mapStatus.textContent = message;
 }
 
 function setLocationFix(fix: LocationFix | null) {
@@ -1098,19 +1108,6 @@ function refreshLocateButton() {
   const label = locateButtonLabel(unavailable, geolocationPermission, located);
   locateButton.setAttribute('aria-label', label);
   locateTooltip.textContent = label;
-}
-
-/** Show a locate message on the status line, leaving unrelated messages intact. */
-function setLocateStatus(message: string, autoClear = false) {
-  window.clearTimeout(locateStatusTimer);
-  const previous = locateStatusText;
-  locateStatusText = message;
-  if (message) {
-    mapStatus.textContent = message;
-    if (autoClear) locateStatusTimer = window.setTimeout(() => { if (locateStatusText === message) setLocateStatus(''); }, LOCATE_STATUS_MS);
-  } else if (mapStatus.textContent === previous) {
-    mapStatus.textContent = '';
-  }
 }
 
 // --- Search bar ---------------------------------------------------------------

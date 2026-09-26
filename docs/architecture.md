@@ -256,7 +256,7 @@ marker.
 
 - `units.ts`: `defaultUnitSystem()` (imperial for `US` locales, else metric) and
   all formatting (`formatDistance`, `formatElevation`, `formatSlope`,
-  `formatDistanceAxis`, `formatAccuracy`).
+  `formatDistanceAxis`).
 - `colors.ts`: the deterministic `ROUTE_COLORS` palette (`routeColorForId`) and
   `TRACE_COLOR` for the profile hover trace.
 - `names.ts`: `normalizeRouteName` / `normalizeWaypointName` fallbacks.
@@ -278,17 +278,19 @@ No DOM, no MapLibre, so all of it is unit-testable:
   (`156543.03392 · cos(lat) / 2^zoom` meters per pixel); a missing accuracy
   falls back to 30 m.
 - `locateErrorMessage(code)` / `locateUnavailableMessage(reason)` /
-  `locateButtonLabel(unavailable, permission, located)` — the status-line and
-  tooltip copy. Denied permission gets explicit instructions because browsers do
-  not re-prompt a denied site.
+  `locateButtonLabel(unavailable, permission, located)` — the error and tooltip
+  copy. Denied permission gets explicit instructions because browsers do not
+  re-prompt a denied site.
 
 `main.ts` owns the browser interaction: the permission watch (Permissions API,
-click-only requests), `getCurrentPosition`, `easeTo` to the fix, the
-`busy`/`denied`/`unavailable`/`active` button states, and `setLocateStatus()`,
-which writes to `#map-status` only while the message is still its own, so it
-never clobbers another subsystem's error. `locationFix` is deliberately outside
-`AppState` and `persistWorkspace()` — device position is never saved or
-undoable.
+click-only requests), `getCurrentPosition`, `easeTo` to the fix, and the
+`busy`/`denied`/`unavailable`/`active` button states. A successful fix is silent
+— the dot, the halo, and the camera move are the feedback — while failures write
+to `#map-status` like every other error in the app. `setLocateStatus('')` on
+success drops a stale locate error, but only when the line still holds our own
+message, so another subsystem's error is never clobbered. `locationFix` is
+deliberately outside `AppState` and `persistWorkspace()` — device position is
+never saved or undoable.
 
 ## 5. Data model
 
