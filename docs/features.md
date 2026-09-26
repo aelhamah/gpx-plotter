@@ -204,7 +204,9 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `<metadata><name>` written into the file (restored on re-import). Importing a
   GPX pre-fills it from the file's metadata name or filename.
 - Translucent, blurred sidebar floating over a full-bleed map with click-through
-  gaps.
+  gaps. The gaps cover text-only blocks (the title, hints, stat labels) so the
+  map can be dragged underneath them; real controls such as the Metric/Imperial
+  toggle stay clickable.
 - Icon toolbars with hover tooltips (including shortcut hints such as
   **Undo · ⌘Z**) and segmented button groups.
 - Map controls (fit, my location, terrain, satellite, relief, slope) stacked at

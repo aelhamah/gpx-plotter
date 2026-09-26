@@ -12,6 +12,10 @@ body { overflow: hidden; }
 .sidebar > * { pointer-events: auto; }
 .sidebar #map-status:empty { display: none; }
 .sidebar .brand, .sidebar #map-status, .sidebar .help, .sidebar .stats { pointer-events: none; }
+/* The brand block is click-through so the map can be dragged under the title,
+   but the units toggle inside it is a real control — `pointer-events` inherits,
+   so it has to opt back in or dragging/pressing lands on the map instead. */
+.sidebar .brand .units-toggle { pointer-events: auto; }
 .brand h1 { font-size: 22px; margin: 0 0 3px; letter-spacing: -0.02em; }
 .brand p { margin: 0; color: #737373; font-size: 13px; }
 .toolbar { display: flex; align-items: stretch; gap: 8px; }
