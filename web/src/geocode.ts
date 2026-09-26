@@ -1,4 +1,5 @@
 import { MAPTILER_API_KEY } from './config';
+import { reportServiceFailure } from './serviceStatus';
 
 /**
  * Place types the app surfaces in search: municipalities, towns, peaks/POIs,
@@ -167,10 +168,16 @@ export async function geocode(query: string, options: GeocodeOptions = {}): Prom
   if (!query.trim()) return [];
   try {
     const response = await fetch(geocodeUrl(query, options));
-    if (!response.ok) return [];
+    if (!response.ok) {
+      // An empty result list and a dead endpoint look the same to the caller,
+      // which would have the UI claim nothing matched a query it never sent.
+      reportServiceFailure('search', `geocoding request failed with ${response.status}`);
+      return [];
+    }
     const data: { features?: RawFeature[] } = (await response.json()) as { features?: RawFeature[] };
     return (data.features ?? []).flatMap((feature) => normalizeFeature(feature) ?? []);
-  } catch {
+  } catch (error) {
+    reportServiceFailure('search', error instanceof Error ? error.message : String(error));
     return [];
   }
 }

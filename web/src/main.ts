@@ -19,6 +19,7 @@ import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, 
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
+import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
 import './style.css';
 
@@ -52,6 +53,7 @@ const future: AppState[] = [];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
+const serviceStatus = new ServiceStatus($('service-banner'));
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
@@ -167,7 +169,24 @@ map.on('moveend', () => {
 // the set has to be recomputed whenever the zoom changes.
 map.on('zoomend', () => refreshRouteArrowLayer());
 
+// MapLibre raises one `error` event for every failed style, tile and terrain
+// request, and the app stays perfectly usable without any of them — so this is
+// the only place that can tell the user the map is empty because a service is
+// down rather than because their route is.
+map.on('error', (event) => {
+  const message = event.error instanceof Error ? event.error.message : String(event.error);
+  const kind = classifyServiceFailure(message);
+  if (kind) serviceStatus.report(kind, message);
+});
+
+// DEM tiles and geocoding fetch outside MapLibre and report their own failures.
+onServiceFailure((issue) => serviceStatus.report(issue.kind, issue.detail, issue.rateLimited));
+
 map.on('style.load', () => {
+  // The style answering means the basemap is back; per-tile noise from before
+  // it recovered is no longer true.
+  serviceStatus.resolve('style');
+  serviceStatus.resolve('basemap');
   addDataLayers();
   applyGlobe();
   applyTerrain();
@@ -351,6 +370,12 @@ async function refreshRouteStats() {
 
   routeProfile = profile;
   routeStats = summarizeProfile(profile);
+  // Terrain answering again clears any earlier report. The failure itself is
+  // reported by `elevationAt`, which is the only thing that can actually know
+  // whether a sample is missing because the service is down or the GPX had no
+  // elevation; guessing from the profile here just flashes a warning whenever
+  // the first samples have not come back yet.
+  if (profile.some((point) => Number.isFinite(point.elevation))) serviceStatus.resolve('elevation');
   updateUI();
   drawProfileChart();
 }

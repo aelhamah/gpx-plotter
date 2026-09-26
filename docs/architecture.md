@@ -55,6 +55,7 @@ web/                  The browser app — a self-contained Vite project
   src/arrows.ts       Direction-arrow icon, GeoJSON builder, and symbol layer spec
   src/fitPadding.ts   Pure: how much of the map the sidebar covers, per edge
   src/geocode.ts      MapTiler geocoding search (peaks, towns, trails, trailheads)
+  src/serviceStatus.ts  Names the service behind a failure and renders the banner
   src/locate.ts       Pure geolocation math: accuracy halo, camera zoom, permission copy
   src/merge.ts        Route merging: join two routes at nearest endpoints, trim seam overlap
   src/simplify.ts     Track downsampling (import of large files)
@@ -147,6 +148,31 @@ Pure math, no DOM:
   avalanche bands (`<20°`, `20–30°`, `30–35°`, `35–40°`, `40–45°`, `45°+`).
 - Decoding tries `createImageBitmap` first and falls back to an `<img>` for
   engines that cannot decode WebP bitmaps.
+- A failed tile reports through `reportServiceFailure('elevation', …)`, which is
+  how the sidebar banner learns that terrain is gone.
+
+### `web/src/serviceStatus.ts` — Naming the service that failed
+
+Everything remote here is optional in a way that hides its own failure: the
+basemap is one style URL, elevation is a DEM tile per point, search is one
+geocoding call. When one dies the app keeps working and simply shows a blank
+map, a row of em dashes, and a profile that never draws — indistinguishable from
+a bug in the app, with nothing for the user to act on.
+
+- `classifyServiceFailure(message)` maps a failure to `style`, `basemap`,
+  `elevation` or `search` by the URL it mentions, and returns `null` for
+  anything else. MapLibre funnels style, tile and terrain-source failures through
+  one `error` event that still carries the failing URL, so `main.ts` needs a
+  single handler; DEM and geocoding fetch their own URLs and report through
+  `reportServiceFailure` instead, which keeps the DOM out of both modules.
+- `summarizeServices(issues)` collapses the current failures into one sentence,
+  loudest first — a dead style subsumes terrain and search, so it leads. A 429
+  additionally says the free plan ran out of request volume and should recover.
+- `ServiceStatus` holds which services are unhappy and renders `#service-banner`.
+  It clears a service the moment it answers again (`style.load` for the basemap,
+  a profile with elevations for terrain), so a rate limit that lifts leaves
+  nothing behind. Only real failures are shown: MapLibre raises errors for
+  plenty of local trouble the user cannot act on.
 
 ### `web/src/mvt.ts` — MapTiler vector tile decoding
 
