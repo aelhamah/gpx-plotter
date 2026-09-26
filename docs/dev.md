@@ -122,8 +122,8 @@ behavior of skipping preview deploys for forks.
    it affects the document, include it in `snapshot()`.
 3. **Render.** Update the relevant `refresh*` function so the map/list stays in
    sync, and call `commitSnapshot()` before mutating.
-4. **UI.** Add markup to `index.html` and styles to `style.css`; keep icon
-   buttons wrapped in `.icon-button-wrap` so tooltips work.
+4. **UI.** Add markup to `web/index.html` and styles to `web/src/style.css`; keep
+   icon buttons wrapped in `.icon-button-wrap` so tooltips work.
 5. **Empty states.** Update `updateUI()` / `fillRouteList()` for the empty case.
 6. **Verify.** `npm run build && npm test`, then try it in the browser.
 
