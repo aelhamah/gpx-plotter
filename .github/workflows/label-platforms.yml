@@ -44,9 +44,10 @@ jobs:
           # failure surfaces here instead of as a confusing "label not found"
           # from the step below.
           ensure() {
-            if ! gh label list --repo "$REPO" --limit 100 --json name \
-              --jq '.[].name' | grep -qx "$1"; then
-              gh label create "$1" --repo "$REPO" --color "$2" --description "$3"
+            if ! gh api "repos/$REPO/labels" --paginate --jq '.[].name' \
+              | grep -qx "$1"; then
+              gh api --method POST "repos/$REPO/labels" \
+                -f "name=$1" -f "color=$2" -f "description=$3" > /dev/null
             fi
           }
           ensure web 1D76DB "Touches the web app in web/"
@@ -60,19 +61,27 @@ jobs:
           WEB: ${{ steps.filter.outputs.web }}
           IOS: ${{ steps.filter.outputs.ios }}
         run: |
-          # --repo is required: `gh` otherwise infers the repository from the git
-          # checkout, and this job deliberately has none, since checking out pull
-          # request code under pull_request_target would expose repo secrets.
+          # Everything goes through `gh api` against an explicit repository path
+          # rather than `gh pr edit`, because `gh pr edit` shells out to git to
+          # infer the repository and this job deliberately has no checkout —
+          # checking out pull request code under pull_request_target would expose
+          # repository secrets to it.
           #
           # Move each label to the state this push actually implies, rather than
           # only ever adding, so a PR that stops touching ios loses the label.
-          if [ "$WEB" = "true" ]; then
-            gh pr edit "$PR" --repo "$REPO" --add-label web > /dev/null
-          else
-            gh pr edit "$PR" --repo "$REPO" --remove-label web > /dev/null 2>&1 || true
-          fi
-          if [ "$IOS" = "true" ]; then
-            gh pr edit "$PR" --repo "$REPO" --add-label ios > /dev/null
-          else
-            gh pr edit "$PR" --repo "$REPO" --remove-label ios > /dev/null 2>&1 || true
-          fi
+          sync() {
+            if [ "$2" = "true" ]; then
+              # The labels endpoint wants a JSON array, which -f cannot express,
+              # so the body is piped in as JSON.
+              printf '{"labels":["%s"]}' "$1" \
+                | gh api --method POST "repos/$REPO/issues/$PR/labels" \
+                    --input - > /dev/null
+            else
+              # 404s when the label is not on the PR, which is the desired end
+              # state anyway, so a missing label is not an error.
+              gh api --method DELETE "repos/$REPO/issues/$PR/labels/$1" \
+                > /dev/null 2>&1 || true
+            fi
+          }
+          sync web "$WEB"
+          sync ios "$IOS"
