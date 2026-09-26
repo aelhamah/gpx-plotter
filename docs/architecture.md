@@ -2,7 +2,8 @@
 
 This document describes the full architecture of the GPX Route Plotter: how the
 code is organized, how state flows through the app, and how the map, terrain,
-and elevation features are implemented.
+and elevation features are implemented. It covers the web app in `web/`; the
+planned native iOS app has its own document, [`ios-plan.md`](ios-plan.md).
 
 ## 1. Overview
 
@@ -30,36 +31,50 @@ Consequences:
 | Tests | Vitest + jsdom |
 | Deployment | GitHub Pages via GitHub Actions |
 
+This table is the **web** stack only. The iOS app is planned as a native
+SwiftUI + MapLibre Native app — see [`ios-plan.md`](ios-plan.md).
+
 ## 3. Repository layout
 
+The repository holds two products that share a data format but nothing else.
+Each is self-contained under its own top-level directory, and CI decides which
+one to build from the files a pull request touches.
+
 ```
-index.html            Static shell: sidebar, map container, controls, dialogs
-src/main.ts           Application hub: map, state, DOM wiring, markers, chart
-src/gpx.ts            GPX parse + serialize, core data types
-src/geo.ts            Geodesy, elevation stats, route resampling, chart math
-src/dem.ts            MapTiler Terrain-RGB decoding + slope raster generation
-src/mvt.ts            Minimal MapTiler vector tile (MVT) decoder
-src/snap.ts           Pure snapping math (points → trails / peaks)
-src/snapSources.ts    Trail + peak tile fetching and caching for snapping
-src/trailGraph.ts     Shortest-path routing along a trail network
-src/fitPadding.ts     Pure: how much of the map the sidebar covers, per edge
-src/geocode.ts        MapTiler geocoding search (peaks, towns, trails, trailheads)
-src/locate.ts         Pure geolocation math: accuracy halo, camera zoom, permission copy
-src/merge.ts          Route merging: join two routes at nearest endpoints, trim seam overlap
-src/simplify.ts       Track downsampling (import of large files)
-src/units.ts          Metric/imperial defaults + formatting
-src/colors.ts         Route color palette + profile trace color
-src/names.ts          Fallback names for routes and waypoints
-src/config.ts         MapTiler URLs, API key, default camera
-src/style.css         All styling (glass sidebar, toolbars, markers, dialogs)
-public/demos/*.gpx    Sample tracks (e.g. a 13k-point hike)
-tests/*.test.ts       Unit tests for the pure modules
-docs/                 This document, the feature list, and the dev guide
+web/                  The browser app — a self-contained Vite project
+  index.html          Static shell: sidebar, map container, controls, dialogs
+  src/main.ts         Application hub: map, state, DOM wiring, markers, chart
+  src/gpx.ts          GPX parse + serialize, core data types
+  src/geo.ts          Geodesy, elevation stats, route resampling, chart math
+  src/dem.ts          MapTiler Terrain-RGB decoding + slope raster generation
+  src/mvt.ts          Minimal MapTiler vector tile (MVT) decoder
+  src/snap.ts         Pure snapping math (points → trails / peaks)
+  src/snapSources.ts  Trail + peak tile fetching and caching for snapping
+  src/trailGraph.ts   Shortest-path routing along a trail network
+  src/fitPadding.ts   Pure: how much of the map the sidebar covers, per edge
+  src/geocode.ts      MapTiler geocoding search (peaks, towns, trails, trailheads)
+  src/locate.ts       Pure geolocation math: accuracy halo, camera zoom, permission copy
+  src/merge.ts        Route merging: join two routes at nearest endpoints, trim seam overlap
+  src/simplify.ts     Track downsampling (import of large files)
+  src/units.ts        Metric/imperial defaults + formatting
+  src/colors.ts       Route color palette + profile trace color
+  src/names.ts        Fallback names for routes and waypoints
+  src/config.ts       MapTiler URLs, API key, default camera
+  src/style.css       All styling (glass sidebar, toolbars, markers, dialogs)
+  public/demos/*.gpx  Sample tracks (e.g. a 13k-point hike)
+  tests/*.test.ts     Unit tests for the pure modules
+ios/                  The native iOS app (planned — see docs/ios-plan.md)
+docs/                 This document, the feature list, the dev guide, the iOS plan
 ```
+
+`web/` is the Vite project root, so `npm` commands run from inside it and
+`base: './'` still emits relative asset URLs. `.gitignore` needs no per-directory
+entries because `node_modules/` and `dist/` have no leading slash and therefore
+match at any depth.
 
 ## 4. Module responsibilities
 
-### `src/main.ts` — the application hub
+### `web/src/main.ts` — the application hub
 
 This is intentionally the largest file. It owns everything that touches the DOM
 or the map and coordinates the pure modules:
@@ -80,7 +95,7 @@ or the map and coordinates the pure modules:
 - **Stats & profile**: resamples the active route, fills DEM elevations, writes
   the sidebar numbers, and draws the elevation chart to a canvas.
 
-### `src/storage.ts` — workspace persistence
+### `web/src/storage.ts` — workspace persistence
 
 No DOM, no map access. Reads and writes the whole workspace as a versioned JSON
 blob under a single `localStorage` key:
@@ -92,7 +107,7 @@ blob under a single `localStorage` key:
 - `clearWorkspace()` forgets the saved state (used by the "Clear" flow).
 - All calls degrade gracefully when `localStorage` is unavailable or full.
 
-### `src/gpx.ts` — GPX parsing and serialization
+### `web/src/gpx.ts` — GPX parsing and serialization
 
 - Defines the core types: `RoutePoint`, `Route`, `Waypoint`, `ParsedGPX`.
 - `parseGPX(xml)` reads `<trk>/<trkseg>/<trkpt>`, falls back to `<rte>/<rtept>`,
@@ -105,7 +120,7 @@ blob under a single `localStorage` key:
   name) so the map name round-trips through re-import. That creator string is
   later used on import to detect files produced by this app.
 
-### `src/geo.ts` — geodesy and profiles
+### `web/src/geo.ts` — geodesy and profiles
 
 Pure math, no DOM:
 
@@ -120,7 +135,7 @@ Pure math, no DOM:
 - `metersToMiles` / `metersToFeet` / `metersToKm`, `colorToAlpha`, and
   Mercator helpers.
 
-### `src/dem.ts` — Terrain-RGB decoding and slope shading
+### `web/src/dem.ts` — Terrain-RGB decoding and slope shading
 
 - `elevationAt(lng, lat)` — bilinear terrain elevation in meters at any point,
   decoded client-side from MapTiler Terrain-RGB tiles
@@ -131,7 +146,7 @@ Pure math, no DOM:
 - Decoding tries `createImageBitmap` first and falls back to an `<img>` for
   engines that cannot decode WebP bitmaps.
 
-### `src/mvt.ts` — MapTiler vector tile decoding
+### `web/src/mvt.ts` — MapTiler vector tile decoding
 
 A small, dependency-free Mapbox Vector Tile decoder for the two tilesets used in
 snapping:
@@ -148,7 +163,7 @@ snapping:
   converts a point from tile coordinates to geodetic `{ lon, lat }` at the tile's
   (x, y, z).
 
-### `src/snap.ts` — snapping math (pure)
+### `web/src/snap.ts` — snapping math (pure)
 
 No I/O or DOM. Given `(lng, lat)` and a set of candidate geometries, finds the
 best snap target:
@@ -164,7 +179,7 @@ best snap target:
 - `TRAIL_FOLLOW_METERS = 15` — the tighter radius within which the route is
   allowed to run *along* the trail (see `trailGraph`).
 
-### `src/trailGraph.ts` — routing along trails (pure)
+### `web/src/trailGraph.ts` — routing along trails (pure)
 
 Given the polylines near a click, finds the shortest chain of trail vertices
 between two snapped points so the route hugs the trail:
@@ -179,7 +194,7 @@ between two snapped points so the route hugs the trail:
 - `TRAIL_MAX_DETOUR` (4×) rejects anything that wanders far more than a straight
   line (or is unreachable), returning `null` so the caller draws straight.
 
-### `src/snapSources.ts` — trail & peak tile sourcing
+### `web/src/snapSources.ts` — trail & peak tile sourcing
 
 Fetches and caches the vector tiles the snap layers need:
 
@@ -196,7 +211,7 @@ Fetches and caches the vector tiles the snap layers need:
   96-tile LRU cache (planet tiles are reused between trails and peaks).
 - Any fetch/decode failure degrades to `[]` so drawing always works offline.
 
-### `src/geocode.ts` — geocoding search
+### `web/src/geocode.ts` — geocoding search
 
 Pure fetch/parse, no DOM or MapLibre:
 
@@ -229,7 +244,7 @@ handling, and `selectSearchResult()`, which frames the map (`fitBounds` when the
 feature has a `bbox`, otherwise a point zoom) and shows a temporary, non-waypoint
 marker.
 
-### `src/fitPadding.ts` — fitting around the sidebar (pure)
+### `web/src/fitPadding.ts` — fitting around the sidebar (pure)
 
 The sidebar floats over a full-bleed map, so a symmetric `fitBounds` padding
 centres routes *behind* it. `sidebarInsets(sidebarRect, containerRect)` measures
@@ -244,6 +259,7 @@ the bottom (up to 46vh) under 800px. A hard-coded left inset would be wrong in
 the narrow layout, which is why the issue this fixes looked intermittent.
 
 ### `src/simplify.ts` — importing large tracks
+### `web/src/simplify.ts` — importing large tracks
 
 - `downsamplePoints(points, maxPoints)` — thins a dense track by walking it and
   keeping a point only once it is at least `threshold` from the last kept point,
@@ -256,7 +272,7 @@ the narrow layout, which is why the issue this fixes looked intermittent.
   suggested downsampling scales with route length.
 - `DOWNSAMPLE_PROMPT_THRESHOLD` (500) — imports larger than this open the dialog.
 
-### `src/merge.ts` — combining two routes (pure)
+### `web/src/merge.ts` — combining two routes (pure)
 
 - `mergeRoutePoints(a, b, overlapMeters = 10)` — returns one continuous trace.
   `orientMerge` tries the four start/end pairings and joins the endpoints that
@@ -267,7 +283,7 @@ the narrow layout, which is why the issue this fixes looked intermittent.
   (out-and-back) is always preserved. Straight-line geometry comes from
   `snap.ts`, so no map or DOM is involved.
 
-### `src/units.ts`, `src/colors.ts`, `src/names.ts`
+### `web/src/units.ts`, `src/colors.ts`, `src/names.ts`
 
 - `units.ts`: `defaultUnitSystem()` (imperial for `US` locales, else metric) and
   all formatting (`formatDistance`, `formatElevation`, `formatSlope`,
@@ -276,7 +292,7 @@ the narrow layout, which is why the issue this fixes looked intermittent.
   `TRACE_COLOR` for the profile hover trace.
 - `names.ts`: `normalizeRouteName` / `normalizeWaypointName` fallbacks.
 
-### `src/locate.ts` — the "my location" control (pure)
+### `web/src/locate.ts` — the "my location" control (pure)
 
 No DOM, no MapLibre, so all of it is unit-testable:
 
@@ -443,7 +459,7 @@ new content.
 
 ## 12. Configuration and secrets
 
-`src/config.ts` reads `VITE_MAPTILER_API_KEY` from the environment and builds
+`web/src/config.ts` reads `VITE_MAPTILER_API_KEY` from the environment and builds
 the style/terrain URLs. The key is a **public browser key** and is visible in
 the bundle by design; it must be origin-restricted in MapTiler. `.env.local`
 (which holds the real key) is gitignored and `.env.example` is committed with a
@@ -457,12 +473,18 @@ placeholder.
   `colors`, `names`, `merge`, `simplify`, `config`, `storage`, `mvt`, `snap`,
   `snapSources`, `trailGraph`, `locate`, `fitPadding`) plus a `style.test.ts`
   guard on the stylesheet's `pointer-events` layering.
-- CI (`.github/workflows/pr.yml`) builds and tests on pushes/PRs.
-- Deployment (`.github/workflows/deploy.yml`) publishes the main build to the
+- CI (`.github/workflows/pr.yml`) picks the jobs to run from the paths a change
+  touches: a `web/` change builds and tests the browser app, an `ios/` change
+  builds and tests the native app, and a workflow change runs both. A final
+  `gate` job aggregates the results so branch protection has one unambiguous
+  required check. A separate workflow (`.github/workflows/label-platforms.yml`)
+  adds a `web` and/or `ios` label to the PR.
+- Deployment (`.github/workflows/deploy.yml`) publishes `web/dist/` to the
   `gh-pages` branch root on pushes to `main`; GitHub Pages serves that branch.
 - PR previews (`.github/workflows/preview.yml`) publish each PR commit to
   `preview/<branch>/` on the same `gh-pages` branch (so main and previews coexist
-  on one Pages site) and comment the URL on the PR.
+  on one Pages site) and comment the URL on the PR. Only `web/` changes produce
+  a preview, since a native build has nothing to publish.
 
 ## 14. Known limitations
 

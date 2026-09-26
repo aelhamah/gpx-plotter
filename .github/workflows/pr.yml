@@ -1,22 +1,107 @@
 name: CI
 
+# Builds and tests only the platforms a change touches. A web/ change runs the
+# browser app, an ios/ change runs the native app, and a workflow change runs
+# both because it can break either.
+#
+# `gate` is the only job that should be a required status check: the per-platform
+# jobs are conditional and report as "skipped" when they do not apply, which is
+# not a reliable required check.
+
 on:
   pull_request:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-test:
+  changes:
+    name: Detect changed platforms
     runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            web:
+              - 'web/**'
+              - '.github/workflows/**'
+            ios:
+              - 'ios/**'
+              - '.github/workflows/**'
+
+  web:
+    name: Web (build + test)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
       - name: Build
         run: npm run build
       - name: Run unit tests
         run: npm test
+
+  ios:
+    name: iOS (swift build + test)
+    needs: changes
+    # hashFiles guards against the ios/ tree not existing yet; it starts
+    # matching as soon as RouteKit lands.
+    if: >-
+      needs.changes.outputs.ios == 'true' &&
+      hashFiles('ios/RouteKit/Package.swift') != ''
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ios/RouteKit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: swift --version
+      - name: Build RouteKit
+        run: swift build
+      - name: Test RouteKit
+        run: swift test
+
+  gate:
+    name: CI
+    needs: [changes, web, ios]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if a platform job failed
+        env:
+          WEB: ${{ needs.web.result }}
+          IOS: ${{ needs.ios.result }}
+        run: |
+          status=0
+          if [ "$WEB" = "failure" ] || [ "$IOS" = "failure" ]; then
+            echo "A platform job failed (web=$WEB, ios=$IOS)."
+            status=1
+          elif [ "$WEB" = "cancelled" ] || [ "$IOS" = "cancelled" ]; then
+            echo "A platform job was cancelled (web=$WEB, ios=$IOS)."
+            status=1
+          else
+            echo "OK (web=$WEB, ios=$IOS)."
+          fi
+          exit "$status"

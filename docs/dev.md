@@ -2,6 +2,9 @@
 
 How to set up, run, test, and extend the GPX Route Plotter.
 
+The repository holds two products. This guide covers the **web** app in `web/`;
+the native iOS app is planned and documented in [`ios-plan.md`](ios-plan.md).
+
 ## Prerequisites
 
 - Node.js 22 (matches CI and the deploy workflow).
@@ -9,7 +12,10 @@ How to set up, run, test, and extend the GPX Route Plotter.
 
 ## Setup
 
+All web commands run from `web/`, which is the Vite project root:
+
 ```bash
+cd web
 npm install
 cp .env.example .env.local     # then set VITE_MAPTILER_API_KEY
 npm run dev                    # http://localhost:5173
@@ -21,10 +27,12 @@ HTTP-origin restrictions in the MapTiler dashboard.
 
 ## Scripts
 
+Run from `web/`:
+
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Vite dev server with HMR. |
-| `npm run build` | `tsc -b` type-check, then `vite build` → `dist/`. |
+| `npm run build` | `tsc -b` type-check, then `vite build` → `web/dist/`. |
 | `npm run preview` | Serve the production build locally. |
 | `npm test` | Run the Vitest suite once. |
 
@@ -56,7 +64,7 @@ gate, and the test suite is the behavior gate. Run both before committing.
 Tests use **Vitest** with the **jsdom** environment and cover the pure modules:
 
 ```
-tests/
+web/tests/
   geo.test.ts        distances, slopes, summaries, resampling, chart math
   gpx.test.ts        parse (trk/rte/wpt, elevation) + export round-trips
   dem.test.ts        Terrain-RGB decoding, tile math, slope raster
@@ -86,6 +94,27 @@ after, so the new or fixed behavior is pinned down. If the change lives in
 DOM/map code that can't reasonably be unit-tested, add the closest test for the
 underlying logic and describe the manual verification steps in the PR.
 
+### Platform labels
+
+CI labels each PR `web` and/or `ios` from the files it touches, and only runs the
+jobs for those platforms:
+
+| Changed paths | Label | Jobs that run |
+| --- | --- | --- |
+| `web/**` | `web` | `web` (build + test) |
+| `ios/**` | `ios` | `ios` (build + `swift test`) |
+| `.github/workflows/**` | `web` + `ios` | both — a workflow edit can break either build |
+| `docs/**` only | *(none)* | none — docs cannot break a build |
+
+A PR touching both products gets both labels and both jobs. Required status
+checks should be set to **`gate`** only: the `web` and `ios` jobs are conditional
+and report as *skipped* when they don't apply, so they are not reliable required
+checks. `gate` runs with `always()` and fails if any platform job failed.
+
+Fork PRs cannot be labeled — GitHub gives `pull_request_target` a read-only
+token for them — so they simply go unlabeled. That matches the existing
+behavior of skipping preview deploys for forks.
+
 ## Adding a feature (checklist)
 
 1. **Model / math first.** Put reusable logic in a pure module and write a test.
@@ -93,8 +122,8 @@ underlying logic and describe the manual verification steps in the PR.
    it affects the document, include it in `snapshot()`.
 3. **Render.** Update the relevant `refresh*` function so the map/list stays in
    sync, and call `commitSnapshot()` before mutating.
-4. **UI.** Add markup to `index.html` and styles to `style.css`; keep icon
-   buttons wrapped in `.icon-button-wrap` so tooltips work.
+4. **UI.** Add markup to `web/index.html` and styles to `web/src/style.css`; keep
+   icon buttons wrapped in `.icon-button-wrap` so tooltips work.
 5. **Empty states.** Update `updateUI()` / `fillRouteList()` for the empty case.
 6. **Verify.** `npm run build && npm test`, then try it in the browser.
 
@@ -102,7 +131,7 @@ underlying logic and describe the manual verification steps in the PR.
 
 Because the app is map- and DOM-heavy, some checks are manual:
 
-- Import a small GPX and a large one (see `public/demos/Afternoon_Hike.gpx`) and
+- Import a small GPX and a large one (see `web/public/demos/Afternoon_Hike.gpx`) and
   confirm the downsample dialog, stats, and profile.
 - Draw a route, drag points, add/move/rename/delete a waypoint, undo/redo.
 - Toggle satellite, terrain, relief, and slope shading (watch for layer loss
@@ -145,18 +174,21 @@ branch → `gh-pages` / root*). Set the `VITE_MAPTILER_API_KEY` repository secre
 (Settings → Secrets and variables → Actions) — builds inline it into the bundle.
 Allow-list the Pages origin on your MapTiler key.
 
-- CI (`.github/workflows/pr.yml`) builds and tests on pushes and PRs.
-- Deploy (`.github/workflows/deploy.yml`) publishes the main build to the root of
+- CI (`.github/workflows/pr.yml`) builds and tests the platforms a change touches
+  (see [Platform labels](#platform-labels) above).
+- Deploy (`.github/workflows/deploy.yml`) publishes `web/dist/` to the root of
   `gh-pages` on every push to `main`.
 - PR Preview (`.github/workflows/preview.yml`) deploys each PR commit to
   `preview/<branch>/` on `gh-pages`, comments the URL on the PR, re-deploys on
   every new commit, and removes the preview when the PR closes. Previews are
-  skipped for forks (no secrets).
+  skipped for forks (no secrets) and for PRs that only touch `ios/` — there is
+  nothing to publish for a native build. The removal step still runs on close
+  regardless, since it only deletes files.
 
 | Build | URL |
 | --- | --- |
 | Main | `https://<owner>.github.io/<repo>/` |
 | Preview | `https://<owner>.github.io/<repo>/preview/<branch>/` |
 
-- `vite.config.ts` sets `base: './'` so the same bundle works at the root and in
-  a preview subdirectory.
+- `web/vite.config.ts` sets `base: './'` so the same bundle works at the root and
+  in a preview subdirectory.

@@ -220,7 +220,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 
 ## Demo data and quality
 
-- Sample tracks are bundled under `public/demos/` (also served at `/demos/…`):
+- Sample tracks are bundled under `web/public/demos/` (also served at `/demos/…`):
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.

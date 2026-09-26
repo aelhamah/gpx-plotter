@@ -1,0 +1,65 @@
+name: Label platforms
+
+# Adds a `web` and/or `ios` label to each PR based on the files it touches, and
+# removes a label when a push stops touching that platform.
+#
+# This lives in its own workflow, separate from the CI build, on purpose. It
+# needs a write token to set labels, which means `pull_request_target`, which
+# also means a write-scoped GITHUB_TOKEN and access to repository secrets. The
+# rule is simple: a `pull_request_target` workflow must never check out or
+# execute pull request code. This one only reads the changed-file list through
+# the GitHub API and calls the issues API.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: Label platforms
+    runs-on: ubuntu-latest
+    steps:
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            web:
+              - 'web/**'
+              - '.github/workflows/**'
+            ios:
+              - 'ios/**'
+              - '.github/workflows/**'
+
+      - name: Create the platform labels if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create web --color 1D76DB \
+            --description "Touches the web app in web/" 2>/dev/null || true
+          gh label create ios --color 555555 \
+            --description "Touches the native iOS app in ios/" 2>/dev/null || true
+
+      - name: Sync the labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          WEB: ${{ steps.filter.outputs.web }}
+          IOS: ${{ steps.filter.outputs.ios }}
+        run: |
+          # Move each label to the state this push actually implies, rather than
+          # only ever adding, so a PR that stops touching ios loses the label.
+          if [ "$WEB" = "true" ]; then
+            gh pr edit "$PR" --add-label web > /dev/null
+          else
+            gh pr edit "$PR" --remove-label web > /dev/null 2>&1 || true
+          fi
+          if [ "$IOS" = "true" ]; then
+            gh pr edit "$PR" --add-label ios > /dev/null
+          else
+            gh pr edit "$PR" --remove-label ios > /dev/null 2>&1 || true
+          fi

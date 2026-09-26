@@ -13,17 +13,30 @@ whole app is a few TypeScript modules bundled by Vite and rendered by MapLibre.
 - Full architecture: [`docs/architecture.md`](docs/architecture.md)
 - Feature reference: [`docs/features.md`](docs/features.md)
 - Contributing / dev workflow: [`docs/dev.md`](docs/dev.md)
+- Planned native iOS app: [`docs/ios-plan.md`](docs/ios-plan.md)
+
+## Repository layout
+
+This repository holds two products that share the GPX format and the MapTiler
+account, but nothing else. Each is self-contained under its own directory, and
+CI picks which one to build from the files a pull request touches.
+
+```
+web/     The browser app described below (Vite + TypeScript + MapLibre GL JS)
+ios/     The native iOS app — planned, not yet written
+docs/    Architecture, features, dev guide, and the iOS plan
+```
 
 ## High-level architecture
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ index.html  —  static shell (sidebar, map container, toolbars, dialogs)│
+│ web/index.html  —  shell (sidebar, map container, toolbars, dialogs)   │
 └───────────────────────────────────────────────────────────────────────┘
                     │ imports
                     ▼
 ┌───────────────────────────────────────────────────────────────────────┐
-│ src/main.ts  —  the application hub                                    │
+│ web/src/main.ts  —  the application hub                                │
 │  • map init + layers + terrain                                         │
 │  • in-memory state (routes, waypoints, selection, history)             │
 │  • all DOM wiring, markers, dialogs, profile chart, map search         │
@@ -77,10 +90,11 @@ Build & dev:
 
 ## Getting started
 
-Add a **public** MapTiler key (browser keys are visible to users; restrict them
-by HTTP origin):
+Web commands run from `web/`, which is the Vite project root. Add a **public**
+MapTiler key (browser keys are visible to users; restrict them by HTTP origin):
 
 ```bash
+cd web
 cp .env.example .env.local
 ```
 
@@ -93,20 +107,34 @@ VITE_MAPTILER_API_KEY=your_browser_maptiler_key
 ```bash
 npm install
 npm run dev      # local dev server
-npm run build    # type-check + production bundle in dist/
+npm run build    # type-check + production bundle in web/dist/
 npm test         # Vitest unit tests
 ```
 
 ## Deployment
 
-The app is static, so it deploys to any static host. This repository ships two
+The app is static, so it deploys to any static host. This repository ships three
 GitHub Actions workflows:
 
-- `.github/workflows/pr.yml` — build + test on every push/PR.
-- `.github/workflows/deploy.yml` — build and publish `dist/` to GitHub Pages on
-  push to `main`.
+- `.github/workflows/pr.yml` — build + test the platforms a change touches, and
+  label the PR `web` and/or `ios` accordingly.
+- `.github/workflows/deploy.yml` — build and publish `web/dist/` to GitHub Pages
+  on push to `main`.
+- `.github/workflows/preview.yml` — publish a `web/`-only change to
+  `preview/<branch>/` and comment the link on the PR.
+
+Set **`gate`** as the required status check in branch protection — the per-platform
+jobs are conditional and report as *skipped* when they don't apply.
 
 Enable **Settings → Pages → Source: GitHub Actions**, and allow-list your Pages
 origin on the MapTiler key.
+
+## The iOS app
+
+A native iPhone/iPad viewer and navigator for the same GPX routes is planned:
+offline satellite you control, Live Activity guidance, and off-course alerts. It
+reuses the algorithms in `web/src/` via a platform-independent `RouteKit`
+package. The full plan, the reasoning behind the map-engine choice, and the
+milestones are in [`docs/ios-plan.md`](docs/ios-plan.md).
 
 See [`docs/dev.md`](docs/dev.md) for the full development guide.
