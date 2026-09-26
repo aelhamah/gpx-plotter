@@ -2,6 +2,10 @@ node_modules/
 dist/
 .DS_Store
 
+# Per-PR git worktrees live here — see the "Worktrees" section of docs/dev.md.
+# Ignored so a worktree nested inside the checkout never shows up as untracked.
+.worktrees/
+
 # Environment files — never commit real secrets
 .env
 .env.*
