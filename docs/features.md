@@ -107,6 +107,14 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   covered once. The originals are kept; Esc cancels.
 - **Select routes** to make one "active" for editing, stats, and the profile;
   the list shows a color swatch per route.
+- **Direction arrows**: every visible route gets a chevron at the midpoint of
+  each segment, in that route's own color and rotated to the direction the route
+  travels there, so you can read which way a route runs — including when several
+  traces overlap. The chevron is just the route color with no border of its own:
+  the notch lets the line show through, so it reads as part of the route rather
+  than as a marker on top of it. The active route's arrows are larger, and sit on
+  top of the others'. Segments that would pack closer than ~64 px on screen are
+  skipped, so zooming out thins the arrows instead of turning them into a smear.
 
 ## Waypoints
 
@@ -216,6 +224,14 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   **Undo · ⌘Z**) and segmented button groups.
 - Map controls (fit, my location, terrain, satellite, relief, slope) stacked at
   the bottom-left; the slope legend at the bottom-right.
+- **A banner naming whichever service is down.** The basemap, the terrain, and
+  search all come from MapTiler, and each is optional in a way that fails
+  quietly: when terrain is unreachable the map still draws, distance still
+  computes, and only Gain/Loss/Low/High/Max slope and the elevation profile go
+  blank. That reads as a broken app rather than a broken service, so the banner
+  says which one is out ("Terrain won't load — elevation stats and the profile
+  can't be filled"), notes when the free plan has simply run out of request
+  volume, and disappears on its own once the service answers again.
 - Responsive layout tweaks for narrow/mobile viewports.
 
 ## Demo data and quality
@@ -224,9 +240,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **160 unit tests** across 17 files covering geodesy, GPX parse/serialize, DEM
+- **217 unit tests** across 22 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
   geocoding, geolocation (accuracy halo, camera zoom, permission copy), route
-  merging, workspace storage, the MVT tile decoder, trail/peak snapping, and
-  trail-network routing.
+  merging, workspace storage, the MVT tile decoder, trail/peak snapping,
+  trail-network routing, segment bearings and route-arrow rendering, and the
+  service-failure banner.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

@@ -18,6 +18,8 @@ import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from
 import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
+import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
+import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
 import './style.css';
 
@@ -51,6 +53,7 @@ const future: AppState[] = [];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
+const serviceStatus = new ServiceStatus($('service-banner'));
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
@@ -162,7 +165,28 @@ map.on('moveend', () => {
   persistWorkspace();
 });
 
+// Which segments get an arrow depends on how far apart they are on screen, so
+// the set has to be recomputed whenever the zoom changes.
+map.on('zoomend', () => refreshRouteArrowLayer());
+
+// MapLibre raises one `error` event for every failed style, tile and terrain
+// request, and the app stays perfectly usable without any of them — so this is
+// the only place that can tell the user the map is empty because a service is
+// down rather than because their route is.
+map.on('error', (event) => {
+  const message = event.error instanceof Error ? event.error.message : String(event.error);
+  const kind = classifyServiceFailure(message);
+  if (kind) serviceStatus.report(kind, message);
+});
+
+// DEM tiles and geocoding fetch outside MapLibre and report their own failures.
+onServiceFailure((issue) => serviceStatus.report(issue.kind, issue.detail, issue.rateLimited));
+
 map.on('style.load', () => {
+  // The style answering means the basemap is back; per-tile noise from before
+  // it recovered is no longer true.
+  serviceStatus.resolve('style');
+  serviceStatus.resolve('basemap');
   addDataLayers();
   applyGlobe();
   applyTerrain();
@@ -211,6 +235,13 @@ function addDataLayers() {
     // to the globe and terrain while zooming instead of floating above it.
     map.addLayer({ id: 'route-points', type: 'circle', source: 'route-points', paint: { 'circle-radius': ['case', ['get', 'selected'], 9, 7], 'circle-color': ['coalesce', ['get', 'color'], '#e11d48'], 'circle-stroke-color': ['case', ['get', 'selected'], '#111111', '#ffffff'], 'circle-stroke-width': 2 } });
   }
+  if (!map.getSource('route-arrows')) {
+    map.addSource('route-arrows', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  }
+  if (!map.getLayer('route-arrows')) {
+    addArrowImages(map);
+    map.addLayer(ARROW_LAYER);
+  }
   if (!map.getSource('snap-preview')) {
     map.addSource('snap-preview', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   }
@@ -242,6 +273,7 @@ function addDataLayers() {
     map.addLayer({ id: 'location-dot', type: 'circle', source: 'location', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5.5, 'circle-color': '#2563eb', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 } });
   }
   refreshMarkers();
+  refreshRouteArrowLayer();
 }
 
 function routesGeoJSON(): FeatureCollection<LineString | Point> {
@@ -273,11 +305,22 @@ function refreshRoutePointLayer() {
   if (source) source.setData(routePointsGeoJSON());
 }
 
+function refreshRouteArrowLayer() {
+  const source = map.getSource('route-arrows') as GeoJSONSource | undefined;
+  if (!source) return;
+  const data = routeArrowsGeoJSON(routes, selectedRouteId, map.getZoom());
+  // Routes carry their own color, so an imported route can need an icon the
+  // palette did not cover.
+  addArrowImages(map, routes.map((route) => route.color));
+  source.setData(data);
+}
+
 function refreshRoutesLayer() {
   const source = map.getSource('routes') as GeoJSONSource | undefined;
   if (source) source.setData(routesGeoJSON());
   fillRouteList();
   refreshMarkers();
+  refreshRouteArrowLayer();
 }
 
 interface RouteStats { gain?: number; loss?: number; min?: number; max?: number; maxSlope?: number; }
@@ -327,6 +370,12 @@ async function refreshRouteStats() {
 
   routeProfile = profile;
   routeStats = summarizeProfile(profile);
+  // Terrain answering again clears any earlier report. The failure itself is
+  // reported by `elevationAt`, which is the only thing that can actually know
+  // whether a sample is missing because the service is down or the GPX had no
+  // elevation; guessing from the profile here just flashes a warning whenever
+  // the first samples have not come back yet.
+  if (profile.some((point) => Number.isFinite(point.elevation))) serviceStatus.resolve('elevation');
   updateUI();
   drawProfileChart();
 }

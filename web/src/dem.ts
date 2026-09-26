@@ -1,4 +1,5 @@
 import { TERRAIN_TILE_URL } from './config';
+import { reportServiceFailure } from './serviceStatus';
 
 /**
  * Client-side decoder for MapTiler Terrain RGB tiles.
@@ -97,6 +98,10 @@ export async function elevationAt(lng: number, lat: number): Promise<number | un
     return top * (1 - dy) + bottom * dy;
   } catch (error) {
     console.error('elevationAt failed for', lng, lat, error);
+    // Elevation is the only source of the stats and the profile, and it fails
+    // quietly, so say so rather than leaving the user to wonder why the numbers
+    // are all em dashes.
+    reportServiceFailure('elevation', error instanceof Error ? error.message : String(error));
     return undefined;
   }
 }
