@@ -68,8 +68,10 @@ jobs:
 
       - name: Compute preview path
         id: meta
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          branch=$(printf '%s' '${{ github.event.pull_request.head.ref }}' | sed 's#[^A-Za-z0-9._-]#-#g')
+          branch=$(printf '%s' "$HEAD_REF" | sed 's#[^A-Za-z0-9._-]#-#g')
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
       - name: Publish preview to gh-pages
@@ -90,11 +92,11 @@ jobs:
           IOS_CHANGED: ${{ needs.changes.outputs.ios }}
           PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/preview/${{ steps.meta.outputs.branch }}/
         run: |
-          marker='<!-- gpx-plotter-preview -->'
+          marker="<!-- gpx-plotter-preview -->"
           if [ "$IOS_CHANGED" = "true" ]; then
-            ios_line='- iOS: also changed — see the `ios` checks on this PR.'
+            ios_line="- iOS: also changed, see the ios checks on this PR."
           else
-            ios_line='- iOS: unchanged.'
+            ios_line="- iOS: unchanged."
           fi
           body="$marker
           ### Preview updated
@@ -121,8 +123,10 @@ jobs:
 
       - name: Compute preview path
         id: meta
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          branch=$(printf '%s' '${{ github.event.pull_request.head.ref }}' | sed 's#[^A-Za-z0-9._-]#-#g')
+          branch=$(printf '%s' "$HEAD_REF" | sed 's#[^A-Za-z0-9._-]#-#g')
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
       - name: Remove the preview from gh-pages

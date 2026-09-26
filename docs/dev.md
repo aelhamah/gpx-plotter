@@ -94,6 +94,43 @@ after, so the new or fixed behavior is pinned down. If the change lives in
 DOM/map code that can't reasonably be unit-tested, add the closest test for the
 underlying logic and describe the manual verification steps in the PR.
 
+### Worktrees
+
+Develop every PR in its own worktree under `.worktrees/`, rather than switching
+branches in the main checkout. That keeps the main checkout on whatever you were
+already doing, and lets you have several PRs in flight at once without stashing.
+
+`.worktrees/` is gitignored, so a worktree nested inside the repository never
+appears as untracked. Create one with:
+
+```bash
+# New PR off the current branch
+git worktree add .worktrees/short-description -b short-description
+
+# Or work an existing remote branch
+git fetch origin
+git worktree add .worktrees/short-description origin/short-description
+```
+
+Name the directory after the branch, so `git worktree list` reads as a list of
+what is in flight:
+
+```bash
+git worktree list
+```
+
+Rules worth knowing:
+
+- **One branch per worktree.** Git refuses to check out the same branch in two
+  worktrees, so give each PR its own branch.
+- **Each worktree needs its own dependencies.** `web/node_modules` is not shared,
+  so run `cd web && npm install` in a new worktree before building or testing.
+- **Never `git checkout` a branch in the main checkout** if it is already checked
+  out in a worktree — use the worktree, or `git worktree remove` it first.
+- **Clean up when the PR merges:** `git worktree remove .worktrees/<name>`, then
+  `git branch -d <name>`. `git worktree prune` clears out administrative files
+  left behind by a worktree deleted by hand.
+
 ### Platform labels
 
 CI labels each PR `web` and/or `ios` from the files it touches, and only runs the
