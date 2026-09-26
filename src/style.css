@@ -165,6 +165,10 @@ code { font-size: 11px; }
 .map-icon-button { width: 29px; height: 29px; border: 1px solid rgba(0,0,0,.18); border-radius: 7px; background: #fff; color: #444; cursor: pointer; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,.2); padding: 0; }
 .map-icon-button:hover { background: #f6f6f4; color: #111; }
 .map-icon-button.active { background: #eef2ff; border-color: #2563eb; color: #1d4ed8; }
+.map-icon-button.busy { opacity: .55; cursor: progress; }
+.map-icon-button.denied { color: #b91c1c; }
+.map-icon-button.denied:hover { background: #fde8ec; color: #9f1239; }
+.map-icon-button.unavailable { color: #a3a3a3; }
 .map-icon-button svg { width: 15px; height: 15px; }
 .map-icon-tooltip { position: absolute; left: 37px; top: 50%; transform: translateY(-50%); background: rgba(20,20,20,.92); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .12s ease; white-space: nowrap; }
 .map-icon-tooltip::before { content: ""; position: absolute; right: 100%; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-right-color: rgba(20,20,20,.92); }
