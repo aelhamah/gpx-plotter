@@ -108,11 +108,12 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Select routes** to make one "active" for editing, stats, and the profile;
   the list shows a color swatch per route.
 - **Direction arrows**: every visible route gets a chevron at the midpoint of each
-  segment, rotated to the direction the route travels there, so you can read which
-  way a route runs — including when several traces overlap. The active route's
-  arrows are larger and fully opaque, and sit on top of the others'. Segments that
-  would pack closer than ~64 px on screen are skipped, so zooming out thins the
-  arrows instead of turning them into a smear.
+  segment, in that route's own color and rotated to the direction the route
+  travels there, so you can read which way a route runs — including when several
+  traces overlap. The chevron is keyed in white so it stays legible on top of the
+  same-colored line. The active route's arrows are larger and fully opaque, and sit
+  on top of the others'. Segments that would pack closer than ~64 px on screen are
+  skipped, so zooming out thins the arrows instead of turning them into a smear.
 
 ## Waypoints
 

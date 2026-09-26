@@ -18,7 +18,7 @@ import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from
 import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
-import { ARROW_ICON_ID, ARROW_LAYER, arrowIconImage, routeArrowsGeoJSON } from './arrows';
+import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { fitPadding } from './fitPadding';
 import './style.css';
 
@@ -220,7 +220,7 @@ function addDataLayers() {
     map.addSource('route-arrows', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   }
   if (!map.getLayer('route-arrows')) {
-    if (!map.hasImage(ARROW_ICON_ID)) map.addImage(ARROW_ICON_ID, arrowIconImage());
+    addArrowImages(map);
     map.addLayer(ARROW_LAYER);
   }
   if (!map.getSource('snap-preview')) {
@@ -288,7 +288,12 @@ function refreshRoutePointLayer() {
 
 function refreshRouteArrowLayer() {
   const source = map.getSource('route-arrows') as GeoJSONSource | undefined;
-  if (source) source.setData(routeArrowsGeoJSON(routes, selectedRouteId, map.getZoom()));
+  if (!source) return;
+  const data = routeArrowsGeoJSON(routes, selectedRouteId, map.getZoom());
+  // Routes carry their own color, so an imported route can need an icon the
+  // palette did not cover.
+  addArrowImages(map, routes.map((route) => route.color));
+  source.setData(data);
 }
 
 function refreshRoutesLayer() {

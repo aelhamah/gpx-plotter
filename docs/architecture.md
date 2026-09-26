@@ -390,6 +390,19 @@ GeoJSON (visible routes only, active route emitted last so it draws on top) and
 owns the `symbol` layer and its canvas chevron icon. Symbols are used rather than
 DOM markers so the arrows stay glued to the globe and terrain.
 
+Two details the icon depends on:
+
+- **The chevron is drawn pointing north.** MapLibre renders an icon as authored
+  at `icon-rotate: 0` and turns it clockwise from there, which is the direction
+  bearings are measured in, so a north-authored icon makes
+  `icon-rotate: ['get', 'bearing']` come out right. An east-authored icon would
+  need the 90° offset spelled out in the layer.
+- **One pre-tinted icon per color.** `icon-color` only applies to SDF images, so
+  instead `addArrowImages()` renders a chevron per color (the palette, plus any
+  color a route actually carries, in case an import brings its own) and each
+  feature carries an `icon` id. The chevron is filled with the route color and
+  stroked white, because it sits on top of a line of that same color.
+
 **Custom `slope://` protocol.** `maplibregl.addProtocol('slope', …)` decodes and
 colorizes a DEM tile on demand and returns a PNG. Serving raster tiles through
 the protocol (rather than a canvas overlay) keeps the shading perfectly aligned
