@@ -186,3 +186,31 @@ export function routeAlongTrails(lines: SnapPoint[][], start: SnapPoint, end: Sn
   path.reverse();
   return path;
 }
+
+/**
+ * The trail vertices to splice between two route points so the route runs *along*
+ * the trail instead of cutting straight across it.
+ *
+ * `to` is a point the caller has already snapped onto the trail; `from` is the
+ * previous drawn point, which is only usable if it snapped too. `radiusMeters`
+ * must be the same radius that snap used — a point snapped onto a trail *is* on
+ * that trail, so testing it against anything tighter refuses legs whose
+ * endpoints were placed correctly.
+ *
+ * Returns the interior vertices, excluding both endpoints, so the caller can
+ * splice them in without duplicating either. Empty means "draw a straight
+ * segment", which is the right answer when there is no usable trail between the
+ * two points.
+ */
+export function trailVerticesBetween(
+  lines: SnapPoint[][],
+  from: SnapPoint,
+  to: SnapPoint,
+  radiusMeters: number,
+): SnapPoint[] {
+  const fromMatch = nearestLine(from, lines, radiusMeters);
+  if (!fromMatch) return [];
+  const path = routeAlongTrails(lines, fromMatch.result.point, to);
+  if (!path || path.length <= 2) return [];
+  return path.slice(1, -1);
+}

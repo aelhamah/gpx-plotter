@@ -7,12 +7,40 @@
  * enough for the short thresholds involved (tens to a few hundred meters).
  */
 
-/** Max distance (m) a drawn route point may be from a trail to snap onto it. */
+/**
+ * Max distance (m) a drawn route point may be from a trail to snap onto it.
+ *
+ * This doubles as the test for whether the route should then run *along* that
+ * trail: the point has already been moved onto the trail by the snap, so
+ * following it moves the point no further. Gating following on a tighter radius
+ * than the snap used to reject legs whose points had snapped successfully —
+ * on a recorded 12.5 km hike that silently cost a third of all drawn segments.
+ */
 export const TRAIL_SNAP_METERS = 40;
-/** Max distance (m) from a trail for the route to run *along* it between points. */
-export const TRAIL_FOLLOW_METERS = 15;
 /** Max distance (m) a placed waypoint may be from a peak to snap onto it. */
 export const PEAK_SNAP_METERS = 250;
+
+/** Snapping is on unless the user turns it off, including for saved workspaces. */
+export const SNAP_ENABLED_BY_DEFAULT = true;
+
+/**
+ * What the draw bar says while a route is being drawn. The snapping clause is
+ * dropped rather than negated when snapping is off, because the user has not
+ * opted out of a feature that failed — they switched it off on purpose.
+ */
+export function drawStatusText(pointCount: number, snappingEnabled: boolean): string {
+  if (pointCount >= 2) return 'Press Enter or click Finish to end';
+  return snappingEnabled
+    ? 'Click to add points — snaps to trails, press Enter or click Finish to end'
+    : 'Click to add points, press Enter or click Finish to end';
+}
+
+/** The hint shown while placing a single waypoint, which snaps to peaks. */
+export function waypointHintText(snappingEnabled: boolean): string {
+  return snappingEnabled
+    ? 'Click to place a waypoint · snaps to peaks · Esc to cancel'
+    : 'Click to place a waypoint · Esc to cancel';
+}
 
 export interface SnapPoint {
   lon: number;

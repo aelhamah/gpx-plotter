@@ -6,21 +6,27 @@
  *                   to a route relation (many ordinary paths are missing there).
  *  - planet (v3)  → "mountain_peak" layer for snapping waypoints onto peaks.
  *
- * Uses the same tileset URLs the map style already references, requesting a
- * single tile around the click's location and decoding it with `mvt`. Tile
- * bytes are cached per source/z/x/y so repeated clicks in one area do not
- * re-fetch. Any failure (network, tile 404, decode) silently yields no
- * candidates.
+ * These are the same tilesets the map style already references, read at the zoom
+ * the map is showing and clamped to each tileset's own maximum zoom (see
+ * `snapTiles`). A radius query spans every tile the radius can reach into, so a
+ * snap near a tile boundary does not lose candidates. Decoded tiles are cached
+ * per source/z/x/y; failed reads are dropped from the cache so one bad response
+ * does not disable snapping for that tile for the rest of the session.
  */
 
 import { OUTDOOR_TILE_URL, PLANET_TILE_URL } from './config';
-import { lngLatToTile } from './dem';
 import { decodeTile, layerByName, tilePointToLngLat, type MVTLayer } from './mvt';
-import type { SnapPoint } from './snap';
+import { PEAK_SNAP_METERS, TRAIL_SNAP_METERS, type SnapPoint } from './snap';
+import {
+  SNAP_MIN_ZOOM,
+  tilesNear,
+  zoomForTileset,
+  type TileAddress,
+  type TilesetId,
+} from './snapTiles';
+import { reportServiceFailure } from './serviceStatus';
 
-const SNAP_ZOOM = 13;
-export const SNAP_ZOOM_LEVEL = SNAP_ZOOM;
-const CACHE_CAP = 96;
+const CACHE_CAP = 256;
 
 /** `transportation` classes that count as a walkable/rideable trail. */
 const TRAIL_CLASSES = new Set([
@@ -49,27 +55,68 @@ interface DecodedTile {
 
 const tileCache = new Map<string, Promise<DecodedTile>>();
 
-async function fetchDecodedTile(source: 'outdoor' | 'planet', lng: number, lat: number): Promise<DecodedTile> {
-  const urlTemplate = source === 'outdoor' ? OUTDOOR_TILE_URL : PLANET_TILE_URL;
-  const { x, y } = lngLatToTile(lng, lat, SNAP_ZOOM);
-  const maxTile = 2 ** SNAP_ZOOM - 1;
-  const cx = Math.max(0, Math.min(maxTile, Math.floor(x)));
-  const cy = Math.max(0, Math.min(maxTile, Math.floor(y)));
-  const key = `${source}/${SNAP_ZOOM}/${cx}/${cy}`;
-  let job = tileCache.get(key);
-  if (job) return job;
-  job = (async () => {
-    const url = urlTemplate.replace('{z}', String(SNAP_ZOOM)).replace('{x}', String(cx)).replace('{y}', String(cy));
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Snap tile ${key} failed with ${response.status}`);
-    return { layers: decodeTile(new Uint8Array(await response.arrayBuffer())), z: SNAP_ZOOM, x: cx, y: cy };
-  })();
+/**
+ * Decode one tile, rejecting if it cannot be read. A failed read is *not* left
+ * in the cache: caching the rejection is what used to make a single 429 or 400
+ * silently disable snapping over an area until the page was reloaded.
+ */
+async function readTile(tileset: TilesetId, z: number, tile: TileAddress): Promise<DecodedTile> {
+  const urlTemplate = tileset === 'outdoor' ? OUTDOOR_TILE_URL : PLANET_TILE_URL;
+  const key = `${tileset}/${z}/${tile.x}/${tile.y}`;
+  const cached = tileCache.get(key);
+  if (cached) return cached;
   if (tileCache.size >= CACHE_CAP) {
     const oldest = tileCache.keys().next().value;
     if (oldest !== undefined) tileCache.delete(oldest);
   }
+  const job = (async (): Promise<DecodedTile> => {
+    const url = urlTemplate.replace('{z}', String(z)).replace('{x}', String(tile.x)).replace('{y}', String(tile.y));
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Snap tile ${key} failed with ${response.status}`);
+    return { layers: decodeTile(new Uint8Array(await response.arrayBuffer())), z, x: tile.x, y: tile.y };
+  })();
   tileCache.set(key, job);
-  return job;
+  try {
+    return await job;
+  } catch (error) {
+    if (tileCache.get(key) === job) tileCache.delete(key);
+    throw error;
+  }
+}
+
+interface TileRead {
+  decoded: DecodedTile[];
+  failures: string[];
+  attempted: number;
+}
+
+/**
+ * Read every tile of one tileset whose area can hold a candidate within
+ * `radiusMeters`, keeping the ones that succeeded so a single unreachable tile
+ * costs its own candidates rather than the whole snap.
+ *
+ * The tile ring is worked out per tileset, at the zoom that tileset is actually
+ * being asked for: the outdoor tileset caps out one zoom short of the planet
+ * one, and its tile indices are on a different grid at that zoom.
+ */
+async function readTiles(
+  tileset: TilesetId,
+  zoom: number,
+  lng: number,
+  lat: number,
+  radiusMeters: number,
+): Promise<TileRead> {
+  const z = zoomForTileset(zoom, tileset);
+  const tiles = tilesNear(lng, lat, z, radiusMeters);
+  if (tiles.length === 0) return { decoded: [], failures: [], attempted: 0 };
+  const results = await Promise.allSettled(tiles.map((tile) => readTile(tileset, z, tile)));
+  const decoded: DecodedTile[] = [];
+  const failures: string[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') decoded.push(result.value);
+    else failures.push(String(result.reason?.message ?? result.reason));
+  }
+  return { decoded, failures, attempted: tiles.length };
 }
 
 function tilePointLine(part: [number, number][], decoded: DecodedTile, extent: number): SnapPoint[] {
@@ -94,48 +141,66 @@ function linesFromLayer(decoded: DecodedTile, layerName: string, keep?: (props: 
   return lines;
 }
 
-async function outdoorTrailLines(lng: number, lat: number): Promise<SnapPoint[][]> {
-  const decoded = await fetchDecodedTile('outdoor', lng, lat);
-  return linesFromLayer(decoded, 'trail');
-}
-
-async function transportPathLines(lng: number, lat: number): Promise<SnapPoint[][]> {
-  const decoded = await fetchDecodedTile('planet', lng, lat);
-  return linesFromLayer(decoded, 'transportation', (props) => typeof props.class === 'string' && TRAIL_CLASSES.has(props.class));
-}
-
 /**
- * Trail polylines near a point (lng/lat), combining the marked `trail` layer
- * with path-like `transportation` lines. Returns [] when both sources fail.
+ * Trail polylines within `radiusMeters` of a point, combining the marked
+ * `trail` layer with path-like `transportation` lines. `zoom` is the map's
+ * current zoom; it is clamped to what the tilesets serve. Returns [] when every
+ * source fails.
  */
-export async function trailsNearPoint(lng: number, lat: number): Promise<SnapPoint[][]> {
+export async function trailsNearPoint(
+  lng: number,
+  lat: number,
+  zoom: number = SNAP_MIN_ZOOM,
+  radiusMeters: number = TRAIL_SNAP_METERS,
+): Promise<SnapPoint[][]> {
   const [marked, paths] = await Promise.all([
-    outdoorTrailLines(lng, lat).catch(() => []),
-    transportPathLines(lng, lat).catch(() => []),
+    readTiles('outdoor', zoom, lng, lat, radiusMeters),
+    readTiles('planet', zoom, lng, lat, radiusMeters),
   ]);
-  return [...marked, ...paths];
+
+  const markedLines = marked.decoded.flatMap((tile) => linesFromLayer(tile, 'trail'));
+  const pathLines = paths.decoded.flatMap((tile) =>
+    linesFromLayer(tile, 'transportation', (props) => typeof props.class === 'string' && TRAIL_CLASSES.has(props.class)),
+  );
+
+  // Snapping has always failed silently, which makes an outage and "there is
+  // genuinely no trail here" look identical to the user. Only complain when
+  // every tile of both sources failed: a partial read is a normal, recoverable
+  // edge, and the basemap is still drawing from these same tilesets.
+  const failures = [...marked.failures, ...paths.failures];
+  const attempted = marked.attempted + paths.attempted;
+  if (attempted > 0 && failures.length === attempted) reportServiceFailure('snap', failures.join('; '));
+
+  return [...markedLines, ...pathLines];
 }
 
-/** Peaks near a point, or [] on failure. */
-export async function peaksNearPoint(lng: number, lat: number): Promise<PeakInfo[]> {
-  try {
-    const decoded = await fetchDecodedTile('planet', lng, lat);
-    const peaks = layerByName(decoded.layers, 'mountain_peak');
-    if (!peaks) return [];
-    const list: PeakInfo[] = [];
-    for (const feature of peaks.features) {
+/** Peaks within `radiusMeters` of a point, or [] on failure. */
+export async function peaksNearPoint(
+  lng: number,
+  lat: number,
+  zoom: number = SNAP_MIN_ZOOM,
+  radiusMeters: number = PEAK_SNAP_METERS,
+): Promise<PeakInfo[]> {
+  const { decoded, failures, attempted } = await readTiles('planet', zoom, lng, lat, radiusMeters);
+  if (attempted > 0 && decoded.length === 0) {
+    reportServiceFailure('snap', failures.join('; '));
+    return [];
+  }
+  const peaks: PeakInfo[] = [];
+  for (const tile of decoded) {
+    const layer = layerByName(tile.layers, 'mountain_peak');
+    if (!layer) continue;
+    for (const feature of layer.features) {
       if (feature.type !== 1) continue;
       for (const part of feature.parts) {
         const [px, py] = part[0] ?? [0, 0];
-        const { lng, lat } = tilePointToLngLat(decoded.z, decoded.x, decoded.y, peaks.extent, px, py);
+        const { lng, lat } = tilePointToLngLat(tile.z, tile.x, tile.y, layer.extent, px, py);
         const name = typeof feature.props.name === 'string' && feature.props.name ? feature.props.name : undefined;
         const rawElevation = feature.props.ele;
         const elevation = typeof rawElevation === 'number' && Number.isFinite(rawElevation) ? rawElevation : undefined;
-        list.push({ center: { lon: lng, lat }, name, elevation });
+        peaks.push({ center: { lon: lng, lat }, name, elevation });
       }
     }
-    return list;
-  } catch {
-    return [];
   }
+  return peaks;
 }

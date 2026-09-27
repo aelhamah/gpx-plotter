@@ -77,6 +77,26 @@ describe('summarizeServices', () => {
     expect(summarizeServices([issue('elevation')])?.level).toBe('error');
   });
 
+  it('warns rather than errors when snapping stops working', () => {
+    // The basemap still draws and routes still compute, so this is a warning.
+    const summary = summarizeServices([issue('snap')]);
+    expect(summary?.level).toBe('warning');
+    expect(summary?.text).toContain("Trails aren't snapping");
+  });
+
+  it('does not blame the basemap when only snapping failed', () => {
+    // Snapping has its own tiles; the style is still perfectly healthy.
+    const summary = summarizeServices([issue('snap')]);
+    expect(summary?.text).not.toContain('basemap tiles');
+  });
+
+  it('leads with a dead style over a snapping failure', () => {
+    const summary = summarizeServices([issue('snap'), issue('style')]);
+    expect(summary?.text.indexOf("Basemap won't load")).toBeLessThan(
+      summary!.text.indexOf("Trails aren't snapping"),
+    );
+  });
+
   it('explains a rate limit as self-clearing', () => {
     const summary = summarizeServices([issue('style', { rateLimited: true })]);
     expect(summary?.text).toContain('free plan caps request volume');

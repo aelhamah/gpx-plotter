@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   distanceMeters,
+  drawStatusText,
   nearestLine,
   nearestOnLine,
   nearestSnap,
   PEAK_SNAP_METERS,
   projectToSegment,
-  TRAIL_FOLLOW_METERS,
+  SNAP_ENABLED_BY_DEFAULT,
   TRAIL_SNAP_METERS,
+  waypointHintText,
 } from '../src/snap';
 
 describe('distanceMeters', () => {
@@ -121,7 +123,47 @@ describe('nearestLine', () => {
     expect(hit!.result.segment).toBeUndefined();
   });
 
-  it('exposes a follow threshold well inside the snap threshold', () => {
-    expect(TRAIL_FOLLOW_METERS).toBeLessThan(TRAIL_SNAP_METERS);
+  it('reaches further for a peak than for a trail', () => {
+    // Peaks are sparse landmarks a user clicks near deliberately; a trail has to
+    // be under the cursor, so a much wider reach there would grab the wrong one.
+    expect(PEAK_SNAP_METERS).toBeGreaterThan(TRAIL_SNAP_METERS);
+  });
+});
+
+describe('drawStatusText', () => {
+  it('mentions snapping while the route is still empty', () => {
+    expect(drawStatusText(0, true)).toContain('snaps to trails');
+    expect(drawStatusText(1, true)).toContain('snaps to trails');
+  });
+
+  it('drops the snapping clause when snapping is off', () => {
+    expect(drawStatusText(0, false)).not.toContain('snaps to trails');
+    expect(drawStatusText(0, false)).toContain('Click to add points');
+  });
+
+  it('drops the clause once the route can be finished, either way', () => {
+    // The clause is about the next click, and there is no next click to place.
+    expect(drawStatusText(2, true)).toBe(drawStatusText(2, false));
+    expect(drawStatusText(2, true)).toBe('Press Enter or click Finish to end');
+  });
+});
+
+describe('waypointHintText', () => {
+  it('mentions peaks only while snapping is on', () => {
+    expect(waypointHintText(true)).toContain('snaps to peaks');
+    expect(waypointHintText(false)).not.toContain('snaps to peaks');
+  });
+
+  it('keeps the rest of the instruction either way', () => {
+    for (const enabled of [true, false]) {
+      expect(waypointHintText(enabled)).toContain('Click to place a waypoint');
+      expect(waypointHintText(enabled)).toContain('Esc to cancel');
+    }
+  });
+});
+
+describe('SNAP_ENABLED_BY_DEFAULT', () => {
+  it('is on, so a fresh map snaps', () => {
+    expect(SNAP_ENABLED_BY_DEFAULT).toBe(true);
   });
 });
