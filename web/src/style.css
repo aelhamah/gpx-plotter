@@ -28,6 +28,12 @@ body { overflow: hidden; }
 .button.active { background: #e9e9e4; border-color: #aaa; }
 .file-button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; text-align: center; }
 .file-button input { display: none; }
+/* The snap toggle is a standing preference rather than a momentary action, so it
+   gets the same blue "engaged" treatment the drawing modes use on their icon
+   buttons — the generic `.button.active` grey reads as "pressed", not "on". */
+.snap-toggle { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.snap-toggle.active { background: #eef2ff; border-color: #2563eb; color: #1d4ed8; }
+.snap-toggle.active:hover { background: #e0e9ff; border-color: #1d4ed8; }
 .button-icon { width: 18px; height: 18px; flex: 0 0 auto; }
 .icon-button-wrap { position: relative; display: inline-flex; }
 .segmented { display: inline-flex; }

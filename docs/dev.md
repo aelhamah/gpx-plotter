@@ -77,7 +77,18 @@ web/tests/
   simplify.test.ts   downsampling + distance-based budget
   style.test.ts      pointer-events layering in style.css
   fitPadding.test.ts sidebar-aware fitBounds padding
+  snapHaloRidge.test.ts  snapping + trail-following measured on a real recorded hike
+  sidebar.test.ts    sidebar controls are reachable and render in their default state
 ```
+
+`tests/fixtures/haloridge14ers.gpx` is a real recorded hike (Halo Ridge, Mt. of
+the Holy Cross — 1044 points, 12.5 km, 3159–4259 m). It backs
+`snapHaloRidge.test.ts`, which uses the recording as stand-in trail geometry: run
+through a decimating helper it is a stand-in for the *simplified* geometry a
+vector tile publishes, so snapping accuracy can be measured offline. Synthetic
+straight lines cannot cover the cases that actually break snapping — switchbacks,
+GPS noise, and stretches with genuinely no mapped path — which is what this
+fixture is for.
 
 Guidelines:
 

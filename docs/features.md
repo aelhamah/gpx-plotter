@@ -96,6 +96,16 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   one too, the trail's own vertices are inserted between them, so the route runs
   along the trail instead of cutting straight across. On the same recorded hike
   this turns 3 of every 10 drawn segments into trail-following ones.
+- **A "Snap to trails" toggle**, on by default and remembered with the workspace.
+  It appears in the sidebar only while you are drawing a route, since snapping
+  only applies while points are being placed — start drawing, toggle it, and it
+  goes away again when you finish. Turning it off makes every click land exactly
+  where it was made:
+  no trail snapping, no peak snapping for waypoints, no hover preview, and the
+  draw bar and waypoint hint drop the "snaps to…" clause rather than saying
+  snapping failed. Points already snapped stay where they are — switching it off
+  does not rewrite the route. The main reason to want it is a trail crossing the
+  cursor near a summit waypoint, which would otherwise quietly relocate it.
 - **New route** creates a route and drops straight into drawing.
 - **Drag route points** to reshape a route; elevation is re-sampled after a drag.
 - **Rename routes** from the sidebar or by double-clicking the route's map label.
@@ -133,6 +143,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   elevation, sampled from the DEM once and kept up to date.
 - **Peak snapping**: a waypoint dropped within ~250 m of a mapped peak snaps to
   the summit, inheriting the peak's name and elevation from the planet tileset.
+  (Both trail and peak snapping follow the "Snap to trails" sidebar toggle.)
 - **Waypoint count** section summarising how many waypoints exist.
 - **Selection affordance**: the selected waypoint is highlighted with a border
   and an edit (✎) label; clicking empty map clears the selection.
@@ -248,10 +259,12 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **251 unit tests** across 23 files covering geodesy, GPX parse/serialize, DEM
+- **283 unit tests** across 25 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
   geocoding, geolocation (accuracy halo, camera zoom, permission copy), route
   merging, workspace storage, the MVT tile decoder, trail/peak snapping and the
-  tile selection behind it, trail-network routing, segment bearings and
-  route-arrow rendering, and the service-failure banner.
+  tile selection behind it, the snapping copy that changes with the toggle,
+  trail-network routing, segment bearings and route-arrow rendering, the
+  service-failure banner, sidebar control reachability, and snapping measured end
+  to end against a real recorded hike.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

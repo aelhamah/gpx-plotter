@@ -82,16 +82,17 @@ stack, and no GPX export UI. This removes three TypeScript modules that exist
 | Dropped | Lines | Why it exists |
 | --- | --- | --- |
 | `web/src/mvt.ts` | 239 | MVT protobuf decoder, feeds trail snapping |
-| `web/src/trailGraph.ts` | 188 | Dijkstra along trail polylines, snapping only |
+| `web/src/trailGraph.ts` | 215 | Dijkstra along trail polylines, snapping only |
 | `web/src/snapSources.ts` | 210 | fetches trail/peak vector tiles for snapping |
 | `web/src/snapTiles.ts` | 141 | picks the zoom and tile set a snap query needs |
+| `web/tests/fixtures/haloridge14ers.gpx` | 12.5 km | recorded hike fixture, snapping tests only |
 | `web/src/merge.ts` | 90 | merging two routes |
 | `web/src/drag.ts` | 3 | vertex drag threshold |
 | `web/src/main.ts` edit machinery | ~700 of 1797 | draw / drag / merge / undo / dialogs / shortcuts |
 
-That also drops the 63 tests in the five snapping suites (`mvt`, `snap`,
-`snapTiles`, `snapSources`, `trailGraph`) of the 248 web tests, which are not
-ported. `snap.ts` is partly kept — see the ported list below.
+That also drops the 78 tests in the six snapping suites (`mvt`, `snap`,
+`snapTiles`, `snapSources`, `trailGraph`, `snapHaloRidge`) of the 266 web tests,
+which are not ported. `snap.ts` is partly kept — see the ported list below.
 
 Editing can be added later without a rewrite, because `RouteKit` is pure.
 
