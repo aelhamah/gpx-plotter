@@ -10,3 +10,30 @@ dist/
 .env
 .env.*
 !.env.example
+
+# iOS: local MapTiler key (see ios/App/Secrets.xcconfig.example)
+ios/App/Secrets.xcconfig
+
+# iOS: SwiftPM build products for the RouteKit package
+ios/RouteKit/.build/
+.swiftpm/
+
+# iOS: the Xcode project is generated from ios/App/project.yml by XcodeGen, and
+# CI only builds the Swift package, so the project is not tracked. Run
+# `xcodegen generate` (see docs/dev.md).
+ios/App/*.xcodeproj/
+
+# iOS: the app's Info.plist is written by that same generate, from the
+# `info.properties` block in project.yml. Xcode drops custom INFOPLIST_KEY_*
+# names, so the MapTiler key has to live there — editing this file directly
+# would be overwritten on the next generate.
+ios/App/GPXNav/Info.plist
+
+xcuserdata/
+*.xcuserstate
+
+# iOS: derived build output
+ios/App/build/
+DerivedData/
+*.xccheckout
+*.xcscmblueprint
