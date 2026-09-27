@@ -5,20 +5,27 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Loopback HTTP server that colorizes DEM tiles into slope rasters.
+/// Loopback HTTP server for the two things MapLibre Native cannot be given
+/// directly.
 ///
-/// MapLibre Native has no equivalent of the web app's
-/// `addProtocol('slope', …)` — `MLNMapViewDelegate`'s tile callback is
-/// observational only, so it cannot supply data. This serves the same PNGs over
-/// `http://127.0.0.1:<port>/slope/{z}/{x}/{y}.png` instead, which mirrors
-/// `addProtocol` almost one-to-one and works inside offline packs too.
+/// - `GET /slope/{z}/{x}/{y}.png` — slope rasters. Native has no equivalent of
+///   the web app's `addProtocol('slope', …)`: `MLNMapViewDelegate`'s tile
+///   callback is observational only, so it cannot supply data. Serving the same
+///   PNGs over loopback mirrors `addProtocol` almost one-to-one and works inside
+///   offline packs too.
+/// - `GET /style.json?style=…&terrain=…` — MapTiler's style with the 3D terrain
+///   block injected, because Native has no `setTerrain` equivalent either.
+///
+/// Both ride the one listener rather than opening a second port.
 final class SlopeServer: @unchecked Sendable {
     private let listener: NWListener
     private let terrainStore: TerrainTileStore
+    private let styleBuilder: StyleBuilder
     private let port: NWEndpoint.Port
 
-    init(terrainStore: TerrainTileStore, port: UInt16) throws {
+    init(terrainStore: TerrainTileStore, styleBuilder: StyleBuilder, port: UInt16) throws {
         self.terrainStore = terrainStore
+        self.styleBuilder = styleBuilder
         self.port = NWEndpoint.Port(rawValue: port) ?? 8080
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
@@ -46,6 +53,10 @@ final class SlopeServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
+            if let query = Self.parseStyleRequest(request) {
+                Task { await self.serveStyle(query: query, to: connection) }
+                return
+            }
             guard let (z, x, y) = Self.parse(request) else {
                 self.respond(to: connection, status: 404, type: "text/plain", body: Data("not found".utf8))
                 return
@@ -68,6 +79,33 @@ final class SlopeServer: @unchecked Sendable {
               let y = Int(pieces[3].dropLast(4))
         else { return nil }
         return (z, x, y)
+    }
+
+    /// `GET /style.json?style=outdoor&terrain=1` → the patched style JSON.
+    static func parseStyleRequest(_ request: String) -> [URLQueryItem]? {
+        guard let line = request.split(separator: "\r\n").first else { return nil }
+        let parts = line.split(separator: " ")
+        guard parts.count >= 2, parts[0] == "GET" else { return nil }
+
+        let target = String(parts[1])
+        guard let components = URLComponents(string: "http://127.0.0.1" + target),
+              components.path == "/style.json"
+        else { return nil }
+        return components.queryItems
+    }
+
+    private func serveStyle(query: [URLQueryItem], to connection: NWConnection) async {
+        func value(_ name: String) -> String? {
+            query.first { $0.name == name }?.value
+        }
+        let style: MapStyle = value("style") == "satellite" ? .satellite : .outdoor
+        let terrain = value("terrain") == "1"
+
+        guard let json = await styleBuilder.style(for: style, terrain: terrain) else {
+            respond(to: connection, status: 502, type: "text/plain", body: Data("no style".utf8))
+            return
+        }
+        respond(to: connection, status: 200, type: "application/json", body: json)
     }
 
     private func serve(z: Int, x: Int, y: Int, to connection: NWConnection) async {

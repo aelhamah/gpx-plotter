@@ -49,7 +49,7 @@ struct MapView: UIViewRepresentable {
     // MARK: - Style
 
     private func styleURL(for style: MapStyle) -> URL {
-        AppConfig.styleURL(for: style)
+        AppConfig.styleURL(for: style, terrain3D: workspace.showTerrain3D)
     }
 
     // MARK: - Routes
@@ -310,6 +310,15 @@ struct MapView: UIViewRepresentable {
 
     // MARK: - Camera
 
+    /// Tilt the camera when 3D terrain is on, matching the web app, which does
+    /// `easeTo({ pitch: 55 })` alongside `setTerrain`. Without the tilt the
+    /// terrain is loaded but invisible.
+    private func applyTerrainCamera(to mapView: MLNMapView) {
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        camera.pitch = workspace.showTerrain3D ? AppConfig.terrainPitch : 0
+        mapView.setCamera(camera, withDuration: 0.6, animationTimingFunction: nil)
+    }
+
     private func fitMapToRoute(_ mapView: MLNMapView, route: Route, animated: Bool) {
         let coordinates = route.points.map {
             CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
@@ -357,6 +366,8 @@ struct MapView: UIViewRepresentable {
                 parent.fitMapToRoute(mapView, route: parent.route, animated: false)
                 hasFitted = true
             }
+            // After the fit, so fitting the route does not undo the tilt.
+            parent.applyTerrainCamera(to: mapView)
         }
     }
 }

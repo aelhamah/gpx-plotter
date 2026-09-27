@@ -34,6 +34,7 @@ final class WorkspaceStore: ObservableObject {
     @Published var mapStyle: MapStyle = .outdoor
     @Published var showHillshade = false
     @Published var showSlope = false
+    @Published var showTerrain3D = false
     /// Set when the last import failed, so the library can show why.
     @Published var importError: String?
     /// Name of the GPX file the routes came from, when imported.
@@ -62,6 +63,7 @@ final class WorkspaceStore: ObservableObject {
         let arguments = ProcessInfo.processInfo.arguments
         showHillshade = arguments.contains("-showRelief")
         showSlope = arguments.contains("-showSlope")
+        showTerrain3D = arguments.contains("-terrain3D")
 
         // `-importGPX <name>` reads a GPX from Documents at launch, so the import
         // path can be checked without driving the document picker.
@@ -196,6 +198,7 @@ final class SlopeServerManager: ObservableObject {
         do {
             let server = try SlopeServer(
                 terrainStore: TerrainTileStore(config: AppConfig.terrainConfig),
+                styleBuilder: StyleBuilder(config: AppConfig.terrainTileConfig),
                 port: AppConfig.slopePort
             )
             server.start()

@@ -132,6 +132,28 @@ carried over verbatim:
 - 0.5 hillshade exaggeration · 6-result geocode limit
 - Haversine on a 6371008.8 m mean radius
 
+### MVC, and how it maps onto SwiftUI
+
+The app keeps a **Model–View–Controller** split. SwiftUI does not have
+UIKit's view controllers, so the mapping is:
+
+| Role | What it is here | Rule |
+| --- | --- | --- |
+| Model | `RouteKit`, plus `WorkspaceStore`, `RouteAnalysis`, `OfflinePackManager`, `LocationController` | Holds state and logic. No view types, no MapLibre types. `WorkspaceStore` and friends are observable so views update, but they are the model, not a view-model layer bolted on top. |
+| View | The SwiftUI structs in `Features/`, plus `RouteProfileChart` and `MapView` as a leaf | Declarative layout only. A view formats and forwards intent; it does not compute route statistics, parse GPX, or talk to MapLibre. |
+| Controller | `MapView.Coordinator` (the `MLNMapViewDelegate`), `SlopeServerManager`, `StyleBuilder`, and the per-screen controllers behind each tab | Owns the imperative engine and mediates between model and view. Anything that talks to MapLibre or a socket is a controller. |
+
+Two consequences worth writing down, because they are easy to lose:
+
+- Business logic does not move into views when a screen grows. The first cut of
+  the elevation profile computed cumulative distance and thinning inside the
+  chart view; that had to move into `RouteAnalysis` once the stats were derived
+  from the same samples. If a view starts doing arithmetic over route points, it
+  belongs in the model.
+- `MapLibre` imports stay inside `Map/`. A view that needs the engine talks to a
+  controller, which is why `MapView` is a `UIViewRepresentable` with a
+  coordinator rather than MapLibre calls sprinkled through `Features/`.
+
 **No `MapEngine` protocol.** With the engine decided, an abstraction over one
 implementation is speculative. Instead: all logic lives in `RouteKit` with zero
 map types, and MapLibre-specific code is confined to `ios/App/GPXNav/Map/`. If
@@ -298,7 +320,88 @@ the *Mapbox* encoding (supported since 6.0.0), so it should work — but this is
 the first thing the M0 spike checks, because if it fails we lose both 3D terrain
 and hillshade.
 
-## 7. Navigation
+## 7. App structure and screen layout
+
+Added after a first pass at the viewer, from using it. The web app's layout
+cannot be carried across literally: a phone in the hand has no room for a
+sidebar, a profile canvas *and* a map at once.
+
+### Bottom bar: Create, Navigate, Settings
+
+Three tabs, replacing the current Library / Settings pair.
+
+| Tab | What it is | Milestone |
+| --- | --- | --- |
+| **Create** | Search, pick waypoints, draw a route. Exports a GPX into the library when finished. | M2 for search and the drawing surface, M3 for export. |
+| **Navigate** | Replaces the Library tab for now and behaves the same way: a list of maps, titled **Maps**, opening the full-screen viewer. Becomes live navigation in M3. | M2 for the list, M3 for guidance. |
+| **Settings** | Basemap, terrain, units, data. As today. | Done. |
+
+**Maps list.** The list is titled "Maps" rather than "Routes" or "Library": a
+map is what the user is choosing, and the same list will hold routes that arrive
+from a GPX export as well as ones that arrive from an import. It lives in the
+Navigate tab until navigation needs the slot.
+
+### The map is full screen
+
+The map fills the display. The stats bar, profile, and offline row are no longer
+siblings of the map in a `VStack`; they are an overlay panel over the bottom of
+it, so panning the map is never fighting a layout that gives the map half the
+screen. This is the single biggest change from the M0/M1 layout and it is what
+makes the profile-trace interaction (§ below) possible.
+
+### A collapsible bottom panel
+
+One control collapses the panel down to the stats bar alone, so the map can be
+used full-bleed while still showing distance, ascent, descent, and high point.
+Two candidate mechanisms, and **this needs a decision** — see §11:
+
+- A **two-state collapse**: the panel is either the full stack (stats + profile +
+  offline) or the stats bar only, toggled by a chevron.
+- A **draggable sheet** with detents, so a swipe part-way shows a middle state
+  (stats + a shorter profile).
+
+### Profile scrubbing and the map trace
+
+Dragging along the elevation profile traces the position onto the map, the way
+the web app's `profile-trace` layer does. The plan already called for this — "a
+`RuleMark` selection drives the profile-trace overlay" — and it becomes much more
+usable once the profile is an overlay rather than a sibling of the map.
+
+- A `RuleMark` at the scrubbed distance, plus a readout of distance, elevation,
+  and grade at that point.
+- The map draws a `profile-trace` line for the portion of the route already
+  covered, in the web app's `TRACE_COLOR` (`#0ea5e9`).
+- `RouteProfile.index(nearestTo:)` already does the lookup, so the trace is a
+  slice of the same resampled profile the chart and the stats use. The rule that
+  keeps those three agreeing — one profile, three views — applies here too.
+
+### Other fixes
+
+- **The profile overlaps its axes.** The chart is a fixed-height frame with the
+  axis labels inside it, so the x-axis labels and the area fill collide with the
+  bottom edge. Give the plot its own padded frame instead of letting the chart
+  fill the whole view.
+- **One location button, and it points north.** There are currently two: a
+  disabled *Navigate* toolbar item and a floating locate button. Remove the
+  toolbar one — Navigate becomes a tab. Tapping the remaining button recentres
+  **and** rotates the map to the current heading, which needs
+  `CLLocationManager`'s heading updates and `MLNMapView.setDirection`. Two states
+  are enough: tap to centre and face the direction of travel, tap again to snap
+  back to north.
+- **The title bar is slightly translucent**, so the map reads as continuing under
+  the navigation bar rather than stopping at it.
+- **Fix the download.** See §9 — this is not a UI fix, it needs the decision
+  recorded there before any button is enabled again.
+
+### Already satisfied
+
+- **Multiple routes and waypoints in one GPX.** `GPXParser` returns every
+  `<trk>`/`<rte>` as a route and every `<wpt>` as a waypoint, and
+  `WorkspaceStore.importGPX` appends all of them. Verified with one file
+  containing two tracks and one route plus two waypoints: three routes and both
+  waypoints come in, each with its own id and palette colour.
+
+## 8. Navigation
 
 No turn-by-turn and no routing engine: `MKDirections` routes on Apple's road
 graph and produces nothing useful above treeline. Guidance is trail-following,
@@ -352,7 +455,7 @@ Dynamic Island compact / minimal / expanded, with Pause and End via
 Background location via `CLBackgroundActivitySession` (iOS 17+),
 `allowsBackgroundLocationUpdates`, and `UIBackgroundModes: [location]`.
 
-## 8. Offline
+## 9. Offline
 
 **Deferred: `MLNOfflineStorage` packs do not work on MapLibre Native 6.31.0.**
 The corridor geometry, tile selection, size estimates, and progress state
@@ -392,6 +495,18 @@ Options for M5, in the order worth trying:
 3. Keep packs but drop the map's dependency on MapLibre's ambient cache by
    serving a locally-built style, as the loopback slope server already does.
 
+**This is now a blocking decision, not a someday item.** The Download control is
+disabled with this reason on screen, and the feedback from using the app was
+"fix the ability to download" — so one of the three has to be chosen before the
+control can be enabled again. Option 1 is the cheapest and should be tried
+first; if it fails, option 2 is the honest answer, because it stops depending on
+a MapLibre feature that does not work.
+
+Note that option 2 interacts with the style builder already in flight: if the
+app is assembling its own style anyway, a locally-built style and a hand-rolled
+tile cache are the same amount of machinery, and the tile-fetching half is the
+part `MLNOfflineStorage` was going to do for us.
+
 The rest of the original design still holds: offer a corridor download on
 import, the route polyline plus roughly a 1 km buffer.
 
@@ -414,18 +529,18 @@ Bells loop is 136 tiles / ~4.6 MB at z12–z14.
 distributed app. That is a licensing question, not an engineering one, and it
 can invalidate the approach.
 
-## 9. Milestones
+## 10. Milestones
 
 | | Scope | Gate |
 | --- | --- | --- |
 | **M0 Spike** | Xcode project + SPM, MapTiler style renders, `raster-dem` Terrain-RGB confirmed, loopback slope raster visible, offline pack survives airplane mode | **Go/no-go.** Slope shading is the first thing to cut if the loopback server misbehaves; if `raster-dem` fails, 3D terrain and hillshade both go |
 | **M1 Core** | `RouteKit` + ~120 tests, GPX import, stats, Swift Charts profile | Import a GPX and see real numbers |
-| **M2 Viewer** | Style builder, full layer stack, all toggles, waypoints, search, fit, locate | Visually matches the web app |
-| **M3 Navigate** | `NavigationSession`, progress, off-course, nav UI, background location | Hike a real trail with the phone locked |
+| **M2 Viewer** | Style builder, full layer stack, all toggles, waypoints, search, fit, locate, full-screen map, collapsible panel, profile scrubbing with map trace, Create/Navigate/Settings tabs | Visually matches the web app, in one hand |
+| **M3 Navigate** | `NavigationSession`, progress, off-course, nav UI, background location, route drawing + GPX export from Create | Hike a real trail with the phone locked |
 | **M4 Live Activity** | Widget extension, Dynamic Island | Glanceable from the lock screen |
 | **M5 Offline** | Corridor prefetch, download manager, storage screen | Full hike in airplane mode |
 
-#### 9.1 Actual state
+#### 10.1 Actual state
 
 **M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **90 tests, 0
 failures.** The gate is "import a GPX and see real numbers", and that now works
@@ -477,7 +592,7 @@ Three porting bugs worth recording, all found by the tests rather than review:
   buffer into a 1000° offset, and built its tile-y range backwards (south
   latitude is a *larger* tile y), which trapped at runtime.
 
-**M0 Spike — verified, except offline packs (see §8).**
+**M0 Spike — verified, except offline packs (see §9).**
 
 | Gate item | State |
 | --- | --- |
@@ -487,7 +602,7 @@ Three porting bugs worth recording, all found by the tests rather than review:
 | Loopback slope server | **Done end to end.** Serves a real 512×512 RGBA PNG derived from MapTiler Terrain-RGB (`GET http://127.0.0.1:8080/slope/12/656/1583.png` → 200, ~27 KB), and the layer is visible on the map. |
 | MapTiler style renders | **Done.** The key allows both web origins and the native `User-Agent` on the same key (§5.1), and the style, satellite style, Terrain-RGB tile, and geocoding all return 200. |
 | `raster-dem` Terrain-RGB | **Done.** `MLNRasterDEMSource` over MapTiler Terrain-RGB renders hillshaded relief. |
-| Offline pack survives airplane mode | **Not achievable as designed.** `addPack` succeeds but MapLibre never enumerates resources, so no tile is ever fetched. Deferred; evidence and options in §8. Airplane-mode validation would additionally need a device, since `simctl` has no connectivity toggle. |
+| Offline pack survives airplane mode | **Not achievable as designed.** `addPack` succeeds but MapLibre never enumerates resources, so no tile is ever fetched. Deferred; evidence and options in §9. Airplane-mode validation would additionally need a device, since `simctl` has no connectivity toggle. |
 
 M0 defects the simulator surfaced, all fixed:
 
@@ -517,8 +632,8 @@ M0 defects the simulator surfaced, all fixed:
 | Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`. |
 | Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. |
 | Search | **Done.** Debounced 300 ms, six results, proximity biased to the route, and the Peak / Trailhead / Trail / Street badges from `RouteKit`. Tapping a result adds it as a waypoint. Verified against the live endpoint: names, peak detection, and summit elevations all arrive. |
-| 3D terrain toggle | **Not done.** Native has no terrain setter, so the `terrain` block has to be written into a style JSON we assemble ourselves — see §6. Until that exists the toggle would be a lie, so it is absent rather than inert. |
-| Style builder | **Not started.** The app still points at MapTiler's hosted style. This is the prerequisite for 3D terrain. |
+| 3D terrain toggle | **Built, not yet verified on the map.** The map now loads its style from the loopback endpoint with `?terrain=1`, and the toggle forces a style reload because that is the only way to add or drop the block. Needs a look at a pitched camera before it is called done. |
+| Style builder | **Built.** `StyleBuilder` fetches MapTiler's hosted style, adds a `raster-dem` source named `terrain` with an inline `tiles` template, and writes `"terrain": { "source": "terrain", "exaggeration": 1.15 }` — the same source name and exaggeration the web app's `setTerrain` call uses. The basemap is still MapTiler's own; only the terrain block is added. Served from the existing loopback listener at `/style.json?style=…&terrain=…`, cached per variant. |
 
 Two MapLibre Native constraints cost rework here, both found by compiling
 against the real headers rather than by reading docs:
@@ -530,7 +645,7 @@ against the real headers rather than by reading docs:
   route vertices. The concrete class is `MLNPointCollection`, whose ObjC factory
   imports into Swift as `init(coordinates:count:)`.
 
-A design note for §8: the plan's literal "test each tile centre against
+A design note for §9: the plan's literal "test each tile centre against
 distance-to-route" **selects nothing at low zoom**, because a z12 tile is ~9.8 km
 across while the buffer is ~1 km. The implementation keeps the intent but uses a
 tolerance of `buffer + tile half-diagonal`, which still discards the inside-corner
@@ -541,7 +656,7 @@ Terrain-RGB tiles, while that figure appears to assume satellite rasters, which
 are much larger at high zoom. The in-app estimate is therefore reported as
 computed rather than tuned to hit the plan's number.
 
-## 10. Risks
+## 11. Risks
 
 1. **`raster-dem` custom encoding** unsupported on Native iOS ([#2783]). M0 item
    one; it gates both 3D terrain and hillshade. **Narrowed:** `MLNRasterDEMSource`
@@ -562,7 +677,7 @@ computed rather than tuned to hit the plan's number.
    needs both an origin allowlist and a user-agent allowlist, and the iOS
    half of that is easy to leave out.
 
-## 11. Open questions
+## 12. Open questions
 
 - **Bundle ID — settled as `com.example.GPXNav` for now** (widget
   `com.example.GPXNav.GPXNavWidgets`). `com.example` is a reserved placeholder
@@ -577,3 +692,19 @@ computed rather than tuned to hit the plan's number.
   later at all.
 - Seed the app with the existing demo tracks in `web/public/demos/`. Currently a
   hardcoded `DemoData.route` stands in; the document picker lands in M2.
+- **Collapsible panel mechanism** (§7). A two-state collapse is the simpler
+  thing to build and to reason about; a draggable sheet with detents is nicer to
+  use but adds gesture handling that has to coexist with the map's own pan and
+  pinch. Worth deciding before M2's layout work, because the map overlay
+  structure depends on it.
+- **What "fix the download" means** (§9). The corridor download is blocked by
+  MapLibre, not by our code — `addPack` succeeds and then reports zero
+  downloadable resources. The three ways forward are listed in §9 and they are
+  different amounts of work: retry on a newer MapLibre is a day, a hand-rolled
+  tile cache is a week, and a locally-built style is somewhere between. Until one
+  is chosen the button stays disabled with the reason on screen.
+- **Whether the Create tab draws freehand or snaps to trails.** The web app snaps
+  to marked trails and peaks (`trailGraph`, `snapSources`), and §3 keeps
+  `snap.ts` partly. Snapping is more useful on a phone but pulls in the vector
+  tile decoding that §3 lists as dropped. Freehand-only is much less work and
+  loses the feature that makes drawn routes follow real paths.

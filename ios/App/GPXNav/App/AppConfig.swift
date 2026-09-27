@@ -58,19 +58,52 @@ enum AppConfig {
         hasMapTilerKey ? MapTilerConfig(apiKey: maptilerAPIKey) : nil
     }
 
-    static func styleURL(for style: MapStyle) -> URL {
+    /// The same DEM config for the style builder, which runs off the main actor.
+    static var terrainTileConfig: MapTilerConfig? { terrainConfig }
+
+    /// The style URL the map should load.
+    ///
+    /// With a MapTiler key this is the **loopback** style endpoint, because 3D
+    /// terrain has to be in the style JSON: MapLibre Native has no `setTerrain`
+    /// equivalent, so the `terrain` block is injected server-side. The `terrain`
+    /// query is what makes a toggle change the URL, and therefore force MapLibre
+    /// to reload the style — there is no other way to add or drop the block.
+    static func mapStyleURL(for style: MapStyle, terrain3D: Bool) -> URL {
+        guard hasMapTilerKey else { return demoStyleURL }
+        var components = URLComponents(string: "http://127.0.0.1:\(slopePort)/style.json")!
+        components.queryItems = [
+            URLQueryItem(name: "style", value: style.rawValue),
+            URLQueryItem(name: "terrain", value: terrain3D ? "1" : "0"),
+        ]
+        return components.url!
+    }
+
+    static let demoStyleURL = URL(string: "https://demotiles.maplibre.org/style.json")!
+
+    /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
+    static let terrainPitch: CGFloat = 55
+
+    /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
+    /// no Terrain-RGB source to point the terrain block at.
+    static var canUseTerrain3D: Bool { hasMapTilerKey }
+
+    static var terrain3DLimitation: String? {
+        canUseTerrain3D
+            ? nil
+            : "3D terrain needs MapTiler's Terrain-RGB tiles. The demo basemap serves Terrarium terrain, which MapLibre's raster-DEM source cannot decode."
+    }
+
+    /// - Parameter terrain3D: whether the style should carry a 3D terrain
+    ///   block. Callers that only need a style for tile requests can ignore it.
+    static func styleURL(for style: MapStyle, terrain3D: Bool = false) -> URL {
         // Debug override: point the app at a local server to inspect the exact
         // request headers iOS sends. Set GPXNAV_STYLE_URL when launching.
         if let override = ProcessInfo.processInfo.environment["GPXNAV_STYLE_URL"],
            let url = URL(string: override) {
             return url
         }
-        switch styleSource {
-        case .mapTiler:
-            return MapTilerConfig(apiKey: maptilerAPIKey).styleURL(for: style)
-        case .mapLibreDemo:
-            return URL(string: "https://demotiles.maplibre.org/style.json")!
-        }
+        guard styleSource == .mapTiler else { return demoStyleURL }
+        return mapStyleURL(for: style, terrain3D: terrain3D)
     }
 
     /// DEM tiles for relief shading.
