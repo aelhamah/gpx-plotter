@@ -332,6 +332,23 @@ Allow-list the Pages origin on your MapTiler key.
   skipped for forks (no secrets) and for PRs that only touch `ios/` — there is
   nothing to publish for a native build. The removal step still runs on close
   regardless, since it only deletes files.
+- **Both of those push to the same `gh-pages` branch, so they share one
+  `concurrency` group named `gh-pages`.** This is not tidiness — it is the only
+  thing standing between them and a failed publish:
+
+  - `peaceiris/actions-gh-pages` clones with `--depth=1 --single-branch`, so it
+    cannot fast-forward. Any push that overlaps another writer's is rejected as
+    `! [rejected] (fetch first)`, and the action does not retry.
+  - Merging a pull request fires *both*: the merge triggers `deploy.yml` via
+    `push`, and the close triggers `preview.yml`'s cleanup. They land about a
+    second apart, so every merge is a coin flip rather than a rare accident.
+    This actually took a live site down once — see PR #46.
+  - `cancel-in-progress` is off deliberately. Cancelling a publish that is
+    already pushing leaves `gh-pages` in neither the old nor the new state, and a
+    preview must never be able to interrupt a production deploy. Runs queue
+    instead; a deploy takes about half a minute.
+
+  If you add a third thing that writes to `gh-pages`, it needs the same group.
 
 | Build | URL |
 | --- | --- |

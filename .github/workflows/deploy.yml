@@ -8,9 +8,18 @@ on:
 permissions:
   contents: write
 
+# The thing being contended is the single gh-pages branch, which PR previews write
+# to as well. Serialise on that, not on "main deploys": merging a pull request
+# fires this workflow (push to main) and the preview cleanup (pull_request closed)
+# at the same moment, and both push to gh-pages.
+#
+# cancel-in-progress is off on purpose. A preview must never cancel a production
+# deploy midway, and cancelling a publish that is already pushing leaves gh-pages
+# in neither the old nor the new state. Runs queue instead; a deploy takes about
+# half a minute, so the wait is shorter than the recovery from a lost site.
 concurrency:
-  group: gh-pages-main
-  cancel-in-progress: true
+  group: gh-pages
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:

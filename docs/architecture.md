@@ -578,6 +578,12 @@ placeholder.
   `preview/<branch>/` on the same `gh-pages` branch (so main and previews coexist
   on one Pages site) and comment the URL on the PR. Only `web/` changes produce
   a preview, since a native build has nothing to publish.
+- Deployment and previews therefore have two writers for one branch, and the
+  publishing action clones it shallowly, so overlapping pushes are rejected with
+  no retry. Both workflows serialise on a shared `gh-pages` concurrency group,
+  with `cancel-in-progress` off so a preview cannot interrupt a live publish.
+  Merging a PR triggers both at once, so without that group every merge is a
+  chance to leave the site on the previous commit.
 
 ## 14. Known limitations
 

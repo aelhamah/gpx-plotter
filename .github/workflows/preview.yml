@@ -15,9 +15,19 @@ permissions:
   contents: write
   pull-requests: write
 
+# Shares the gh-pages group with deploy.yml. Both workflows push to the same
+# branch, and peaceiris/actions-gh-pages clones it with --depth=1, so a push that
+# overlaps another writer's is always rejected as a non-fast-forward with no
+# retry. Keying this on the pull request number only serialised one PR's runs
+# against each other and left every other writer free to collide. Merging a PR
+# makes this certain rather than unlucky: the close fires this cleanup while the
+# merge fires deploy.yml, roughly a second apart.
+#
+# cancel-in-progress is off so that a preview cannot interrupt a production
+# deploy. Runs queue on the branch instead.
 concurrency:
-  group: preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: gh-pages
+  cancel-in-progress: false
 
 jobs:
   changes:
