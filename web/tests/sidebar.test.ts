@@ -61,6 +61,32 @@ describe('the snap toggle', () => {
   });
 });
 
+describe('the snap toggle only appears while drawing', () => {
+  const toolbar = doc.getElementById('snap-toolbar');
+  const toggle = doc.getElementById('snap-toggle');
+
+  it('is hidden in the shipped markup, matching a fresh load', () => {
+    // Nothing is being drawn on load, so the control must not be on screen. If
+    // this disagreed with the initial `drawing` state the sidebar would show a
+    // toggle and then yank it away as soon as the app booted.
+    expect(toolbar).not.toBeNull();
+    expect(toolbar!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('lives in the toolbar that gets hidden, not just the button', () => {
+    // Hiding only the button would leave an empty flex row and its gap behind.
+    expect(toggle!.parentElement).toBe(toolbar);
+  });
+
+  it('is already in the right state while hidden', () => {
+    // Drawing starts by removing `hidden` and nothing else, so the button has to
+    // carry the saved preference from the start or it would appear wrong for a
+    // frame and need a second pass to correct itself.
+    expect(toggle!.classList.contains('active')).toBe(SNAP_ENABLED_BY_DEFAULT);
+    expect(toggle!.getAttribute('aria-pressed')).toBe(String(SNAP_ENABLED_BY_DEFAULT));
+  });
+});
+
 describe('the snapping copy the app overwrites at runtime', () => {
   it('describes the default state in the static markup', () => {
     // Both strings are rewritten on draw/waypoint mode. The shipped markup should

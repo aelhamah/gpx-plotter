@@ -624,6 +624,7 @@ function startDrawing() {
   $('draw-route').classList.add('active');
   drawHint.classList.add('hidden');
   $('draw-bar').classList.remove('hidden');
+  $('snap-toolbar').classList.remove('hidden');
   updateDrawBar();
   map.getCanvas().style.cursor = 'crosshair';
 }
@@ -633,6 +634,10 @@ function stopDrawing() {
   setSnapPreview(null);
   $('draw-route').classList.remove('active');
   $('draw-bar').classList.add('hidden');
+  // Snapping only applies while points are being placed, so the toggle belongs
+  // to the draw bar rather than sitting in the sidebar all the time. The
+  // preference itself persists; only the control comes and goes.
+  $('snap-toolbar').classList.add('hidden');
   map.getCanvas().style.cursor = '';
 }
 

@@ -96,8 +96,11 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   one too, the trail's own vertices are inserted between them, so the route runs
   along the trail instead of cutting straight across. On the same recorded hike
   this turns 3 of every 10 drawn segments into trail-following ones.
-- **A "Snap to trails" toggle** in the sidebar, on by default and remembered with
-  the workspace. Turning it off makes every click land exactly where it was made:
+- **A "Snap to trails" toggle**, on by default and remembered with the workspace.
+  It appears in the sidebar only while you are drawing a route, since snapping
+  only applies while points are being placed — start drawing, toggle it, and it
+  goes away again when you finish. Turning it off makes every click land exactly
+  where it was made:
   no trail snapping, no peak snapping for waypoints, no hover preview, and the
   draw bar and waypoint hint drop the "snaps to…" clause rather than saying
   snapping failed. Points already snapped stay where they are — switching it off
@@ -256,7 +259,7 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **280 unit tests** across 25 files covering geodesy, GPX parse/serialize, DEM
+- **283 unit tests** across 25 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
   geocoding, geolocation (accuracy halo, camera zoom, permission copy), route
   merging, workspace storage, the MVT tile decoder, trail/peak snapping and the

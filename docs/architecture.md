@@ -515,7 +515,9 @@ new content.
 
 - **Draw mode** (`drawing`): clicking the map appends points to the active route.
   A floating draw bar shows the live point count and enables **Finish** once
-  there are ≥ 2 points; Enter finishes, Esc cancels. While drawing, hovering
+  there are ≥ 2 points; Enter finishes, Esc cancels. The snap toggle is revealed
+  and hidden with the draw bar, so it is on screen exactly when snapping can
+  apply. While drawing, hovering
   computes the same snap and shows a dashed preview line + blue dot (the
   `snap-preview` source), so the pending point is visible on the trail before the
   click. Each new point is pushed immediately and then refined asynchronously by
