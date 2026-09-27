@@ -15,7 +15,7 @@ import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
 import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
-import { PEAK_SNAP_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
+import { PEAK_SNAP_METERS, SNAP_ENABLED_BY_DEFAULT, TRAIL_SNAP_METERS, drawStatusText, nearestLine, nearestSnap, waypointHintText, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { snapZoomFor } from './snapTiles';
 import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
@@ -39,6 +39,7 @@ let slopeEnabled = false;
 /** Last device position, if the user asked for it. Never persisted with the workspace. */
 let locationFix: LocationFix | null = null;
 let unitSystem: UnitSystem = defaultUnitSystem();
+let snappingEnabled = SNAP_ENABLED_BY_DEFAULT;
 let selectedIndex: number | null = null;
 let selectedWaypointIndex: number | null = null;
 let markers: Marker[] = [];
@@ -94,6 +95,7 @@ function persistWorkspace() {
     documentName: documentName === DEFAULT_MAP_NAME ? undefined : documentName,
     selectedRouteId,
     unitSystem,
+    snappingEnabled,
     view: mapView ?? currentView(),
   });
 }
@@ -119,7 +121,7 @@ const FIT_MARGIN = 80;
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.AttributionControl(), 'bottom-right');
 
-// Restore the saved workspace (routes, waypoints, name, units, view) at startup.
+// Restore the saved workspace (routes, waypoints, name, units, snapping, view) at startup.
 let restoredView: WorkspaceView | undefined;
 const savedWorkspace = loadWorkspace();
 if (savedWorkspace) {
@@ -127,6 +129,7 @@ if (savedWorkspace) {
   waypoints = savedWorkspace.waypoints;
   nextRouteId = savedWorkspace.nextRouteId;
   unitSystem = savedWorkspace.unitSystem ?? unitSystem;
+  snappingEnabled = savedWorkspace.snappingEnabled ?? snappingEnabled;
   const restoredId = savedWorkspace.selectedRouteId;
   selectedRouteId = restoredId !== undefined && routes.some((route) => route.id === restoredId)
     ? restoredId
@@ -605,9 +608,7 @@ function updateDrawBar() {
   const count = activeRoute()?.points.length ?? 0;
   $('draw-count').textContent = String(count);
   ($('draw-finish') as HTMLButtonElement).disabled = count < 2;
-  $('draw-status').textContent = count < 2
-    ? 'Click to add points — snaps to trails, press Enter or click Finish to end'
-    : 'Press Enter or click Finish to end';
+  $('draw-status').textContent = drawStatusText(count, snappingEnabled);
 }
 
 function startDrawing() {
@@ -623,6 +624,7 @@ function startDrawing() {
   $('draw-route').classList.add('active');
   drawHint.classList.add('hidden');
   $('draw-bar').classList.remove('hidden');
+  $('snap-toolbar').classList.remove('hidden');
   updateDrawBar();
   map.getCanvas().style.cursor = 'crosshair';
 }
@@ -632,6 +634,10 @@ function stopDrawing() {
   setSnapPreview(null);
   $('draw-route').classList.remove('active');
   $('draw-bar').classList.add('hidden');
+  // Snapping only applies while points are being placed, so the toggle belongs
+  // to the draw bar rather than sitting in the sidebar all the time. The
+  // preference itself persists; only the control comes and goes.
+  $('snap-toolbar').classList.add('hidden');
   map.getCanvas().style.cursor = '';
 }
 
@@ -657,7 +663,7 @@ function setSnapPreview(point: SnapPoint | null) {
 
 let snapPreviewToken = 0;
 async function updateSnapPreview(event: MapMouseEvent) {
-  if (!drawing) return;
+  if (!drawing || !snappingEnabled) return;
   const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
   const token = ++snapPreviewToken;
   const zoom = snapZoomFor(map.getZoom());
@@ -686,7 +692,7 @@ function setWaypointMode(on: boolean) {
   if (on) {
     if (mergePickMode) exitMergePick();
     stopDrawing();
-    drawHint.textContent = 'Click to place a waypoint · snaps to peaks · Esc to cancel';
+    drawHint.textContent = waypointHintText(snappingEnabled);
     drawHint.classList.remove('hidden');
     map.getCanvas().style.cursor = 'copy';
   } else {
@@ -712,6 +718,7 @@ function addWaypoint(event: MapMouseEvent) {
 
 /** After a waypoint is placed, refine it onto the nearest peak within reach. */
 async function snapWaypointToPeak(index: number, raw: SnapPoint) {
+  if (!snappingEnabled) return;
   const peaks = await peaksNearPoint(raw.lon, raw.lat, snapZoomFor(map.getZoom()));
   if (peaks.length === 0) return;
   const result = nearestSnap(raw, peaks.map((peak) => [peak.center]), PEAK_SNAP_METERS);
@@ -753,6 +760,7 @@ function addRoutePoint(event: MapMouseEvent) {
  * vertices so the route runs along the trail instead of cutting straight across.
  */
 async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint) {
+  if (!snappingEnabled) return;
   const previous = index > 0 ? route.points[index - 1] : null;
   const zoom = snapZoomFor(map.getZoom());
   const [nearNew, nearPrevious] = await Promise.all([
@@ -1311,6 +1319,29 @@ function setUnitSystem(system: UnitSystem) {
   persistWorkspace();
 }
 
+/**
+ * Turn snapping on or off for every path that uses it: drawn route points, placed
+ * waypoints, and the hover preview. With it off a click lands exactly where it was
+ * made, which is the point — a trail crossing the cursor should not silently
+ * relocate a summit waypoint or drag a route onto a neighbouring path.
+ */
+function setSnappingEnabled(enabled: boolean) {
+  snappingEnabled = enabled;
+  const toggle = $('snap-toggle');
+  toggle.classList.toggle('active', enabled);
+  toggle.setAttribute('aria-pressed', String(enabled));
+  // A preview drawn while snapping was on would otherwise hang around mid-draw.
+  if (!enabled) {
+    snapPreviewToken++;
+    setSnapPreview(null);
+  }
+  updateDrawBar();
+  if (waypointMode) drawHint.textContent = waypointHintText(enabled);
+  persistWorkspace();
+}
+
+$('snap-toggle').addEventListener('click', () => setSnappingEnabled(!snappingEnabled));
+
 $('terrain-toggle').addEventListener('click', () => {
   terrainEnabled = !terrainEnabled;
   if (terrainEnabled) { applyTerrain(); map.easeTo({ pitch: 55, duration: 600 }); }
@@ -1464,7 +1495,7 @@ function openClearDialog() {
   const waypointPart = waypoints.length === 0 ? '' : waypoints.length === 1 ? '1 waypoint' : `${waypoints.length} waypoints`;
   const items = [routePart, waypointPart].filter(Boolean).join(' and ');
   $('clear-summary').textContent = items
-    ? `This removes ${items}, resets the map name and units, and deletes the saved location data. It cannot be undone.`
+    ? `This removes ${items}, resets the map name, units, and snapping, and deletes the saved location data. It cannot be undone.`
     : 'Nothing to clear — the workspace is already empty.';
   clearDialog.classList.remove('hidden');
 }
@@ -1483,6 +1514,7 @@ function confirmClearAll() {
   future.length = 0;
   setLocationFix(null);
   if (unitSystem !== defaultUnitSystem()) setUnitSystem(defaultUnitSystem());
+  if (snappingEnabled !== SNAP_ENABLED_BY_DEFAULT) setSnappingEnabled(SNAP_ENABLED_BY_DEFAULT);
   setDocumentName(DEFAULT_MAP_NAME);
   clearWorkspace();
   refreshRoutesLayer();
@@ -1856,3 +1888,4 @@ profileCanvas.addEventListener('pointerleave', () => {
 window.addEventListener('resize', () => drawProfileChart());
 
 setUnitSystem(unitSystem);
+setSnappingEnabled(snappingEnabled);

@@ -10,6 +10,7 @@ const workspace = {
   selectedRouteId: 1,
   unitSystem: 'imperial' as const,
   view: { center: { lng: -105, lat: 38 }, zoom: 12, bearing: -12, pitch: 40 },
+  snappingEnabled: false,
 };
 
 describe('workspace storage', () => {
@@ -56,7 +57,29 @@ describe('workspace storage', () => {
       selectedRouteId: null,
       unitSystem: undefined,
       view: undefined,
+      snappingEnabled: true,
     });
+  });
+
+  it('keeps snapping on for a workspace saved before the toggle existed', () => {
+    // A missing field is not the same as an explicit `false`: everyone who used
+    // the app before the toggle had snapping on, so upgrading must not silently
+    // turn it off for them.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, routes: [], waypoints: [], nextRouteId: 1 }));
+    expect(loadWorkspace()?.snappingEnabled).toBe(true);
+  });
+
+  it('remembers that the user turned snapping off', () => {
+    saveWorkspace({ ...workspace, snappingEnabled: false });
+    expect(loadWorkspace()?.snappingEnabled).toBe(false);
+    saveWorkspace({ ...workspace, snappingEnabled: true });
+    expect(loadWorkspace()?.snappingEnabled).toBe(true);
+  });
+
+  it('does not bump the storage version for the new field', () => {
+    saveWorkspace(workspace);
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
+    expect(raw.version).toBe(STORAGE_VERSION);
   });
 
   it('ignores partially malformed optional fields', () => {
