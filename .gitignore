@@ -11,8 +11,9 @@ dist/
 .env.*
 !.env.example
 
-# iOS: local MapTiler key (see ios/App/Secrets.xcconfig.example)
-ios/App/Secrets.xcconfig
+# iOS: local MapTiler key. The tracked Secrets.xcconfig only sets an empty
+# default and optionally includes this (see ios/App/Secrets.xcconfig).
+ios/App/Secrets.local.xcconfig
 
 # iOS: SwiftPM build products for the RouteKit package
 ios/RouteKit/.build/
