@@ -6,7 +6,6 @@ import {
   nearestSnap,
   PEAK_SNAP_METERS,
   projectToSegment,
-  TRAIL_FOLLOW_METERS,
   TRAIL_SNAP_METERS,
 } from '../src/snap';
 
@@ -121,7 +120,9 @@ describe('nearestLine', () => {
     expect(hit!.result.segment).toBeUndefined();
   });
 
-  it('exposes a follow threshold well inside the snap threshold', () => {
-    expect(TRAIL_FOLLOW_METERS).toBeLessThan(TRAIL_SNAP_METERS);
+  it('reaches further for a peak than for a trail', () => {
+    // Peaks are sparse landmarks a user clicks near deliberately; a trail has to
+    // be under the cursor, so a much wider reach there would grab the wrong one.
+    expect(PEAK_SNAP_METERS).toBeGreaterThan(TRAIL_SNAP_METERS);
   });
 });

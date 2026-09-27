@@ -49,6 +49,7 @@ web/                  The browser app — a self-contained Vite project
   src/dem.ts          MapTiler Terrain-RGB decoding + slope raster generation
   src/mvt.ts          Minimal MapTiler vector tile (MVT) decoder
   src/snap.ts         Pure snapping math (points → trails / peaks)
+  src/snapTiles.ts    Pure: which zoom and tiles a snap query needs
   src/snapSources.ts  Trail + peak tile fetching and caching for snapping
   src/trailGraph.ts   Shortest-path routing along a trail network
   src/segments.ts     Pure: per-segment bearing + midpoint, screen-space thinning
@@ -204,8 +205,28 @@ best snap target:
 - `nearestSnap(lng, lat, candidates)` — picks the nearest candidate among trail
   lines and points, respecting thresholds `TRAIL_SNAP_METERS = 40` and
   `PEAK_SNAP_METERS = 250`. No candidate within range → `null`.
-- `TRAIL_FOLLOW_METERS = 15` — the tighter radius within which the route is
-  allowed to run *along* the trail (see `trailGraph`).
+- `TRAIL_SNAP_METERS` doubles as the test for whether a snapped point should then
+  run *along* its trail (see `trailGraph`): the point has already been moved onto
+  the trail, so following it moves the point no further. An earlier, tighter
+  15 m gate rejected legs whose points had snapped successfully.
+
+### `web/src/snapTiles.ts` — which tiles a snap needs (pure)
+
+Decides the zoom and the tile set for a snap query. No I/O.
+
+- `snapZoomFor(mapZoom)` rounds and clamps the map's zoom into
+  `[SNAP_MIN_ZOOM = 14, SNAP_MAX_ZOOM = 15]`. Snapping reads the tiles the
+  basemap is drawing, at the depth it draws them: at z13 the planet tileset has
+  already generalised away or dropped the minor paths a click is aiming at, and
+  at z12 it emits no path-like `transportation` classes at all. Rounding keeps
+  the cache key stable while panning at a fractional zoom.
+- `TILESET_MAX_ZOOM` is `{ outdoor: 14, planet: 15 }`. Each tileset caps out at a
+  different depth, and a deeper request is an HTTP 400, so `zoomForTileset`
+  clamps per source — at z15 the planet source is read alone.
+- `tilesNear(lng, lat, zoom, radiusMeters)` returns the containing tile plus the
+  neighbours the radius actually reaches, measuring against the point's real
+  distance to each tile edge. Rounding a full ring up unconditionally would cost
+  nine fetches per source for the ordinary case of a click mid-tile.
 
 ### `web/src/trailGraph.ts` — routing along trails (pure)
 
@@ -233,11 +254,18 @@ Fetches and caches the vector tiles the snap layers need:
   relation, so many ordinary paths (e.g. Redneck Ridge) exist only in
   `transportation`; reading both is what makes snapping work broadly. Peaks come
   from the planet `mountain_peak` layer.
-- `trailsNearPoint(lng, lat)` returns every trail/path polyline in the
-  containing tile; `peaksNearPoint(lng, lat)` returns peaks with `name` and
-  `elevation` (meters) from their properties. Both are at zoom 13 and share a
-  96-tile LRU cache (planet tiles are reused between trails and peaks).
-- Any fetch/decode failure degrades to `[]` so drawing always works offline.
+- `trailsNearPoint(lng, lat, zoom, radius)` and
+  `peaksNearPoint(lng, lat, zoom, radius)` take the map's current zoom and the
+  snap radius, ask `snapTiles` for the tiles that can hold a candidate, and
+  return every trail polyline (or peak, with `name` and `elevation` in meters)
+  among them. Decoded tiles share a 256-entry cache keyed by tileset/z/x/y, so
+  planet tiles are reused between trails and peaks and a redraw costs no request.
+- A tile that fails is dropped rather than cached, so a single 429 or 5xx costs
+  its own candidates instead of disabling snapping over an area for the rest of
+  the session. Tiles that do load still contribute.
+- When *every* tile of a snap fails, the failure is reported to `ServiceStatus`
+  as the `snap` service. Drawing still works, but the user is told the trails
+  are not loading rather than being left to guess why nothing snapped.
 
 ### `web/src/geocode.ts` — geocoding search
 
@@ -488,13 +516,13 @@ new content.
   computes the same snap and shows a dashed preview line + blue dot (the
   `snap-preview` source), so the pending point is visible on the trail before the
   click. Each new point is pushed immediately and then refined asynchronously by
-  `snapRoutePointToTrail()`: the containing outdoor + planet tiles are decoded
-  and, if the point is within 40 m of a trail, it moves onto the trail. When the
-  point is within `TRAIL_FOLLOW_METERS` (15 m) and the previous point is also on
-  the network, `routeAlongTrails()` splices in the trail's own vertices so the
-  route follows the trail between clicks. The refine is checked both ways (the
-  point must still be the last one and the route still the active one) so a stale
-  result can never rewrite a newer point.
+  `snapRoutePointToTrail()`: the outdoor + planet tiles around the point, at the
+  map's current zoom, are decoded and, if the point is within 40 m of a trail, it
+  moves onto the trail. When the previous point is on the network too,
+  `routeAlongTrails()` splices in the trail's own vertices so the route follows
+  the trail between clicks. The refine is checked both ways (the point must still
+  be the last one and the route still the active one) so a stale result can never
+  rewrite a newer point.
 - **Waypoint mode** (`waypointMode`): one click places a single waypoint, then
   the mode exits automatically. `snapWaypointToPeak()` runs the same way against
   `mountain_peak` points (250 m radius); a snapped waypoint inherits the peak's
@@ -530,7 +558,8 @@ placeholder.
   relative so the bundle works on GitHub Pages project sites.
 - `npm test` runs Vitest over the pure modules (`geo`, `gpx`, `dem`, `units`,
   `colors`, `names`, `merge`, `simplify`, `config`, `storage`, `mvt`, `snap`,
-  `snapSources`, `trailGraph`, `segments`, `arrows`, `locate`, `fitPadding`) plus
+  `snapTiles`, `snapSources`, `trailGraph`, `segments`, `arrows`, `locate`,
+  `fitPadding`) plus
   a `style.test.ts` guard on the stylesheet's `pointer-events` layering.
 - CI (`.github/workflows/pr.yml`) picks the jobs to run from the paths a change
   touches: a `web/` change builds and tests the browser app, an `ios/` change
@@ -552,12 +581,21 @@ placeholder.
 - Elevation stats and the profile depend on DEM availability and are only as
   accurate as the ~30 m sampling.
 - Trail/peak snapping depends on the MapTiler tilesets being reachable and
-  complete; when they are not, drawing and waypoints degrade to raw placement
-  with no error surfaced. Only the single z13 tile containing the click is read
-  (plus the previous point's tile when following), so a trail just across a tile
-  edge may be missed.
-- Following a trail uses only the geometry present in the decoded tiles; if a
-  trail leaves the tile, the route falls back to a straight segment.
+  complete; when they are not, drawing and waypoints degrade to raw placement.
+  A snap whose every tile fails is now reported in the service banner rather
+  than failing silently.
+- Snapping can only use geometry the tilesets publish, so it is bounded by their
+  deepest zoom: `outdoor` stops at z14 and the planet tileset at z15, beyond which
+  the endpoints return 400. A snap is therefore never more precise than the best
+  geometry the tilesets serve, which leaves a residual offset of a few metres
+  from the real trail.
+- Following a trail uses only the geometry in the decoded tiles. If a trail
+  leaves the read area between two clicks, or the shortest chain along it is more
+  than `TRAIL_MAX_DETOUR` times the straight line, the route falls back to a
+  straight segment. On a recorded 12.5 km hike roughly one leg in eight still
+  falls back, mostly where the trail runs along a ridge with no mapped path.
+- Dragging a point and importing a GPX never re-snap, so those coordinates stay
+  exactly where the user put them or where the file recorded them.
 - Very large "keep every point" imports still create one DOM marker per point
   and can be slow.
 - GPX metadata (time, heart rate, etc.) beyond coordinates/elevation/name is not

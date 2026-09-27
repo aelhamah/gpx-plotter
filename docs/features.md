@@ -85,11 +85,17 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   it. Trails come from the same `outdoor` tileset the basemap renders plus
   path-like `transportation` lines, so ordinary OSM paths that aren't part of a
   marked route still snap (e.g. Redneck Ridge and the Eagle Valley Trail).
+- Snapping reads the tiles at **the zoom the map is showing**, clamped to the
+  deepest zoom the tilesets serve (z14 `outdoor`, z15 planet). This matters: at
+  z13 the tilesets have already dropped the minor paths a click is aimed at, and
+  snapping a recorded 12.5 km hike against z13 found no trail at all for 39 of 83
+  clicks taken along it, against 8 of 83 at z15.
 - **Hover preview**: while drawing, a dashed line and a blue dot show where the
   next point will land (snapped to the trail) before you click.
-- **Follows the trail**: when a point lands within ~15 m of a trail and the
-  previous one is on it too, the trail's own vertices are inserted between them,
-  so the route runs along the trail instead of cutting straight across.
+- **Follows the trail**: when a point lands on a trail and the previous one is on
+  one too, the trail's own vertices are inserted between them, so the route runs
+  along the trail instead of cutting straight across. On the same recorded hike
+  this turns 3 of every 10 drawn segments into trail-following ones.
 - **New route** creates a route and drops straight into drawing.
 - **Drag route points** to reshape a route; elevation is re-sampled after a drag.
 - **Rename routes** from the sidebar or by double-clicking the route's map label.
@@ -224,14 +230,16 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   **Undo · ⌘Z**) and segmented button groups.
 - Map controls (fit, my location, terrain, satellite, relief, slope) stacked at
   the bottom-left; the slope legend at the bottom-right.
-- **A banner naming whichever service is down.** The basemap, the terrain, and
-  search all come from MapTiler, and each is optional in a way that fails
-  quietly: when terrain is unreachable the map still draws, distance still
-  computes, and only Gain/Loss/Low/High/Max slope and the elevation profile go
-  blank. That reads as a broken app rather than a broken service, so the banner
-  says which one is out ("Terrain won't load — elevation stats and the profile
-  can't be filled"), notes when the free plan has simply run out of request
-  volume, and disappears on its own once the service answers again.
+- **A banner naming whichever service is down.** The basemap, the terrain,
+  search, and the trail snapping tiles all come from MapTiler, and each is
+  optional in a way that fails quietly: when terrain is unreachable the map still
+  draws, distance still computes, and only Gain/Loss/Low/High/Max slope and the
+  elevation profile go blank; when the snap tiles are unreachable, drawn points
+  quietly stop moving onto trails. That reads as a broken app rather than a broken
+  service, so the banner says which one is out ("Terrain won't load — elevation
+  stats and the profile can't be filled", "Trails aren't snapping — drawn points
+  are staying where you click them"), notes when the free plan has simply run out
+  of request volume, and disappears on its own once the service answers again.
 - Responsive layout tweaks for narrow/mobile viewports.
 
 ## Demo data and quality
@@ -240,10 +248,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **217 unit tests** across 22 files covering geodesy, GPX parse/serialize, DEM
+- **251 unit tests** across 23 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
   geocoding, geolocation (accuracy halo, camera zoom, permission copy), route
-  merging, workspace storage, the MVT tile decoder, trail/peak snapping,
-  trail-network routing, segment bearings and route-arrow rendering, and the
-  service-failure banner.
+  merging, workspace storage, the MVT tile decoder, trail/peak snapping and the
+  tile selection behind it, trail-network routing, segment bearings and
+  route-arrow rendering, and the service-failure banner.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

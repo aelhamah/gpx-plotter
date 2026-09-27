@@ -83,12 +83,15 @@ stack, and no GPX export UI. This removes three TypeScript modules that exist
 | --- | --- | --- |
 | `web/src/mvt.ts` | 239 | MVT protobuf decoder, feeds trail snapping |
 | `web/src/trailGraph.ts` | 188 | Dijkstra along trail polylines, snapping only |
-| `web/src/snapSources.ts` | 141 | fetches trail/peak vector tiles for snapping |
+| `web/src/snapSources.ts` | 210 | fetches trail/peak vector tiles for snapping |
+| `web/src/snapTiles.ts` | 141 | picks the zoom and tile set a snap query needs |
 | `web/src/merge.ts` | 90 | merging two routes |
 | `web/src/drag.ts` | 3 | vertex drag threshold |
 | `web/src/main.ts` edit machinery | ~700 of 1797 | draw / drag / merge / undo / dialogs / shortcuts |
 
-That also drops 27 of the 157 web tests, which are not ported.
+That also drops the 63 tests in the five snapping suites (`mvt`, `snap`,
+`snapTiles`, `snapSources`, `trailGraph`) of the 248 web tests, which are not
+ported. `snap.ts` is partly kept — see the ported list below.
 
 Editing can be added later without a rewrite, because `RouteKit` is pure.
 
@@ -122,7 +125,7 @@ stay behaviourally identical and testable without a simulator. Every tunable is
 carried over verbatim:
 
 - 30 m stats/profile resample · 15 m default import downsample spacing
-- 40 m / 15 m / 250 m snap radii · 1.15 terrain exaggeration
+- 40 m / 250 m snap radii · 1.15 terrain exaggeration
 - 0.5 hillshade exaggeration · 6-result geocode limit
 - Haversine on a 6371008.8 m mean radius
 

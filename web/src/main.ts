@@ -15,8 +15,9 @@ import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
 import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
-import { PEAK_SNAP_METERS, TRAIL_FOLLOW_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
+import { PEAK_SNAP_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
+import { snapZoomFor } from './snapTiles';
 import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
@@ -659,7 +660,8 @@ async function updateSnapPreview(event: MapMouseEvent) {
   if (!drawing) return;
   const raw: SnapPoint = { lat: event.lngLat.lat, lon: event.lngLat.lng };
   const token = ++snapPreviewToken;
-  const lines = await trailsNearPoint(raw.lon, raw.lat);
+  const zoom = snapZoomFor(map.getZoom());
+  const lines = await trailsNearPoint(raw.lon, raw.lat, zoom);
   if (token !== snapPreviewToken || !drawing) return;
   const match = nearestLine(raw, lines, TRAIL_SNAP_METERS);
   setSnapPreview(match ? match.result.point : null);
@@ -710,7 +712,7 @@ function addWaypoint(event: MapMouseEvent) {
 
 /** After a waypoint is placed, refine it onto the nearest peak within reach. */
 async function snapWaypointToPeak(index: number, raw: SnapPoint) {
-  const peaks = await peaksNearPoint(raw.lon, raw.lat);
+  const peaks = await peaksNearPoint(raw.lon, raw.lat, snapZoomFor(map.getZoom()));
   if (peaks.length === 0) return;
   const result = nearestSnap(raw, peaks.map((peak) => [peak.center]), PEAK_SNAP_METERS);
   if (!result) return;
@@ -747,15 +749,15 @@ function addRoutePoint(event: MapMouseEvent) {
 
 /**
  * After a drawn point lands, snap it onto the nearest trail within reach. When
- * the point is close enough (and so is the previous one), also splice in the
- * trail's own vertices so the route runs along the trail instead of cutting
- * straight across.
+ * the previous point snapped onto a trail too, also splice in the trail's own
+ * vertices so the route runs along the trail instead of cutting straight across.
  */
 async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint) {
   const previous = index > 0 ? route.points[index - 1] : null;
+  const zoom = snapZoomFor(map.getZoom());
   const [nearNew, nearPrevious] = await Promise.all([
-    trailsNearPoint(raw.lon, raw.lat),
-    previous ? trailsNearPoint(previous.lon, previous.lat) : Promise.resolve<SnapPoint[][]>([]),
+    trailsNearPoint(raw.lon, raw.lat, zoom),
+    previous ? trailsNearPoint(previous.lon, previous.lat, zoom) : Promise.resolve<SnapPoint[][]>([]),
   ]);
   const lines = dedupeTrailLines([...nearNew, ...nearPrevious]);
   const match = nearestLine(raw, lines, TRAIL_SNAP_METERS);
@@ -765,8 +767,10 @@ async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint
   if (!current || current.lon !== raw.lon || current.lat !== raw.lat) return;
 
   let inserted = 0;
-  if (previous && match.result.distanceMeters <= TRAIL_FOLLOW_METERS) {
-    const previousMatch = nearestLine(previous, lines, TRAIL_FOLLOW_METERS);
+  // Both endpoints must have snapped; the previous one is then known to sit on
+  // a trail, which is what the router needs to start from.
+  if (previous) {
+    const previousMatch = nearestLine(previous, lines, TRAIL_SNAP_METERS);
     if (previousMatch) {
       const path = routeAlongTrails(lines, previousMatch.result.point, match.result.point);
       if (path && path.length > 2) {

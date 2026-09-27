@@ -16,7 +16,7 @@
  * leaves nothing behind.
  */
 
-export type ServiceKind = 'style' | 'basemap' | 'elevation' | 'search';
+export type ServiceKind = 'style' | 'basemap' | 'elevation' | 'search' | 'snap';
 
 export interface ServiceIssue {
   kind: ServiceKind;
@@ -54,6 +54,7 @@ const SERVICE_TEXT: Record<ServiceKind, string> = {
   basemap: 'Some basemap tiles failed to load.',
   elevation: "Terrain won't load — elevation stats and the profile can't be filled.",
   search: "Search won't load.",
+  snap: "Trails aren't snapping — drawn points are staying where you click them.",
 };
 
 /** How loudly to complain about a given set of issues. */
@@ -72,7 +73,7 @@ export interface ServiceSummary {
 export function summarizeServices(issues: readonly ServiceIssue[]): ServiceSummary | null {
   const kinds = new Set(issues.map((issue) => issue.kind));
   if (!kinds.size) return null;
-  const order: ServiceKind[] = ['style', 'elevation', 'search', 'basemap'];
+  const order: ServiceKind[] = ['style', 'elevation', 'search', 'snap', 'basemap'];
   const parts = order.filter((kind) => kinds.has(kind)).map((kind) => SERVICE_TEXT[kind]);
   // A rate limit is a different situation from a broken endpoint: nothing is
   // wrong, the plan just ran out of requests for now, and it clears itself.
