@@ -78,6 +78,7 @@ web/tests/
   style.test.ts      pointer-events layering in style.css
   fitPadding.test.ts sidebar-aware fitBounds padding
   snapHaloRidge.test.ts  snapping + trail-following measured on a real recorded hike
+  sidebar.test.ts    sidebar controls are reachable and render in their default state
 ```
 
 `tests/fixtures/haloridge14ers.gpx` is a real recorded hike (Halo Ridge, Mt. of

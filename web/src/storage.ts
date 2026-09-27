@@ -1,5 +1,6 @@
 import type { UnitSystem } from './geo';
 import type { Route, Waypoint } from './gpx';
+import { SNAP_ENABLED_BY_DEFAULT } from './snap';
 
 export interface WorkspaceView {
   center: { lng: number; lat: number };
@@ -18,6 +19,8 @@ export interface PersistedWorkspace {
   selectedRouteId?: number | null;
   unitSystem?: UnitSystem;
   view?: WorkspaceView;
+  /** Absent means the user never chose, so snapping stays on. */
+  snappingEnabled?: boolean;
 }
 
 export const STORAGE_KEY = 'gpx-plotter:workspace';
@@ -77,6 +80,9 @@ export function loadWorkspace(): PersistedWorkspace | null {
       selectedRouteId: Number.isFinite(parsed.selectedRouteId as number) || parsed.selectedRouteId == null ? parsed.selectedRouteId ?? null : null,
       unitSystem: parsed.unitSystem === 'metric' || parsed.unitSystem === 'imperial' ? parsed.unitSystem : undefined,
       view: isWorkspaceView(parsed.view) ? parsed.view : undefined,
+      // Only an explicit `false` turns snapping off. A workspace saved before the
+      // toggle existed has no field at all, and that must not read as a choice.
+      snappingEnabled: parsed.snappingEnabled !== false ? SNAP_ENABLED_BY_DEFAULT : false,
     };
   } catch {
     return null;

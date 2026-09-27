@@ -105,9 +105,12 @@ No DOM, no map access. Reads and writes the whole workspace as a versioned JSON
 blob under a single `localStorage` key:
 
 - `saveWorkspace(data)` serializes the current routes, waypoints, id counter,
-  map name, units, and map view.
+  map name, units, snapping preference, and map view.
 - `loadWorkspace()` restores it, validating the version and shape and filling
   sane defaults; any corruption or version mismatch yields `null`.
+- `snappingEnabled` is the one optional field whose default is not `undefined`:
+  only an explicit `false` turns snapping off, so a workspace saved before the
+  toggle existed does not silently load with snapping disabled.
 - `clearWorkspace()` forgets the saved state (used by the "Clear" flow).
 - All calls degrade gracefully when `localStorage` is unavailable or full.
 
