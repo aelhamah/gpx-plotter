@@ -128,8 +128,14 @@ struct RouteDetailView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
     @StateObject private var packs = OfflinePackManager()
+    @StateObject private var analysis: RouteAnalysis
     @State private var isSearching = false
     let route: Route
+
+    init(route: Route) {
+        self.route = route
+        _analysis = StateObject(wrappedValue: RouteAnalysis(route: route))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,8 +169,8 @@ struct RouteDetailView: View {
                 .background(.bar)
             }
 
-            RouteStatsBar(route: route)
-            RouteProfileChart(route: route, system: workspace.unitSystem)
+            RouteStatsBar(route: route, analysis: analysis)
+            RouteProfileChart(analysis: analysis, route: route, system: workspace.unitSystem)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
                 .background(.bar)
@@ -181,6 +187,7 @@ struct RouteDetailView: View {
         .task {
             workspace.selectedRouteId = route.id
             packs.estimate(for: route)
+            analysis.fillMissingElevations()
             // `simctl launch` cannot tap, so these open things directly.
             if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                 isSearching = true
@@ -311,9 +318,12 @@ struct OfflinePackBar: View {
 struct RouteStatsBar: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     let route: Route
+    /// When supplied, the figures come from the resampled profile the chart
+    /// draws, so the bar and the profile always agree.
+    var analysis: RouteAnalysis?
 
     var body: some View {
-        let summary = RouteSummary(route: route, system: workspace.unitSystem)
+        let summary = RouteSummary(route: route, system: workspace.unitSystem, analysis: analysis)
         HStack(spacing: 0) {
             stat("Distance", summary?.distance ?? "—")
             stat("Ascent", summary?.gain ?? "—")
@@ -404,10 +414,16 @@ struct RouteSummary {
     let loss: String
     let high: String
 
-    init?(route: Route, system: UnitSystem) {
+    /// - Parameter analysis: the resampled profile to read from. Pass it on the
+    ///   route detail screen so these numbers come from the same samples the
+    ///   profile chart draws. Left nil (the library list) it resamples the route
+    ///   itself, which is cheap and needs no network.
+    @MainActor
+    init?(route: Route, system: UnitSystem, analysis: RouteAnalysis? = nil) {
         guard route.points.count >= 2 else { return nil }
-        distance = Units.formatDistance(Haversine.routeLength(route.points), system: system)
-        let elevation = Slope.stats(for: route.points)
+        let profile = analysis?.profile ?? RouteProfile.make(from: route.points)
+        distance = Units.formatDistance(profile.totalDistance, system: system)
+        let elevation = analysis?.elevation ?? Slope.stats(for: profile.points)
         gain = Units.formatElevation(elevation.gain, system: system)
         loss = Units.formatElevation(elevation.loss, system: system)
         high = Units.formatElevation(elevation.max, system: system)

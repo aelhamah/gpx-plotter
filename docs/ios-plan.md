@@ -437,7 +437,7 @@ RouteKit code the web app uses, and they survive a relaunch.
 | `RouteKit` + tests | **Done.** 90 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). |
 | GPX import | **Done.** `fileImporter` filtered to `.gpx`, security-scoped read, `RouteKit.parseGPX`. Verified with the repo's own demos: *The Enchantments Traverse* (7,153 pts → 18.49 mi, 8,080 ft ascent, 7,838 ft high) and *Afternoon Hike* (13,360 pts → 4.42 mi, 14,079 ft high). Route ids are reassigned on import and colored from the web app's `routeColorForId`. |
 | Stats | **Done.** Distance/ascent/descent/high from `RouteKit`, formatted through `Units`, switching with the unit picker. A GPX with no `<ele>` shows `—` rather than zeros. |
-| Swift Charts profile | **Done.** Elevation against distance along. Cumulative distance is accumulated over every vertex so the x-axis matches the distance in the stats bar, while the drawn points are thinned to ~600 — a 13k-point track would otherwise stall the chart. The y-domain is padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. |
+| Swift Charts profile | **Done.** Elevation against distance along, with the y-domain padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. |
 
 Three defects found while wiring the UI, all fixed:
 
@@ -450,6 +450,19 @@ Three defects found while wiring the UI, all fixed:
   That is a `String`, so 7,153 points became 7,153 categorical ticks: an
   unreadable x-axis and a y-domain in the millions of feet. Axes now carry raw
   metres and only the labels are converted.
+- The profile and the statistics were computed from **three different
+  samplings**: stats from the raw vertices, distance from the raw vertex chain,
+  and the chart from its own thinning. The web app resamples once at
+  `STATS_PROFILE_STEP_METERS` and derives the stats, the chart, and the distance
+  along from that single array, so the bar and the curve cannot disagree. They
+  now share one `RouteProfile` (`RouteAnalysis`).
+- The profile ignored `TerrainTileStore.elevationAt`, the port of the web's
+  `elevationAt`. `Profile.routeSamples` keeps elevation only on the original
+  vertices and returns `nil` for the interpolated samples, so a GPX whose fixes
+  are far apart — the 14-point demo route, for one — had a profile of a dozen
+  dots and statistics that only saw those dozen points. The gaps are now filled
+  from MapTiler's Terrain-RGB tiles, exactly as the web does, and vertex
+  elevations are never overwritten.
 
 Three porting bugs worth recording, all found by the tests rather than review:
 
