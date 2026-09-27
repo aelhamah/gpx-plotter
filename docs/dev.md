@@ -104,6 +104,7 @@ xcrun simctl launch booted com.example.GPXNav
 | `-showSlope` | Turns on the loopback slope raster at launch. |
 | `-downloadOffline` | Starts the corridor pack at launch. Currently a no-op in practice, see [`ios-plan.md`](ios-plan.md) §8. |
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
+| `-openSearch` | Opens the search sheet on the route screen. |
 
 `GPXNAV_STYLE_URL` (environment variable) overrides the style URL, which is how
 you point the app at a local server to inspect the headers iOS sends.

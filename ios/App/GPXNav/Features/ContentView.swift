@@ -126,13 +126,28 @@ struct LibraryView: View {
 
 struct RouteDetailView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var location: LocationController
     @StateObject private var packs = OfflinePackManager()
+    @State private var isSearching = false
     let route: Route
 
     var body: some View {
         VStack(spacing: 0) {
             MapView(route: route)
                 .ignoresSafeArea(edges: .bottom)
+                .overlay(alignment: .bottomTrailing) {
+                    LocateButton()
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 12)
+                }
+                .overlay(alignment: .topLeading) {
+                    HStack(spacing: 8) {
+                        searchButton
+                        waypointCount
+                    }
+                    .padding(.leading, 12)
+                    .padding(.top, 8)
+                }
 
             if let problem = AppConfig.keyProblemDescription {
                 Label {
@@ -166,12 +181,54 @@ struct RouteDetailView: View {
         .task {
             workspace.selectedRouteId = route.id
             packs.estimate(for: route)
-            // `simctl launch` cannot tap Download, so `-downloadOffline` starts
-            // the corridor pack straight away for the M0 offline check.
+            // `simctl launch` cannot tap, so these open things directly.
+            if ProcessInfo.processInfo.arguments.contains("-openSearch") {
+                isSearching = true
+            }
+            // `-downloadOffline` starts the corridor pack straight away for the
+            // M0 offline check.
             if ProcessInfo.processInfo.arguments.contains("-downloadOffline"),
                AppConfig.canDownloadOffline {
                 packs.download(route: route, styleURL: AppConfig.styleURL(for: workspace.mapStyle))
             }
+        }
+        .sheet(isPresented: $isSearching) {
+            // The map centre biases results, the way the web app sends its
+            // `proximity` parameter.
+            SearchView(proximity: route.points.first?.coordinate)
+        }
+    }
+
+    @ViewBuilder
+    private var searchButton: some View {
+        if let limitation = AppConfig.searchLimitation {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .frame(width: 40, height: 40)
+                .background(.regularMaterial, in: Circle())
+                .accessibilityLabel("Search unavailable")
+                .help(limitation)
+        } else {
+            Button {
+                isSearching = true
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .frame(width: 40, height: 40)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .accessibilityLabel("Search for a place")
+        }
+    }
+
+    @ViewBuilder
+    private var waypointCount: some View {
+        if !workspace.waypoints.isEmpty {
+            Text("\(workspace.waypoints.count)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Color.accentColor, in: Circle())
+                .accessibilityLabel("\(workspace.waypoints.count) waypoints")
         }
     }
 }

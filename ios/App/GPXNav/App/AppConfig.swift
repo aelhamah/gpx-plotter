@@ -1,5 +1,6 @@
 import Foundation
 import RouteKit
+import UIKit
 
 /// App-wide configuration. The MapTiler key is injected at build time from
 /// `Secrets.xcconfig` (gitignored) and read back from `Info.plist`, so it never
@@ -20,6 +21,10 @@ enum AppConfig {
     static var slopeTileURLTemplate: String {
         "http://127.0.0.1:\(slopePort)/slope/{z}/{x}/{y}.png"
     }
+
+    /// Padding left around a route when the camera fits to it, so the polyline
+    /// is not flush against the screen edge or hidden under the stats bar.
+    static let fitEdgePadding = UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40)
 
     /// Whether the keyless basemap was asked for on the command line.
     static var isDemoRequested: Bool {
@@ -85,6 +90,18 @@ enum AppConfig {
     private static var maptilerAPIKey: String {
         let key = Bundle.main.object(forInfoDictionaryKey: "MaptilerAPIKey") as? String
         return key?.isEmpty == false ? key! : ""
+    }
+
+    /// Shared geocoding client, or `nil` without a key.
+    static let geocodingClient: GeocodingClient? = hasMapTilerKey
+        ? GeocodingClient(apiKey: maptilerAPIKey)
+        : nil
+
+    /// Why search is unavailable, or nil when it works.
+    static var searchLimitation: String? {
+        geocodingClient == nil
+            ? "Search needs a MapTiler key. The demo basemap has no geocoder."
+            : nil
     }
 
     // MARK: - What actually works right now

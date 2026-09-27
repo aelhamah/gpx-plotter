@@ -493,6 +493,30 @@ M0 defects the simulator surfaced, all fixed:
   never timed out. Now matched by value, timed out from the start, and a failed
   attempt removes its pack instead of leaving dead ones in the database.
 
+**M2 Viewer — mostly done.** The layer stack now matches the web app's
+`addDataLayers`, verified with five routes in the library at once.
+
+| Gate item | State |
+| --- | --- |
+| Full layer stack | **Done.** `route-casing` / `route-line` / `route-points` per route, waypoint circles, `location-accuracy` / `location-halo` / `location-dot`, relief, and slope, with the web app's paint values ported into `MapLayers.swift`. Route vertices are circle layers rather than annotations, for the same reason the web app moved them off DOM markers. |
+| Multi-route | **Done.** Every visible route is drawn, not only the selected one; the selected route's vertices get the larger radius and dark stroke. Deleting or hiding a route removes its layers and sources. |
+| Waypoints | **Done.** Drawn as a circle layer; they arrive from a GPX's `<wpt>` elements via `RouteKit.parseGPX` and persist with the workspace. |
+| Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`. |
+| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. |
+| Search | **Done.** Debounced 300 ms, six results, proximity biased to the route, and the Peak / Trailhead / Trail / Street badges from `RouteKit`. Tapping a result adds it as a waypoint. Verified against the live endpoint: names, peak detection, and summit elevations all arrive. |
+| 3D terrain toggle | **Not done.** Native has no terrain setter, so the `terrain` block has to be written into a style JSON we assemble ourselves — see §6. Until that exists the toggle would be a lie, so it is absent rather than inert. |
+| Style builder | **Not started.** The app still points at MapTiler's hosted style. This is the prerequisite for 3D terrain. |
+
+Two MapLibre Native constraints cost rework here, both found by compiling
+against the real headers rather than by reading docs:
+
+- There is no shape-collection source. The web app's single geometry-filtered
+  `location` GeoJSON source has to become two sources on native — one point,
+  one accuracy polygon — which is why the two layers no longer share an id.
+- `MLNMultiPoint` is abstract, despite being the obvious type for a set of
+  route vertices. The concrete class is `MLNPointCollection`, whose ObjC factory
+  imports into Swift as `init(coordinates:count:)`.
+
 A design note for §8: the plan's literal "test each tile centre against
 distance-to-route" **selects nothing at low zoom**, because a z12 tile is ~9.8 km
 across while the buffer is ~1 km. The implementation keeps the intent but uses a

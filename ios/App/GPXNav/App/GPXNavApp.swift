@@ -5,6 +5,7 @@ import RouteKit
 struct GPXNavApp: App {
     @StateObject private var workspace = WorkspaceStore()
     @StateObject private var slopeServer = SlopeServerManager()
+    @StateObject private var location = LocationController()
 
     init() {
         // Must happen before the first MLNMapView is created or MLNOfflineStorage
@@ -18,6 +19,7 @@ struct GPXNavApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(workspace)
+                .environmentObject(location)
                 .task { slopeServer.start() }
         }
     }
