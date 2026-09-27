@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPX Plotter — logo</title>
+<style>
+  :root { --ink: #101317; --muted: #6b7480; --line: #e3e6ea; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 32px 80px;
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: #f6f7f9;
+  }
+  header, section { max-width: 1080px; margin: 0 auto; }
+  header { margin-bottom: 36px; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  header p { margin: 0; color: var(--muted); max-width: 66ch; }
+  section { margin-bottom: 40px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  .panel { border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-wrap: wrap; gap: 32px; align-items: center; }
+  .panel.dark { background: #101317; border-color: #101317; }
+  .panel.light { background: #ffffff; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .lbl { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .dark .lbl { color: #6f7883; }
+  .tile { display: block; }
+  .name { display: flex; align-items: baseline; gap: 10px; margin: 0 0 4px; }
+  .name strong { font-size: 15px; }
+  .name span { color: var(--muted); font-size: 12px; }
+  .dark .name span { color: #6f7883; }
+  code.file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+  .sw { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 6px 6px; }
+  .sw i { width: 22px; height: 22px; border-radius: 5px; display: block; border: 1px solid rgba(0,0,0,.12); }
+  .sw code { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>GPX Plotter — logo</h1>
+  <p>One geometry, two palettes. The track bleeds off two edges and passes behind a ring badge with a knocked-out gap; the arrow sits inside the ring. No SVG filters, so nothing is dropped on iOS or Android import. 16&nbsp;px is the real test.</p>
+</header>
+
+<section>
+  <h2>On a dark surface</h2>
+  <div class="panel dark">
+    <div style="flex:1 1 260px">
+      <p class="name"><strong>logo-dark.svg</strong><span>graphite tile, blue icon</span></p>
+      <p class="name"><code class="file">#2B2F35 → #191C21 → #0B0C0E tile · #4C8DFF ring</code></p>
+    </div>
+    <div class="cell"><img class="tile" src="logo-dark.svg" width="160" height="160" alt=""><span class="lbl">160</span></div>
+    <div class="cell"><img class="tile" src="logo-dark.svg" width="96" height="96" alt=""><span class="lbl">96</span></div>
+    <div class="cell"><img class="tile" src="logo-dark.svg" width="48" height="48" alt=""><span class="lbl">48</span></div>
+    <div class="cell"><img class="tile" src="logo-dark.svg" width="32" height="32" alt=""><span class="lbl">32</span></div>
+    <div class="cell"><img class="tile" src="logo-dark.svg" width="16" height="16" alt=""><span class="lbl">16</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>On a light surface</h2>
+  <div class="panel light">
+    <div style="flex:1 1 260px">
+      <p class="name"><strong>logo-light.svg</strong><span>off-white tile, blue icon</span></p>
+      <p class="name"><code class="file">#FBFCFD → #E9ECF0 → #D6DBE1 tile · #1D4ED8 ring</code></p>
+    </div>
+    <div class="cell"><img class="tile" src="logo-light.svg" width="160" height="160" alt=""><span class="lbl">160</span></div>
+    <div class="cell"><img class="tile" src="logo-light.svg" width="96" height="96" alt=""><span class="lbl">96</span></div>
+    <div class="cell"><img class="tile" src="logo-light.svg" width="48" height="48" alt=""><span class="lbl">48</span></div>
+    <div class="cell"><img class="tile" src="logo-light.svg" width="32" height="32" alt=""><span class="lbl">32</span></div>
+    <div class="cell"><img class="tile" src="logo-light.svg" width="16" height="16" alt=""><span class="lbl">16</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Side by side</h2>
+  <div class="panel" style="background:#fff">
+    <div class="cell"><img src="logo-dark.svg" width="128" height="128" alt=""><span class="lbl">dark</span></div>
+    <div class="cell"><img src="logo-light.svg" width="128" height="128" alt=""><span class="lbl">light</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Platform variants</h2>
+  <div class="panel" style="background:#fff">
+    <div style="flex:1 1 300px">
+      <p class="name"><strong>Full-bleed square</strong><span>iOS, Play Store, PWA</span></p>
+      <p class="name"><code class="file">icon-square-dark.svg · AppIcon-1024.png</code></p>
+      <p class="lbl" style="line-height:1.6">No rounded corners and no alpha: the OS applies its own mask. The ring sits at 65% of the width, inside the 80% safe zone a maskable icon needs, so the same file covers iOS, the Play listing, and the PWA.</p>
+    </div>
+    <div class="cell"><img class="tile" src="icon-square-dark.svg" width="128" height="128" alt=""><span class="lbl">square dark</span></div>
+    <div class="cell"><img class="tile" src="icon-square-light.svg" width="128" height="128" alt=""><span class="lbl">square light</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Palette</h2>
+  <div class="swatches">
+    <div class="sw"><i style="background:#0B0C0E"></i><code>#0B0C0E</code></div>
+    <div class="sw"><i style="background:#191C21"></i><code>#191C21</code></div>
+    <div class="sw"><i style="background:#2B2F35"></i><code>#2B2F35</code></div>
+    <div class="sw"><i style="background:#7C848D"></i><code>#7C848D</code></div>
+    <div class="sw"><i style="background:#D6DBE1"></i><code>#D6DBE1</code></div>
+    <div class="sw"><i style="background:#E9ECF0"></i><code>#E9ECF0</code></div>
+    <div class="sw"><i style="background:#A3ABB4"></i><code>#A3ABB4</code></div>
+    <div class="sw"><i style="background:#1D4ED8"></i><code>#1D4ED8</code></div>
+    <div class="sw"><i style="background:#2E6BE6"></i><code>#2E6BE6</code></div>
+    <div class="sw"><i style="background:#4C8DFF"></i><code>#4C8DFF</code></div>
+    <div class="sw"><i style="background:#9CC0F7"></i><code>#9CC0F7</code></div>
+    <div class="sw"><i style="background:#FFFFFF"></i><code>#FFFFFF</code></div>
+  </div>
+</section>
+</body>
+</html>
