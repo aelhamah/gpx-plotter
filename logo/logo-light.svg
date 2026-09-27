@@ -1,0 +1,33 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="light-title light-desc">
+<title id="light-title">GPX Plotter</title>
+<desc id="light-desc">GPX Plotter, light tile, for light web surfaces</desc>
+<defs>
+<linearGradient id="light-tile" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#FBFCFD"/>
+<stop offset="0.55" stop-color="#E9ECF0"/>
+<stop offset="1" stop-color="#D6DBE1"/>
+</linearGradient>
+<radialGradient id="light-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(150 108) rotate(45) scale(140)">
+<stop stop-color="#2E6BE6" stop-opacity="0.07"/>
+<stop offset="1" stop-color="#2E6BE6" stop-opacity="0"/>
+</radialGradient>
+<linearGradient id="light-sheen" x1="0" y1="0" x2="180" y2="200" gradientUnits="userSpaceOnUse">
+<stop stop-color="#FFFFFF" stop-opacity="0.0"/>
+<stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0"/>
+</linearGradient>
+<clipPath id="light-clip">
+<rect width="256" height="256" rx="56"/>
+</clipPath>
+<mask id="light-knockout">
+<rect width="256" height="256" fill="#FFFFFF"/>
+<circle cx="128" cy="128" r="92"/>
+</mask>
+</defs>
+<g clip-path="url(#light-clip)">
+<rect width="256" height="256" rx="56" fill="url(#light-tile)"/>
+<rect width="256" height="256" rx="56" fill="url(#light-glow)"/>
+<g mask="url(#light-knockout)"><path d="M-20 276C22.4 148.7 233.6 107.3 276-20" fill="none" stroke="#A3ABB4" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/></g>
+<circle cx="128" cy="128" r="76" fill="none" stroke="#1D4ED8" stroke-width="14"/>
+<g transform="translate(128 128) scale(0.64) translate(-128 -128)"><path d="M186.4 73.8Q189.6 66.4 182.3 69.6L73.7 116.3Q66.3 119.5 74.3 120.1L110.6 137.1Q118 140 120.8 147.5L133.7 182.2Q136.5 189.7 139.7 182.4Z" fill="#9CC0F7"/><path d="M186.4 73.8Q189.6 66.4 182.3 69.6L73.7 116.3Q66.3 119.5 74.3 120.1L110.6 137.1Q118 140 120.8 147.5L186.4 73.8Z" fill="#2E6BE6"/></g>
+</g>
+</svg>
