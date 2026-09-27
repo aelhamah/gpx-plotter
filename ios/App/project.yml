@@ -1,0 +1,91 @@
+name: GPXNav
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+  minimumXcodeGenVersion: 2.46.0
+  xcodeVersion: "26.2"
+packages:
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    from: 6.0.0
+  RouteKit:
+    path: ../RouteKit
+targets:
+  GPXNav:
+    type: application
+    platform: iOS
+    sources:
+      - GPXNav
+    resources:
+      - GPXNav/Resources
+    dependencies:
+      - package: MapLibre
+        product: MapLibre
+      - package: RouteKit
+        product: RouteKit
+    configFiles:
+      Debug: Secrets.xcconfig
+      Release: Secrets.xcconfig
+    # An explicit plist, not GENERATE_INFOPLIST_FILE. Xcode's generated plist
+    # silently drops custom INFOPLIST_KEY_* names (MaptilerAPIKey never arrives,
+    # even as a literal), so the key has to be a real plist entry where
+    # $(MAPTILER_API_KEY) gets expanded. Note xcodegen *rewrites* this file on
+    # every `generate`, so every key has to live under `properties` here.
+    info:
+      path: GPXNav/Info.plist
+      properties:
+        # xcodegen's stub hardcodes 1.0/1; the User-Agent version comes from
+        # these, so they have to track the real build settings.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Without a launch screen iOS letterboxes the app into a legacy
+        # compatibility window instead of using the full display.
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocationWhenInUseUsageDescription: "GPXNav needs location to show your position on the map and for navigation."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "GPXNav needs background location for turn-by-turn navigation and off-course alerts."
+        UIBackgroundModes:
+          - location
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        # SlopeServer is served over loopback HTTP; see docs/ios-plan.md §6.
+        NSAllowsLocalNetworking: true
+        # Injected from MAPTILER_API_KEY in the gitignored Secrets.xcconfig.
+        MaptilerAPIKey: $(MAPTILER_API_KEY)
+    settings:
+      base:
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        # A real version + build number. Without these the app's User-Agent
+        # reads "GPXNav/(null) ... (NOT SET)", which is both wrong and
+        # un-allowlistable on MapTiler.
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+    scheme:
+      testTargets: []
+  GPXNavWidgets:
+    type: app-extension
+    platform: iOS
+    productName: GPXNavWidgets
+    bundleId: com.example.GPXNav.GPXNavWidgets
+    sources:
+      - GPXNavWidgets
+    dependencies:
+      - target: GPXNav
+    settings:
+      base:
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+    scheme:
+      testTargets: []
