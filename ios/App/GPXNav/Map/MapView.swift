@@ -14,8 +14,24 @@ import CoreLocation
 /// See docs/ios-plan.md §6.
 struct MapView: UIViewRepresentable {
     let route: Route
+    /// Distance along the route the profile is scrubbed to. The map draws the
+    /// covered portion as a trace, the way the web app's `profile-trace` layer
+    /// does. Nil hides it.
+    @Binding var scrubbedDistance: Double?
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
+
+    /// Resampled profiles, kept per route so scrubbing does not resample on
+    /// every gesture change. A cache, not a source of truth: the profile the
+    /// stats and chart use lives in `RouteAnalysis`. It is a reference box
+    /// because the layer methods are non-mutating and are also called by the
+    /// coordinator, which cannot mutate the representable's own storage.
+    private let profileCache = ProfileCache()
+
+    init(route: Route, scrubbedDistance: Binding<Double?> = .constant(nil)) {
+        self.route = route
+        self._scrubbedDistance = scrubbedDistance
+    }
 
     func makeUIView(context: Context) -> MLNMapView {
         let mapView = MLNMapView(frame: .zero, styleURL: styleURL(for: workspace.mapStyle))
@@ -116,7 +132,33 @@ struct MapView: UIViewRepresentable {
         // Vertices as a circle layer rather than annotations, matching the web
         // app: annotations float above a pitched or terrain-ed map instead of
         // staying glued to the surface.
-        applyRoutePoints(to: style, route: route, selected: selected)
+        //
+        // Only for the selected route, as in the web app, and only while the
+        // vertices are far enough apart to read. A switchback route has 400 of
+        // them inside a few hundred metres, and drawing every one turns the line
+        // into a solid blob.
+        if selected, isVertexSpacingReadable(route) {
+            applyRoutePoints(to: style, route: route, selected: selected)
+        } else {
+            removeRoutePoints(from: style, route: route)
+        }
+    }
+
+    /// Whether the route's vertices are far enough apart to draw as dots.
+    private func isVertexSpacingReadable(_ route: Route) -> Bool {
+        guard route.points.count > 1 else { return false }
+        let length = Haversine.routeLength(route.points)
+        return length / Double(route.points.count) >= MapLayers.minVertexSpacingMeters
+    }
+
+    private func removeRoutePoints(from style: MLNStyle, route: Route) {
+        let sourceID = MapLayers.routePoints(route.id)
+        if style.layer(withIdentifier: sourceID) != nil {
+            style.removeLayer(style.layer(withIdentifier: sourceID)!)
+        }
+        if style.source(withIdentifier: sourceID) != nil {
+            style.removeSource(style.source(withIdentifier: sourceID)!)
+        }
     }
 
     private func applyRoutePoints(to style: MLNStyle, route: Route, selected: Bool) {
@@ -344,9 +386,87 @@ struct MapView: UIViewRepresentable {
 
     private func applyEverything(to mapView: MLNMapView) {
         applyRoutes(to: mapView)
+        applyProfileTrace(to: mapView)
         applyWaypoints(to: mapView)
         applyLocation(to: mapView)
         applyOverlays(to: mapView)
+        applyCamera(to: mapView)
+    }
+
+    // MARK: - Profile trace
+
+    /// Draw the part of the route up to the scrubbed distance, in the web app's
+    /// `TRACE_COLOR`.
+    private func applyProfileTrace(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        let profile = analysis(for: route)
+        let distance = scrubbedDistance
+
+        guard let distance, distance > 0, profile.points.count > 1 else {
+            if let layer = style.layer(withIdentifier: MapLayers.profileTraceLayer) {
+                style.removeLayer(layer)
+            }
+            if let source = style.source(withIdentifier: MapLayers.profileTraceSource) {
+                style.removeSource(source)
+            }
+            return
+        }
+
+        // Take the samples up to the scrub point, from the same resampled
+        // profile the chart and the stats use.
+        let cutIndex = profile.index(nearestTo: distance)
+        guard cutIndex > 0 else { return }
+        let coordinates = profile.points[0...cutIndex].map {
+            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+        }
+        let line = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
+
+        if style.source(withIdentifier: MapLayers.profileTraceSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.profileTraceSource, shape: line, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.profileTraceSource) as? MLNShapeSource {
+            existing.shape = line
+        }
+        guard style.layer(withIdentifier: MapLayers.profileTraceLayer) == nil,
+              let source = style.source(withIdentifier: MapLayers.profileTraceSource) as? MLNSource
+        else { return }
+        let layer = MLNLineStyleLayer(identifier: MapLayers.profileTraceLayer, source: source)
+        layer.lineColor = NSExpression(forConstantValue: MapLayers.Paint.traceColor)
+        layer.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.traceWidth)
+        layer.lineOpacity = NSExpression(forConstantValue: MapLayers.Paint.traceOpacity)
+        MapLayers.applyRoundCaps(to: layer)
+        style.addLayer(layer)
+    }
+
+    /// The resampled profile for `route`, cached so scrubbing does not rebuild
+    /// it on every gesture change.
+    private func analysis(for route: Route) -> RouteProfile {
+        profileCache.profile(for: route)
+    }
+
+    // MARK: - Camera
+
+    /// Recentre on the fix and face the direction of travel, or north when the
+    /// locate button is tapped a second time.
+    private func applyCamera(to mapView: MLNMapView) {
+        guard let fix = location.fix else { return }
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
+        if location.followsHeading, let heading = location.heading {
+            camera.heading = heading
+        }
+        mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
+    }
+
+    /// Reference-typed memo for resampled profiles.
+    private final class ProfileCache {
+        private var profiles: [Int: RouteProfile] = [:]
+
+        func profile(for route: Route) -> RouteProfile {
+            if let cached = profiles[route.id] { return cached }
+            let profile = RouteProfile.make(from: route.points)
+            profiles[route.id] = profile
+            return profile
+        }
     }
 
     // MARK: - Coordinator

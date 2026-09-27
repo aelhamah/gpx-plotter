@@ -19,6 +19,13 @@ final class LocationController: NSObject, ObservableObject {
 
     @Published private(set) var status: Status = .idle
     @Published private(set) var fix: LocationFix?
+    /// Direction of travel in degrees, true-north based, or nil before the
+    /// first heading. Drives the map's rotation when the locate button is used.
+    @Published private(set) var heading: CLLocationDirection?
+
+    /// Whether the map is currently following the direction of travel. Tapping
+    /// locate again snaps back to north, the way a compass button behaves.
+    @Published var followsHeading = false
 
     private let manager = CLLocationManager()
 
@@ -26,6 +33,11 @@ final class LocationController: NSObject, ObservableObject {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        // Needed for the compass behaviour; unavailable hardware simply never
+        // calls back, so `heading` stays nil and the button falls back to north.
+        if CLLocationManager.headingAvailable() {
+            manager.headingFilter = 5
+        }
     }
 
     /// Ask for permission and start a one-shot fix.
@@ -39,6 +51,9 @@ final class LocationController: NSObject, ObservableObject {
         case .authorizedWhenInUse, .authorizedAlways:
             status = .locating
             manager.requestLocation()
+            if CLLocationManager.headingAvailable() {
+                manager.startUpdatingHeading()
+            }
         @unknown default:
             status = .unavailable("Location services are unavailable.")
         }
@@ -47,6 +62,13 @@ final class LocationController: NSObject, ObservableObject {
     /// Stop updating, e.g. when the map is torn down.
     func stop() {
         manager.stopUpdatingLocation()
+        manager.stopUpdatingHeading()
+    }
+
+    /// Cycle the map between facing the direction of travel and facing north.
+    func toggleHeading() {
+        guard heading != nil else { return }
+        followsHeading.toggle()
     }
 
     private func handle(_ error: Error) {
@@ -87,6 +109,16 @@ extension LocationController: CLLocationManagerDelegate {
         Task { @MainActor in
             self.fix = fix
             self.status = .located
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        // `trueHeading` is invalid until location permission is granted, so fall
+        // back to the magnetic value rather than snapping the map to 0.
+        let value = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        guard value >= 0 else { return }
+        Task { @MainActor in
+            self.heading = value
         }
     }
 

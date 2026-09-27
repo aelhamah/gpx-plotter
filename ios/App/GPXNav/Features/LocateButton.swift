@@ -9,7 +9,13 @@ struct LocateButton: View {
 
     var body: some View {
         Button {
-            location.locate()
+            // Already tracking: this tap switches between facing the direction
+            // of travel and facing north, the way a compass button behaves.
+            if location.fix != nil {
+                location.toggleHeading()
+            } else {
+                location.locate()
+            }
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .semibold))
@@ -23,12 +29,15 @@ struct LocateButton: View {
     }
 
     private var symbol: String {
+        if location.followsHeading, location.heading != nil {
+            return "location.north.line.fill"
+        }
         switch location.status {
-        case .located: "location.fill"
-        case .locating: "location.circle"
-        case .denied: "location.slash"
-        case .unavailable: "location.slash"
-        case .idle: "location"
+        case .located: return "location.fill"
+        case .locating: return "location.circle"
+        case .denied: return "location.slash"
+        case .unavailable: return "location.slash"
+        case .idle: return "location"
         }
     }
 
@@ -43,11 +52,11 @@ struct LocateButton: View {
 
     private var label: String {
         switch location.status {
-        case .idle: "Show my location"
-        case .locating: "Finding your location"
-        case .located: "Centre on your location"
-        case .denied: "Location access is off. Enable it in Settings to use this."
-        case .unavailable(let message): message
+        case .idle: return "Show my location"
+        case .locating: return "Finding your location"
+        case .located: return location.followsHeading ? "Face north" : "Face my direction of travel"
+        case .denied: return "Location access is off. Enable it in Settings to use this."
+        case .unavailable(let message): return message
         }
     }
 }

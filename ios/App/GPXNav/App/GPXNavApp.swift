@@ -17,7 +17,7 @@ struct GPXNavApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootTabView()
                 .environmentObject(workspace)
                 .environmentObject(location)
                 .task { slopeServer.start() }

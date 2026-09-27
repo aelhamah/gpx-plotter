@@ -16,6 +16,10 @@ enum MapLayers {
     static func routeLine(_ id: Int) -> String { "route-line-\(id)" }
     static func routePoints(_ id: Int) -> String { "route-points-\(id)" }
 
+    /// The covered portion of the route while the profile is scrubbed.
+    static let profileTraceSource = "profile-trace"
+    static let profileTraceLayer = "profile-trace"
+
     // MARK: - Waypoints
 
     static let waypointSource = "waypoints"
@@ -43,6 +47,10 @@ enum MapLayers {
     /// they are invisible at map scale.
     static let maxRouteVertices = 400
 
+    /// Below this much space between vertices, drawing them turns the route into
+    /// a solid blob, so they are dropped and only the line is drawn.
+    static let minVertexSpacingMeters: Double = 20
+
     // MARK: - Paint
 
     enum Paint {
@@ -64,6 +72,11 @@ enum MapLayers {
 
         static let slopeOpacity: CGFloat = 0.9
         static let tileSize: Int = 512
+
+        /// The web app's `TRACE_COLOR`, for the profile trace.
+        static let traceColor = UIColor(red: 0.055, green: 0.647, blue: 0.914, alpha: 1)
+        static let traceWidth: CGFloat = 7
+        static let traceOpacity: CGFloat = 0.85
 
         static let locationFill = UIColor(red: 0.145, green: 0.388, blue: 0.922, alpha: 1)
         static let locationFillOpacity: CGFloat = 0.14

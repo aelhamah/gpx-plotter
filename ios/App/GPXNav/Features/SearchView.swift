@@ -15,7 +15,10 @@ struct SearchView: View {
     @FocusState private var isFocused: Bool
 
     /// Where the map is looking, which biases results toward it.
-    let proximity: Coordinate?
+    var proximity: Coordinate?
+    /// Called with the chosen result. Create passes this to collect a waypoint;
+    /// the viewer leaves it nil and dismisses instead.
+    var onSelect: ((GeocodeResult) -> Void)?
 
     var body: some View {
         NavigationStack {
@@ -91,6 +94,11 @@ struct SearchView: View {
     /// Search results become waypoints, which is what the web app does with a
     /// tapped geocoding result too.
     private func add(_ result: GeocodeResult) {
+        if let onSelect {
+            onSelect(result)
+            dismiss()
+            return
+        }
         workspace.waypoints.append(
             Waypoint(
                 lat: result.center.lat,

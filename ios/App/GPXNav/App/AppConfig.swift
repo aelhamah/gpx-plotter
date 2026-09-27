@@ -83,6 +83,13 @@ enum AppConfig {
     /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
     static let terrainPitch: CGFloat = 55
 
+    /// Height of the bottom sheet's short detent, which shows only the stats row.
+    static let statsOnlyPanelHeight: CGFloat = 96
+
+    /// Below this sheet height the panel shows just the stats row, so the
+    /// profile and the offline row cannot overflow the short detent.
+    static let expandedPanelThreshold: CGFloat = 320
+
     /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
     /// no Terrain-RGB source to point the terrain block at.
     static var canUseTerrain3D: Bool { hasMapTilerKey }

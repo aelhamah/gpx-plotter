@@ -351,14 +351,18 @@ makes the profile-trace interaction (§ below) possible.
 
 ### A collapsible bottom panel
 
-One control collapses the panel down to the stats bar alone, so the map can be
-used full-bleed while still showing distance, ascent, descent, and high point.
-Two candidate mechanisms, and **this needs a decision** — see §11:
+**Decision: a draggable sheet with detents.** The map's figures live in a sheet
+over the map rather than in a `VStack` beside it.
 
-- A **two-state collapse**: the panel is either the full stack (stats + profile +
-  offline) or the stats bar only, toggled by a chevron.
-- A **draggable sheet** with detents, so a swipe part-way shows a middle state
-  (stats + a shorter profile).
+The sheet has two detents: collapsed it is **just the stats row**, expanded it
+carries the stats, the profile, and the offline row. It reads its own height to
+decide which, because a sheet's content does not otherwise know which detent it
+is in — a fixed-height profile in the short detent is what clipped the stats row
+when this was first built.
+
+Dragging the sheet away entirely leaves the map full-bleed with the stats, which
+is the state the map is really used in. `presentationBackgroundInteraction`
+keeps the map pannable behind the sheet.
 
 ### Profile scrubbing and the map trace
 
@@ -377,19 +381,19 @@ usable once the profile is an overlay rather than a sibling of the map.
 
 ### Other fixes
 
-- **The profile overlaps its axes.** The chart is a fixed-height frame with the
-  axis labels inside it, so the x-axis labels and the area fill collide with the
-  bottom edge. Give the plot its own padded frame instead of letting the chart
-  fill the whole view.
-- **One location button, and it points north.** There are currently two: a
-  disabled *Navigate* toolbar item and a floating locate button. Remove the
-  toolbar one — Navigate becomes a tab. Tapping the remaining button recentres
-  **and** rotates the map to the current heading, which needs
-  `CLLocationManager`'s heading updates and `MLNMapView.setDirection`. Two states
-  are enough: tap to centre and face the direction of travel, tap again to snap
-  back to north.
+- **The profile overlapped its axes.** The chart filled its whole frame, so the
+  x-axis labels and the area fill collided with the bottom edge. The plot now has
+  its own padding inside the frame.
+- **One location button, and it points north.** There were two: a disabled
+  *Navigate* toolbar item and a floating locate button. The toolbar one is gone
+  — Navigate is a tab now. Tapping the remaining button recentres **and** rotates
+  the map to the current heading, then tapping again snaps back to north, the way
+  a compass button behaves. `MLNMapCamera` calls the rotation `heading`, not
+  `direction`.
 - **The title bar is slightly translucent**, so the map reads as continuing under
-  the navigation bar rather than stopping at it.
+  the navigation bar rather than stopping at it. The map ignores *all* safe
+  areas for this to have anything to show through; the search control sits below
+  the bar to compensate.
 - **Fix the download.** See §9 — this is not a UI fix, it needs the decision
   recorded there before any button is enabled again.
 

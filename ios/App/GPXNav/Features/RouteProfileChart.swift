@@ -12,6 +12,9 @@ struct RouteProfileChart: View {
     @ObservedObject var analysis: RouteAnalysis
     let route: Route
     let system: UnitSystem
+    /// Distance along the route currently scrubbed, which the map draws as a
+    /// trace. Nil when nothing is scrubbed.
+    @Binding var scrubbedDistance: Double?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,10 +22,35 @@ struct RouteProfileChart: View {
                 unavailable
             } else {
                 chart
+                    // The chart used to fill this frame, so the x-axis labels
+                    // and the area fill collided with the bottom edge.
+                    .padding(.bottom, 14)
+                    .padding(.top, 4)
+                    .contentShape(Rectangle())
+                    .gesture(scrubGesture)
             }
             footer
         }
-        .frame(height: 160)
+        .frame(height: 170)
+    }
+
+    /// Drag along the profile to trace the position onto the map.
+    private var scrubGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard samples.count > 1 else { return }
+                let fraction = min(max(value.location.x / max(plotWidth, 1), 0), 1)
+                scrubbedDistance = fraction * (analysis.totalDistance)
+            }
+            .onEnded { _ in
+                // Leave the trace where it was dropped; tapping elsewhere clears
+                // it. Matches the web app, which keeps the trace on the map.
+            }
+    }
+
+    /// Approximate plot width, used to turn a drag position into a distance.
+    private var plotWidth: CGFloat {
+        UIScreen.main.bounds.width - 48
     }
 
     private var samples: [ProfileSample] {
@@ -51,6 +79,15 @@ struct RouteProfileChart: View {
             .foregroundStyle(Color(hex: route.color))
             .lineStyle(StrokeStyle(lineWidth: 2))
             .interpolationMethod(.monotone)
+
+            if let scrubbedDistance {
+                RuleMark(x: .value("Scrubbed", scrubbedDistance))
+                    .foregroundStyle(Color(hex: route.color).opacity(0.9))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                    .annotation(position: .top, overflowResolution: .init(x: .fit, y: .disabled)) {
+                        readout(at: scrubbedDistance)
+                    }
+            }
         }
         // The axes carry raw metres; only the labels are converted, so the
         // plotted values stay in one unit.
@@ -75,6 +112,18 @@ struct RouteProfileChart: View {
                 }
             }
         }
+    }
+
+    /// Distance, elevation, and grade at the scrubbed point.
+    private func readout(at distance: Double) -> some View {
+        let index = analysis.profile.index(nearestTo: distance)
+        let point = analysis.profile.points[min(max(index, 0), analysis.profile.points.count - 1)]
+        let elevation = Units.formatElevation(point.elevation, system: system)
+        return Text("\(Units.formatDistance(distance, system: system)) · \(elevation)")
+            .font(.caption2.monospacedDigit())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.regularMaterial, in: Capsule())
     }
 
     /// Why there is no line, and what is being done about it.
