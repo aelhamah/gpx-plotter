@@ -248,10 +248,11 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   `Afternoon_Hike.gpx` (a ~13,000-point hike) and
   `The_Enchantments_Traverse.gpx`, both useful for exercising the downsampling
   flow.
-- **251 unit tests** across 23 files covering geodesy, GPX parse/serialize, DEM
+- **266 unit tests** across 24 files covering geodesy, GPX parse/serialize, DEM
   decoding, units, colors, names, config, downsampling, drag thresholds,
   geocoding, geolocation (accuracy halo, camera zoom, permission copy), route
   merging, workspace storage, the MVT tile decoder, trail/peak snapping and the
   tile selection behind it, trail-network routing, segment bearings and
-  route-arrow rendering, and the service-failure banner.
+  route-arrow rendering, the service-failure banner, and snapping measured end to end
+  against a real recorded hike.
 - GitHub Actions workflows for CI (build + test) and GitHub Pages deployment.

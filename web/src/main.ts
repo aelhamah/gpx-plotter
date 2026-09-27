@@ -18,7 +18,7 @@ import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from
 import { PEAK_SNAP_METERS, TRAIL_SNAP_METERS, nearestLine, nearestSnap, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { snapZoomFor } from './snapTiles';
-import { dedupeTrailLines, routeAlongTrails } from './trailGraph';
+import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
@@ -767,17 +767,11 @@ async function snapRoutePointToTrail(route: Route, index: number, raw: SnapPoint
   if (!current || current.lon !== raw.lon || current.lat !== raw.lat) return;
 
   let inserted = 0;
-  // Both endpoints must have snapped; the previous one is then known to sit on
-  // a trail, which is what the router needs to start from.
   if (previous) {
-    const previousMatch = nearestLine(previous, lines, TRAIL_SNAP_METERS);
-    if (previousMatch) {
-      const path = routeAlongTrails(lines, previousMatch.result.point, match.result.point);
-      if (path && path.length > 2) {
-        const interior = path.slice(1, -1).map((p) => ({ lon: p.lon, lat: p.lat }));
-        route.points.splice(index, 0, ...interior);
-        inserted = interior.length;
-      }
+    const interior = trailVerticesBetween(lines, previous, match.result.point, TRAIL_SNAP_METERS);
+    if (interior.length > 0) {
+      route.points.splice(index, 0, ...interior);
+      inserted = interior.length;
     }
   }
 
