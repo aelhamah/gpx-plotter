@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A simple browser-based GPX route plotter." />
     <title>GPX Route Plotter</title>
-    <script type="module" crossorigin src="./assets/index-qB2zGGP-.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DFEs2OWt.css">
+    <script type="module" crossorigin src="./assets/index-B3poTvaW.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B-RPUHlt.css">
   </head>
   <body>
     <div id="app">
@@ -82,6 +82,12 @@
               <span class="button-tooltip">Merge routes</span>
             </div>
           </div>
+        </div>
+        <div class="toolbar hidden" id="snap-toolbar">
+          <button id="snap-toggle" class="button button-secondary snap-toggle active" type="button" aria-pressed="true" aria-label="Snap drawn points onto trails and peaks">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 20v-9a6 6 0 0 1 12 0v9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 16.5h4.5M13.5 16.5H18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>Snap to trails</span>
+          </button>
         </div>
         <div id="service-banner" class="service-banner hidden" role="status" aria-live="polite"></div>
         <p id="map-status" class="hint"></p>
