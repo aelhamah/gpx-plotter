@@ -1,5 +1,6 @@
 import Foundation
 import RouteKit
+import UIKit
 
 /// App-wide configuration. The MapTiler key is injected at build time from
 /// `Secrets.xcconfig` (gitignored) and read back from `Info.plist`, so it never
@@ -20,6 +21,10 @@ enum AppConfig {
     static var slopeTileURLTemplate: String {
         "http://127.0.0.1:\(slopePort)/slope/{z}/{x}/{y}.png"
     }
+
+    /// Padding left around a route when the camera fits to it, so the polyline
+    /// is not flush against the screen edge or hidden under the stats bar.
+    static let fitEdgePadding = UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40)
 
     /// Whether the keyless basemap was asked for on the command line.
     static var isDemoRequested: Bool {
@@ -53,19 +58,70 @@ enum AppConfig {
         hasMapTilerKey ? MapTilerConfig(apiKey: maptilerAPIKey) : nil
     }
 
-    static func styleURL(for style: MapStyle) -> URL {
+    /// The same DEM config for the style builder, which runs off the main actor.
+    static var terrainTileConfig: MapTilerConfig? { terrainConfig }
+
+    /// The style URL the map should load.
+    ///
+    /// With a MapTiler key this is the **loopback** style endpoint, because 3D
+    /// terrain has to be in the style JSON: MapLibre Native has no `setTerrain`
+    /// equivalent, so the `terrain` block is injected server-side. The `terrain`
+    /// query is what makes a toggle change the URL, and therefore force MapLibre
+    /// to reload the style — there is no other way to add or drop the block.
+    static func mapStyleURL(for style: MapStyle, terrain3D: Bool) -> URL {
+        guard hasMapTilerKey else { return demoStyleURL }
+        var components = URLComponents(string: "http://127.0.0.1:\(slopePort)/style.json")!
+        components.queryItems = [
+            URLQueryItem(name: "style", value: style.rawValue),
+            URLQueryItem(name: "terrain", value: terrain3D ? "1" : "0"),
+        ]
+        return components.url!
+    }
+
+    static let demoStyleURL = URL(string: "https://demotiles.maplibre.org/style.json")!
+
+    /// The basemap vector tiles the style points at, served by the loopback
+    /// caching proxy. Every basemap request therefore passes through disk, which
+    /// is what makes an offline map possible at all.
+    ///
+    /// The source name is in the path because the basemap's vector sources have
+    /// *different* upstreams — `outdoor`, `contours`, and `maptiler_planet` are
+    /// separate tile sets, and one shared template would serve the wrong tiles.
+    static func cachedTileURLTemplate(forSource source: String) -> String {
+        "http://127.0.0.1:\(slopePort)/tiles/\(source)/{z}/{x}/{y}.pbf"
+    }
+
+    /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
+    static let terrainPitch: CGFloat = 55
+
+    /// Height of the bottom sheet's short detent, which shows only the stats row.
+    static let statsOnlyPanelHeight: CGFloat = 96
+
+    /// Below this sheet height the panel shows just the stats row, so the
+    /// profile and the offline row cannot overflow the short detent.
+    static let expandedPanelThreshold: CGFloat = 320
+
+    /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
+    /// no Terrain-RGB source to point the terrain block at.
+    static var canUseTerrain3D: Bool { hasMapTilerKey }
+
+    static var terrain3DLimitation: String? {
+        canUseTerrain3D
+            ? nil
+            : "3D terrain needs MapTiler's Terrain-RGB tiles. The demo basemap serves Terrarium terrain, which MapLibre's raster-DEM source cannot decode."
+    }
+
+    /// - Parameter terrain3D: whether the style should carry a 3D terrain
+    ///   block. Callers that only need a style for tile requests can ignore it.
+    static func styleURL(for style: MapStyle, terrain3D: Bool = false) -> URL {
         // Debug override: point the app at a local server to inspect the exact
         // request headers iOS sends. Set GPXNAV_STYLE_URL when launching.
         if let override = ProcessInfo.processInfo.environment["GPXNAV_STYLE_URL"],
            let url = URL(string: override) {
             return url
         }
-        switch styleSource {
-        case .mapTiler:
-            return MapTilerConfig(apiKey: maptilerAPIKey).styleURL(for: style)
-        case .mapLibreDemo:
-            return URL(string: "https://demotiles.maplibre.org/style.json")!
-        }
+        guard styleSource == .mapTiler else { return demoStyleURL }
+        return mapStyleURL(for: style, terrain3D: terrain3D)
     }
 
     /// DEM tiles for relief shading.
@@ -85,6 +141,18 @@ enum AppConfig {
     private static var maptilerAPIKey: String {
         let key = Bundle.main.object(forInfoDictionaryKey: "MaptilerAPIKey") as? String
         return key?.isEmpty == false ? key! : ""
+    }
+
+    /// Shared geocoding client, or `nil` without a key.
+    static let geocodingClient: GeocodingClient? = hasMapTilerKey
+        ? GeocodingClient(apiKey: maptilerAPIKey)
+        : nil
+
+    /// Why search is unavailable, or nil when it works.
+    static var searchLimitation: String? {
+        geocodingClient == nil
+            ? "Search needs a MapTiler key. The demo basemap has no geocoder."
+            : nil
     }
 
     // MARK: - What actually works right now

@@ -5,11 +5,33 @@ import CoreLocation
 
 /// Wraps MapLibre Native's `MLNMapView` in a SwiftUI representable.
 ///
-/// M0 spike scope: MapTiler style + route polyline + `raster-dem` hillshade +
-/// loopback slope raster. All MapLibre code is confined to this file.
+/// All MapLibre code is confined to this file and `MapLayers.swift`. Paint
+/// values and layer ids are ported from `addDataLayers` in the web app's
+/// `main.ts` so the two maps look the same.
+///
+/// 3D terrain is the one M2 toggle not wired here: MapLibre Native's ObjC API
+/// has no terrain setter, so it has to be written into the style JSON instead.
+/// See docs/ios-plan.md §6.
 struct MapView: UIViewRepresentable {
     let route: Route
+    /// Distance along the route the profile is scrubbed to. The map draws the
+    /// covered portion as a trace, the way the web app's `profile-trace` layer
+    /// does. Nil hides it.
+    @Binding var scrubbedDistance: Double?
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var location: LocationController
+
+    /// Resampled profiles, kept per route so scrubbing does not resample on
+    /// every gesture change. A cache, not a source of truth: the profile the
+    /// stats and chart use lives in `RouteAnalysis`. It is a reference box
+    /// because the layer methods are non-mutating and are also called by the
+    /// coordinator, which cannot mutate the representable's own storage.
+    private let profileCache = ProfileCache()
+
+    init(route: Route, scrubbedDistance: Binding<Double?> = .constant(nil)) {
+        self.route = route
+        self._scrubbedDistance = scrubbedDistance
+    }
 
     func makeUIView(context: Context) -> MLNMapView {
         let mapView = MLNMapView(frame: .zero, styleURL: styleURL(for: workspace.mapStyle))
@@ -30,9 +52,10 @@ struct MapView: UIViewRepresentable {
             // A style swap drops every custom source/layer; the coordinator
             // re-adds them on `didFinishLoading`.
             mapView.styleURL = desired
+            context.coordinator.hasFitted = false
             return
         }
-        applyOverlays(to: mapView)
+        applyEverything(to: mapView)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -42,48 +65,303 @@ struct MapView: UIViewRepresentable {
     // MARK: - Style
 
     private func styleURL(for style: MapStyle) -> URL {
-        AppConfig.styleURL(for: style)
+        AppConfig.styleURL(for: style, terrain3D: workspace.showTerrain3D)
     }
 
-    // MARK: - Route layer
+    // MARK: - Routes
 
-    private func addRouteLayer(to mapView: MLNMapView, route: Route) {
-        guard let style = mapView.style, route.points.count >= 2 else { return }
-        let sourceID = "route-\(route.id)"
+    /// Draw every visible route, not only the one on screen, so the library
+    /// overview matches the web app.
+    private func applyRoutes(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        let visible = workspace.routes.filter { ($0.visible ?? true) && $0.points.count >= 2 }
+        let visibleIDs = Set(visible.map(\.id))
+        let selectedID = route.id
+
+        for candidate in visible {
+            addRoute(to: style, route: candidate, selected: candidate.id == selectedID)
+        }
+        // Drop layers and sources for routes that were deleted or hidden.
+        for layer in style.layers where layer.identifier.hasPrefix("route-") {
+            guard let id = numericSuffix(of: layer.identifier), !visibleIDs.contains(id) else { continue }
+            style.removeLayer(layer)
+        }
+        for source in style.sources where source.identifier.hasPrefix("route-") {
+            guard let id = numericSuffix(of: source.identifier), !visibleIDs.contains(id) else { continue }
+            style.removeSource(source)
+        }
+    }
+
+    private func numericSuffix(of identifier: String) -> Int? {
+        identifier.split(separator: "-").last.flatMap { Int($0) }
+    }
+
+    private func addRoute(to style: MLNStyle, route: Route, selected: Bool) {
+        let sourceID = MapLayers.routeSource(route.id)
+        let coordinates = route.points.map {
+            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+        }
+        let line = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
 
         if style.source(withIdentifier: sourceID) == nil {
-            let coordinates = route.points.map {
-                CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
-            }
-            let shape = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
-            style.addSource(MLNShapeSource(identifier: sourceID, shape: shape, options: nil))
+            style.addSource(MLNShapeSource(identifier: sourceID, shape: line, options: nil))
+        } else if let existing = style.source(withIdentifier: sourceID) as? MLNShapeSource {
+            existing.shape = line
         }
+        guard let source = style.source(withIdentifier: sourceID) as? MLNSource else { return }
 
-        if style.layer(withIdentifier: "route-casing-\(route.id)") == nil {
-            let casing = MLNLineStyleLayer(
-                identifier: "route-casing-\(route.id)",
-                source: style.source(withIdentifier: sourceID) as! MLNSource
-            )
+        let casingID = MapLayers.routeCasing(route.id)
+        if style.layer(withIdentifier: casingID) == nil {
+            let casing = MLNLineStyleLayer(identifier: casingID, source: source)
             casing.lineColor = NSExpression(forConstantValue: UIColor.white)
-            casing.lineWidth = NSExpression(forConstantValue: 8)
-            casing.lineOpacity = NSExpression(forConstantValue: 0.88)
+            casing.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.routeCasingWidth)
+            casing.lineOpacity = NSExpression(forConstantValue: MapLayers.Paint.routeCasingOpacity)
+            MapLayers.applyRoundCaps(to: casing)
             style.addLayer(casing)
         }
 
-        if style.layer(withIdentifier: "route-line-\(route.id)") == nil {
-            let line = MLNLineStyleLayer(
-                identifier: "route-line-\(route.id)",
-                source: style.source(withIdentifier: sourceID) as! MLNSource
-            )
-            line.lineColor = NSExpression(forConstantValue: UIColor(route.color))
-            line.lineWidth = NSExpression(forConstantValue: 4)
-            line.lineCap = NSExpression(forConstantValue: "round")
-            line.lineJoin = NSExpression(forConstantValue: "round")
-            style.addLayer(line)
+        let lineID = MapLayers.routeLine(route.id)
+        if style.layer(withIdentifier: lineID) == nil {
+            let routeLine = MLNLineStyleLayer(identifier: lineID, source: source)
+            routeLine.lineColor = NSExpression(forConstantValue: UIColor(route.color))
+            routeLine.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.routeLineWidth)
+            MapLayers.applyRoundCaps(to: routeLine)
+            style.addLayer(routeLine)
+        }
+
+        // Vertices as a circle layer rather than annotations, matching the web
+        // app: annotations float above a pitched or terrain-ed map instead of
+        // staying glued to the surface.
+        //
+        // Only for the selected route, as in the web app, and only while the
+        // vertices are far enough apart to read. A switchback route has 400 of
+        // them inside a few hundred metres, and drawing every one turns the line
+        // into a solid blob.
+        if selected, isVertexSpacingReadable(route) {
+            applyRoutePoints(to: style, route: route, selected: selected)
+        } else {
+            removeRoutePoints(from: style, route: route)
         }
     }
 
-    private func fitMapToRoute(_ mapView: MLNMapView, route: Route) {
+    /// Whether the route's vertices are far enough apart to draw as dots.
+    private func isVertexSpacingReadable(_ route: Route) -> Bool {
+        guard route.points.count > 1 else { return false }
+        let length = Haversine.routeLength(route.points)
+        return length / Double(route.points.count) >= MapLayers.minVertexSpacingMeters
+    }
+
+    private func removeRoutePoints(from style: MLNStyle, route: Route) {
+        let sourceID = MapLayers.routePoints(route.id)
+        if style.layer(withIdentifier: sourceID) != nil {
+            style.removeLayer(style.layer(withIdentifier: sourceID)!)
+        }
+        if style.source(withIdentifier: sourceID) != nil {
+            style.removeSource(style.source(withIdentifier: sourceID)!)
+        }
+    }
+
+    private func applyRoutePoints(to style: MLNStyle, route: Route, selected: Bool) {
+        let sourceID = MapLayers.routePoints(route.id)
+        // A raw GPS track can hold tens of thousands of vertices; drawing them
+        // all is invisible at map scale and stalls the style.
+        let thinned = downsamplePoints(route.points, maxPoints: MapLayers.maxRouteVertices)
+        let coordinates = thinned.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        guard !coordinates.isEmpty else { return }
+        let points = MLNPointCollection(coordinates: coordinates, count: UInt(coordinates.count))
+
+        if style.source(withIdentifier: sourceID) == nil {
+            style.addSource(MLNShapeSource(identifier: sourceID, shape: points, options: nil))
+        } else if let existing = style.source(withIdentifier: sourceID) as? MLNShapeSource {
+            existing.shape = points
+        }
+        guard let source = style.source(withIdentifier: sourceID) as? MLNSource else { return }
+
+        if style.layer(withIdentifier: sourceID) == nil {
+            let layer = MLNCircleStyleLayer(identifier: sourceID, source: source)
+            layer.circleRadius = NSExpression(
+                forConstantValue: selected
+                    ? MapLayers.Paint.routePointSelectedRadius
+                    : MapLayers.Paint.routePointRadius
+            )
+            layer.circleColor = NSExpression(forConstantValue: UIColor(route.color))
+            layer.circleStrokeColor = NSExpression(
+                forConstantValue: selected ? MapLayers.Paint.routePointSelectedStroke : UIColor.white
+            )
+            layer.circleStrokeWidth = NSExpression(forConstantValue: MapLayers.Paint.routePointStrokeWidth)
+            style.addLayer(layer)
+        }
+    }
+
+    // MARK: - Waypoints
+
+    private func applyWaypoints(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        let waypoints = workspace.waypoints
+
+        guard !waypoints.isEmpty else {
+            if let layer = style.layer(withIdentifier: MapLayers.waypointLayer) {
+                style.removeLayer(layer)
+            }
+            if let source = style.source(withIdentifier: MapLayers.waypointSource) {
+                style.removeSource(source)
+            }
+            return
+        }
+
+        let coordinates = waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        let points = MLNPointCollection(coordinates: coordinates, count: UInt(coordinates.count))
+        if style.source(withIdentifier: MapLayers.waypointSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.waypointSource, shape: points, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.waypointSource) as? MLNShapeSource {
+            existing.shape = points
+        }
+        guard style.layer(withIdentifier: MapLayers.waypointLayer) == nil,
+              let source = style.source(withIdentifier: MapLayers.waypointSource) as? MLNSource
+        else { return }
+
+        let layer = MLNCircleStyleLayer(identifier: MapLayers.waypointLayer, source: source)
+        layer.circleRadius = NSExpression(forConstantValue: MapLayers.Paint.waypointRadius)
+        layer.circleColor = NSExpression(forConstantValue: MapLayers.Paint.waypointFill)
+        layer.circleStrokeColor = NSExpression(forConstantValue: UIColor.white)
+        layer.circleStrokeWidth = NSExpression(forConstantValue: MapLayers.Paint.routePointStrokeWidth)
+        style.addLayer(layer)
+    }
+
+    // MARK: - Location
+
+    private func applyLocation(to mapView: MLNMapView) {
+        guard let style = mapView.style, let fix = location.fix else { return }
+        let point = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
+
+        // Two sources rather than the web app's single geometry-filtered one:
+        // MapLibre Native has no shape-collection source, and splitting the
+        // point from the accuracy polygon avoids needing that filter at all.
+        let pointFeature = MLNPointFeature()
+        pointFeature.coordinate = point
+        if style.source(withIdentifier: MapLayers.locationPointSource) == nil {
+            style.addSource(MLNShapeSource(
+                identifier: MapLayers.locationPointSource,
+                shape: pointFeature,
+                options: nil
+            ))
+        } else if let existing = style.source(withIdentifier: MapLayers.locationPointSource) as? MLNShapeSource {
+            existing.shape = pointFeature
+        }
+        if let source = style.source(withIdentifier: MapLayers.locationPointSource) as? MLNSource {
+            if style.layer(withIdentifier: MapLayers.locationHalo) == nil {
+                let halo = MLNCircleStyleLayer(identifier: MapLayers.locationHalo, source: source)
+                halo.circleRadius = NSExpression(forConstantValue: MapLayers.Paint.locationHaloRadius)
+                halo.circleColor = NSExpression(forConstantValue: UIColor.white)
+                halo.circleOpacity = NSExpression(forConstantValue: MapLayers.Paint.locationHaloOpacity)
+                style.addLayer(halo)
+            }
+            if style.layer(withIdentifier: MapLayers.locationDot) == nil {
+                let dot = MLNCircleStyleLayer(identifier: MapLayers.locationDot, source: source)
+                dot.circleRadius = NSExpression(forConstantValue: MapLayers.Paint.locationDotRadius)
+                dot.circleColor = NSExpression(forConstantValue: MapLayers.Paint.locationFill)
+                dot.circleStrokeColor = NSExpression(forConstantValue: UIColor.white)
+                dot.circleStrokeWidth = NSExpression(forConstantValue: MapLayers.Paint.locationStrokeWidth)
+                style.addLayer(dot)
+            }
+        }
+
+        // The accuracy disc is a polygon so it stays glued to the ground.
+        let ring = AccuracyHalo.ring(lon: fix.lon, lat: fix.lat, radiusMeters: fix.accuracyMeters)
+        let ringCoordinates = ring.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        guard ringCoordinates.count >= 3 else { return }
+        let polygon = MLNPolygonFeature(coordinates: ringCoordinates, count: UInt(ringCoordinates.count))
+
+        if style.source(withIdentifier: MapLayers.locationAccuracySource) == nil {
+            style.addSource(MLNShapeSource(
+                identifier: MapLayers.locationAccuracySource,
+                shape: polygon,
+                options: nil
+            ))
+        } else if let existing = style.source(withIdentifier: MapLayers.locationAccuracySource) as? MLNShapeSource {
+            existing.shape = polygon
+        }
+        if style.layer(withIdentifier: MapLayers.locationAccuracy) == nil,
+           let source = style.source(withIdentifier: MapLayers.locationAccuracySource) as? MLNSource {
+            let accuracy = MLNFillStyleLayer(identifier: MapLayers.locationAccuracy, source: source)
+            accuracy.fillColor = NSExpression(forConstantValue: MapLayers.Paint.locationFill)
+            accuracy.fillOpacity = NSExpression(forConstantValue: MapLayers.Paint.locationFillOpacity)
+            style.addLayer(accuracy)
+        }
+    }
+
+    // MARK: - Terrain overlays
+
+    private func applyOverlays(to mapView: MLNMapView) {
+        applyRelief(to: mapView)
+        applySlopeRaster(to: mapView)
+    }
+
+    /// Confirms the M0 gate item "raster-dem Terrain-RGB works on Native":
+    /// MapTiler's terrain-rgb-v2 is the Mapbox Terrain-RGB encoding, which is the
+    /// only one `MLNRasterDEMSource` documents support for.
+    private func applyRelief(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+
+        if workspace.showHillshade {
+            if style.source(withIdentifier: MapLayers.demSource) == nil {
+                style.addSource(MapLayers.makeDEMSource())
+            }
+            if style.layer(withIdentifier: MapLayers.reliefLayer) == nil,
+               let dem = style.source(withIdentifier: MapLayers.demSource) {
+                let layer = MLNHillshadeStyleLayer(identifier: MapLayers.reliefLayer, source: dem)
+                layer.hillshadeExaggeration = NSExpression(
+                    forConstantValue: MapLayers.Paint.hillshadeExaggeration
+                )
+                style.addLayer(layer)
+            }
+        } else {
+            if style.layer(withIdentifier: MapLayers.reliefLayer) != nil {
+                style.removeLayer(style.layer(withIdentifier: MapLayers.reliefLayer)!)
+            }
+            if style.source(withIdentifier: MapLayers.demSource) != nil {
+                style.removeSource(style.source(withIdentifier: MapLayers.demSource)!)
+            }
+        }
+    }
+
+    private func applySlopeRaster(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+
+        if workspace.showSlope {
+            if style.source(withIdentifier: MapLayers.slopeSource) == nil {
+                style.addSource(MapLayers.makeSlopeSource())
+            }
+            if style.layer(withIdentifier: MapLayers.slopeLayer) == nil,
+               let source = style.source(withIdentifier: MapLayers.slopeSource) {
+                let layer = MLNRasterStyleLayer(identifier: MapLayers.slopeLayer, source: source)
+                layer.rasterOpacity = NSExpression(forConstantValue: MapLayers.Paint.slopeOpacity)
+                layer.rasterFadeDuration = NSExpression(forConstantValue: 0)
+                layer.rasterResamplingMode = NSExpression(forConstantValue: "linear")
+                style.addLayer(layer)
+            }
+        } else {
+            if style.layer(withIdentifier: MapLayers.slopeLayer) != nil {
+                style.removeLayer(style.layer(withIdentifier: MapLayers.slopeLayer)!)
+            }
+            if style.source(withIdentifier: MapLayers.slopeSource) != nil {
+                style.removeSource(style.source(withIdentifier: MapLayers.slopeSource)!)
+            }
+        }
+    }
+
+    // MARK: - Camera
+
+    /// Tilt the camera when 3D terrain is on, matching the web app, which does
+    /// `easeTo({ pitch: 55 })` alongside `setTerrain`. Without the tilt the
+    /// terrain is loaded but invisible.
+    private func applyTerrainCamera(to mapView: MLNMapView) {
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        camera.pitch = workspace.showTerrain3D ? AppConfig.terrainPitch : 0
+        mapView.setCamera(camera, withDuration: 0.6, animationTimingFunction: nil)
+    }
+
+    private func fitMapToRoute(_ mapView: MLNMapView, route: Route, animated: Bool) {
         let coordinates = route.points.map {
             CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
         }
@@ -99,76 +377,95 @@ struct MapView: UIViewRepresentable {
 
         mapView.setVisibleCoordinateBounds(
             MLNCoordinateBounds(sw: sw, ne: ne),
-            edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40),
-            animated: false
+            edgePadding: AppConfig.fitEdgePadding,
+            animated: animated
         )
     }
 
-    // MARK: - Overlays
+    // MARK: - Everything
 
-    private func applyOverlays(to mapView: MLNMapView) {
-        applyHillshade(to: mapView)
-        applySlopeRaster(to: mapView)
+    private func applyEverything(to mapView: MLNMapView) {
+        applyRoutes(to: mapView)
+        applyProfileTrace(to: mapView)
+        applyWaypoints(to: mapView)
+        applyLocation(to: mapView)
+        applyOverlays(to: mapView)
+        applyCamera(to: mapView)
     }
 
-    /// Confirms the M0 gate item "raster-dem Terrain-RGB works on Native":
-    /// MapTiler's terrain-rgb-v2 is the Mapbox Terrain-RGB encoding, which is the
-    /// only one `MLNRasterDEMSource` documents support for.
-    private func applyHillshade(to mapView: MLNMapView) {
-        guard let style = mapView.style else { return }
+    // MARK: - Profile trace
 
-        if workspace.showHillshade {
-            if style.source(withIdentifier: "terrain-dem") == nil {
-                let dem = MLNRasterDEMSource(
-                    identifier: "terrain-dem",
-                    tileURLTemplates: [AppConfig.terrainTileURL],
-                    options: nil
-                )
-                style.addSource(dem)
+    /// Draw the part of the route up to the scrubbed distance, in the web app's
+    /// `TRACE_COLOR`.
+    private func applyProfileTrace(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        let profile = analysis(for: route)
+        let distance = scrubbedDistance
+
+        guard let distance, distance > 0, profile.points.count > 1 else {
+            if let layer = style.layer(withIdentifier: MapLayers.profileTraceLayer) {
+                style.removeLayer(layer)
             }
-            if style.layer(withIdentifier: "hillshade") == nil,
-               let dem = style.source(withIdentifier: "terrain-dem") {
-                let layer = MLNHillshadeStyleLayer(identifier: "hillshade", source: dem)
-                layer.hillshadeExaggeration = NSExpression(forConstantValue: 0.5)
-                style.addLayer(layer)
+            if let source = style.source(withIdentifier: MapLayers.profileTraceSource) {
+                style.removeSource(source)
             }
-        } else {
-            if style.layer(withIdentifier: "hillshade") != nil {
-                style.removeLayer(style.layer(withIdentifier: "hillshade")!)
-            }
-            if style.source(withIdentifier: "terrain-dem") != nil {
-                style.removeSource(style.source(withIdentifier: "terrain-dem")!)
-            }
+            return
         }
+
+        // Take the samples up to the scrub point, from the same resampled
+        // profile the chart and the stats use.
+        let cutIndex = profile.index(nearestTo: distance)
+        guard cutIndex > 0 else { return }
+        let coordinates = profile.points[0...cutIndex].map {
+            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+        }
+        let line = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
+
+        if style.source(withIdentifier: MapLayers.profileTraceSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.profileTraceSource, shape: line, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.profileTraceSource) as? MLNShapeSource {
+            existing.shape = line
+        }
+        guard style.layer(withIdentifier: MapLayers.profileTraceLayer) == nil,
+              let source = style.source(withIdentifier: MapLayers.profileTraceSource) as? MLNSource
+        else { return }
+        let layer = MLNLineStyleLayer(identifier: MapLayers.profileTraceLayer, source: source)
+        layer.lineColor = NSExpression(forConstantValue: MapLayers.Paint.traceColor)
+        layer.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.traceWidth)
+        layer.lineOpacity = NSExpression(forConstantValue: MapLayers.Paint.traceOpacity)
+        MapLayers.applyRoundCaps(to: layer)
+        style.addLayer(layer)
     }
 
-    /// Slope rasters come from the loopback `SlopeServer`, because Native has no
-    /// equivalent of the web app's `addProtocol('slope', …)`.
-    private func applySlopeRaster(to mapView: MLNMapView) {
-        guard let style = mapView.style else { return }
+    /// The resampled profile for `route`, cached so scrubbing does not rebuild
+    /// it on every gesture change.
+    private func analysis(for route: Route) -> RouteProfile {
+        profileCache.profile(for: route)
+    }
 
-        if workspace.showSlope {
-            if style.source(withIdentifier: "slope") == nil {
-                let source = MLNRasterTileSource(
-                    identifier: "slope",
-                    tileURLTemplates: [AppConfig.slopeTileURLTemplate],
-                    options: [MLNTileSourceOption.tileSize: 256]
-                )
-                style.addSource(source)
-            }
-            if style.layer(withIdentifier: "slope-layer") == nil,
-               let source = style.source(withIdentifier: "slope") {
-                let layer = MLNRasterStyleLayer(identifier: "slope-layer", source: source)
-                layer.rasterOpacity = NSExpression(forConstantValue: 0.6)
-                style.addLayer(layer)
-            }
-        } else {
-            if style.layer(withIdentifier: "slope-layer") != nil {
-                style.removeLayer(style.layer(withIdentifier: "slope-layer")!)
-            }
-            if style.source(withIdentifier: "slope") != nil {
-                style.removeSource(style.source(withIdentifier: "slope")!)
-            }
+    // MARK: - Camera
+
+    /// Recentre on the fix and face the direction of travel, or north when the
+    /// locate button is tapped a second time.
+    private func applyCamera(to mapView: MLNMapView) {
+        guard let fix = location.fix else { return }
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
+        if location.followsHeading, let heading = location.heading {
+            camera.heading = heading
+        }
+        mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
+    }
+
+    /// Reference-typed memo for resampled profiles.
+    private final class ProfileCache {
+        private var profiles: [Int: RouteProfile] = [:]
+
+        func profile(for route: Route) -> RouteProfile {
+            if let cached = profiles[route.id] { return cached }
+            let profile = RouteProfile.make(from: route.points)
+            profiles[route.id] = profile
+            return profile
         }
     }
 
@@ -177,19 +474,20 @@ struct MapView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate {
         private let parent: MapView
-        private var hasFitRoute = false
+        var hasFitted = false
 
         init(_ parent: MapView) {
             self.parent = parent
         }
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
-            parent.addRouteLayer(to: mapView, route: parent.route)
-            parent.applyOverlays(to: mapView)
-            if !hasFitRoute {
-                parent.fitMapToRoute(mapView, route: parent.route)
-                hasFitRoute = true
+            parent.applyEverything(to: mapView)
+            if !hasFitted {
+                parent.fitMapToRoute(mapView, route: parent.route, animated: false)
+                hasFitted = true
             }
+            // After the fit, so fitting the route does not undo the tilt.
+            parent.applyTerrainCamera(to: mapView)
         }
     }
 }
