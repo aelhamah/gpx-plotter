@@ -16,6 +16,13 @@ struct ViewerScreen: View {
     @State private var isPanelPresented = true
     @State private var isSearching = false
     @State private var scrubbedDistance: Double?
+    /// Which detent the sheet is at. Bound rather than fixed so `-expandedPanel`
+    /// can open it: `simctl` cannot drag a sheet, and the profile chart is only
+    /// in the expanded one.
+    @State private var panelDetent: PresentationDetent = ProcessInfo.processInfo
+        .arguments.contains("-expandedPanel")
+        ? .large
+        : .height(AppConfig.statsOnlyPanelHeight)
 
     let route: Route
 
@@ -51,7 +58,10 @@ struct ViewerScreen: View {
             }
             .sheet(isPresented: $isPanelPresented) {
                 panel
-                    .presentationDetents([.height(AppConfig.statsOnlyPanelHeight), .large])
+                    .presentationDetents(
+                        [.height(AppConfig.statsOnlyPanelHeight), .large],
+                        selection: $panelDetent
+                    )
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(20)

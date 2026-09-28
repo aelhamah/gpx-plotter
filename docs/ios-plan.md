@@ -392,6 +392,15 @@ usable once the profile is an overlay rather than a sibling of the map.
 - **The profile overlapped its axes.** The chart filled its whole frame, so the
   x-axis labels and the area fill collided with the bottom edge. The plot now has
   its own padding inside the frame.
+- **The profile's area fill painted a slab over the rest of the panel.** An
+  `AreaMark` with a single `y` fills down to *zero*, and zero is far below this
+  chart's y domain — a Colorado route sits around 3,000 m — so the fill was
+  drawn hundreds of points under the plot area and was not clipped, covering the
+  offline row and everything below it in the route's colour. The baseline is now
+  stated explicitly as the domain's floor, which is what the fill was always
+  meant to do. Worth knowing as a class of bug: a y domain that excludes the
+  implicit baseline is enough to trigger it, and the mark renders correctly
+  inside the chart the whole time.
 - **One location button, and it points north.** There were two: a disabled
   *Navigate* toolbar item and a floating locate button. The toolbar one is gone
   — Navigate is a tab now. Tapping the remaining button recentres **and** rotates

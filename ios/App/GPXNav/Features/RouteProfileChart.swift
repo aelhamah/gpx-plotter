@@ -40,9 +40,16 @@ struct RouteProfileChart: View {
 
     private var chart: some View {
         Chart(samples) { sample in
+            // The baseline is stated rather than left implicit. An `AreaMark`
+            // with a single `y` fills down to zero, and zero is *below* this
+            // chart's y domain — a hiking route starts around 3,000 m — so the
+            // fill was drawn hundreds of points under the plot area, unclipped,
+            // as a pink slab over the rest of the panel. Anchoring it to the
+            // domain's floor fills to the axis, which is what was wanted.
             AreaMark(
                 x: .value("Distance", sample.distance),
-                y: .value("Elevation", sample.elevation)
+                yStart: .value("Base", elevationDomain.lowerBound),
+                yEnd: .value("Elevation", sample.elevation)
             )
             .foregroundStyle(
                 .linearGradient(

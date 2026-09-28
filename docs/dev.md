@@ -104,6 +104,8 @@ xcrun simctl launch booted com.example.GPXNav
 | `-showRelief` | Turns on the MapTiler hillshade layer at launch. |
 | `-showSlope` | Turns on the loopback slope raster at launch. |
 | `-downloadOffline` | Starts the corridor tile download at launch. |
+| `-expandedPanel` | Opens the bottom sheet at the large detent, where the profile chart and the offline row live. |
+| `-scrub <fraction>` | Seeds the profile scrub at a fraction of the route's distance. |
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
 
