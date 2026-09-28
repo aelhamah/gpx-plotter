@@ -1,13 +1,18 @@
 import Foundation
 import RouteKit
 
-/// Corridor prefetch into `VectorTileCache`.
+/// Corridor prefetch into `TileCache`.
 ///
 /// This replaces `MLNOfflineStorage`, which on MapLibre Native 6.31.0 accepts a
 /// corridor pack, reports zero downloadable resources, and never fetches a tile
-/// (docs/ios-plan.md §9). Since the basemap's vector sources already point at
-/// the loopback caching proxy, a tile that is on disk *is* a tile the map can
-/// draw offline — so the whole job is choosing which tiles and fetching them.
+/// (docs/ios-plan.md §9). Since the basemap's sources already point at the
+/// loopback caching proxy, a tile that is on disk *is* a tile the map can draw
+/// offline — so the whole job is choosing which tiles and fetching them.
+///
+/// Which tiles means *which sources*, not just which coordinates: `outdoor` and
+/// `contours` are different payloads at the same `z/x/y`, and elevation is a
+/// third. The list is read from the loaded style, so switching basemaps changes
+/// what a download covers instead of quietly leaving the satellite imagery out.
 ///
 /// LRU eviction is not implemented. The byte figure is reported so the cost is
 /// at least visible, and `clear()` exists for when it grows.
@@ -34,20 +39,57 @@ final class OfflinePackManager: ObservableObject {
     @Published private(set) var state: PackState = .none
     @Published private(set) var estimatedBytes: Int = 0
     @Published private(set) var estimatedTileCount: Int = 0
-    /// Tiles actually held in the cache, for the Settings data section.
+    /// Tiles the last download could not fetch, so the coverage can be reported
+    /// honestly instead of claiming a clean success over holes.
+    @Published private(set) var skippedTileCount: Int = 0
+    /// Tiles actually held in the cache, for the Settings data section and the
+    /// offline row.
     @Published private(set) var cachedTileCount: Int = 0
     @Published private(set) var cachedBytes: Int = 0
 
-    private let cache: VectorTileCache
+    private let cache: TileCache
     private let styleBuilder: StyleBuilder
     private var prefetchTask: Task<Void, Never>?
-    /// Source ids to prefetch, taken from the style so this stays in step with
-    /// whatever basemap is loaded rather than a hardcoded list.
-    private let sources = ["outdoor", "contours", "maptiler_planet"]
 
-    init(cache: VectorTileCache, styleBuilder: StyleBuilder) {
+    /// How many tile requests may be in flight. Sequential is the safest thing
+    /// to do to a single API key, and a corridor is a few hundred tiles, so a
+    /// handful at a time rather than a flood.
+    private static let maxConcurrentFetches = 4
+
+    init(cache: TileCache, styleBuilder: StyleBuilder) {
         self.cache = cache
         self.styleBuilder = styleBuilder
+    }
+
+    // MARK: - Tile list
+
+    /// Every tile the corridor needs, for every source the style depends on.
+    ///
+    /// Basemap and elevation both come across `zoomRange`, because MapLibre asks
+    /// for a DEM tile at the camera's zoom rather than at one fixed level — a
+    /// corridor that covered the basemap at z12–z14 but only elevation at z14
+    /// would lose its hillshade and 3D terrain at every other zoom. The DEM tops
+    /// out at `Corridor.demZoomRange.upperBound`, which is what the intersection
+    /// clamps.
+    private func tileKeys(
+        for route: Route,
+        sources: [BasemapSource],
+        bufferMeters: Double,
+        zoomRange: ClosedRange<Int>
+    ) -> [TileCacheKey] {
+        let coordinates = route.points.map(\.coordinate)
+        let elevationRange = zoomRange.lowerBound...min(zoomRange.upperBound, Corridor.demZoomRange.upperBound)
+        var keys: [TileCacheKey] = []
+
+        for source in sources {
+            let range = source.isElevation ? elevationRange : zoomRange
+            keys.append(contentsOf: Corridor.tiles(
+                for: coordinates,
+                bufferMeters: bufferMeters,
+                zoomRange: range
+            ).map { TileCacheKey(tile: $0, source: source.name, format: source.format) })
+        }
+        return keys
     }
 
     // MARK: - Estimate
@@ -57,19 +99,40 @@ final class OfflinePackManager: ObservableObject {
         for route: Route,
         bufferMeters: Double = Corridor.defaultBufferMeters,
         zoomRange: ClosedRange<Int> = AppConfig.offlineZoomRange
-    ) {
-        let tiles = Corridor.tiles(
-            for: route.points.map(\.coordinate),
+    ) async {
+        let sources = await styleBuilder.basemapSources()
+        guard !sources.isEmpty else { return }
+        applyEstimate(for: tileKeys(
+            for: route,
+            sources: sources,
             bufferMeters: bufferMeters,
             zoomRange: zoomRange
-        )
-        estimatedTileCount = tiles.count * sources.count
-        estimatedBytes = Corridor.estimatedBytes(for: tiles) * sources.count
+        ))
+    }
+
+    /// The estimate, from a tile list that has already been worked out.
+    ///
+    /// Per source, not a flat per-tile figure: the tile sets a style needs range
+    /// from a few KB to 200 KB at the same zoom, and the style the user is
+    /// looking at decides which of those is being downloaded.
+    private func applyEstimate(for keys: [TileCacheKey]) {
+        estimatedTileCount = keys.count
+        estimatedBytes = keys.reduce(0) {
+            $0 + TileSourceSize.approximateBytes(source: $1.source, format: $1.format, zoom: $1.z)
+        }
     }
 
     var estimatedSizeDescription: String {
         guard estimatedBytes > 0 else { return "—" }
-        let megabytes = Double(estimatedBytes) / 1_000_000
+        return Self.describe(bytes: estimatedBytes)
+    }
+
+    var cachedSizeDescription: String {
+        Self.describe(bytes: cachedBytes)
+    }
+
+    private static func describe(bytes: Int) -> String {
+        let megabytes = Double(bytes) / 1_000_000
         if megabytes >= 1000 {
             return String(format: "%.1f GB", megabytes / 1000)
         }
@@ -78,7 +141,7 @@ final class OfflinePackManager: ObservableObject {
             : String(format: "%.1f MB", megabytes)
     }
 
-    /// Refresh the cache figures for the Settings screen.
+    /// Refresh the cache figures for the Settings screen and the offline row.
     func refreshCacheFigures() async {
         cachedTileCount = await cache.tileCount()
         cachedBytes = await cache.byteCount()
@@ -86,7 +149,7 @@ final class OfflinePackManager: ObservableObject {
 
     // MARK: - Prefetch
 
-    /// Fetch every tile the corridor crosses, across the basemap's sources.
+    /// Fetch every tile the corridor crosses, for every source the style needs.
     func download(
         for route: Route,
         bufferMeters: Double = Corridor.defaultBufferMeters,
@@ -98,118 +161,108 @@ final class OfflinePackManager: ObservableObject {
             return
         }
 
-        let tiles = Corridor.tiles(
-            for: route.points.map(\.coordinate),
-            bufferMeters: bufferMeters,
-            zoomRange: zoomRange
-        )
-        guard !tiles.isEmpty else {
-            state = .failed("No tiles cover this route at z\(zoomRange.lowerBound)–\(zoomRange.upperBound)")
-            return
-        }
-
-        estimate(for: route, bufferMeters: bufferMeters, zoomRange: zoomRange)
         state = .preparing
 
-        prefetchTask = Task { [cache, styleBuilder, sources] in
-            // The style builder only learns a source's upstream URL once the
-            // map has actually fetched the style, and this runs from the same
-            // `.task` that starts the map — so wait for it rather than failing
-            // on a race that resolves itself a moment later.
-            var templates: [String: String] = [:]
+        prefetchTask = Task { [styleBuilder] in
+            // Cleared on every exit, including a cancellation, so a cancelled
+            // download cannot leave the row spinning forever.
+            defer { self.prefetchTask = nil }
+
+            // The style builder only learns a source's upstream URL once the map
+            // has actually fetched the style, and this runs from the same
+            // `.task` that starts the map — so wait for it rather than failing on
+            // a race that resolves itself a moment later.
+            var sources: [BasemapSource] = []
             for _ in 0..<40 {
                 if Task.isCancelled { return }
-                templates = [:]
-                for source in sources {
-                    if let template = await styleBuilder.upstreamTemplate(forSource: source) {
-                        templates[source] = template
-                    }
-                }
-                if !templates.isEmpty { break }
+                sources = await styleBuilder.basemapSources()
+                if !sources.isEmpty { break }
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            guard !templates.isEmpty else {
+            guard !sources.isEmpty else {
                 self.state = .failed("The basemap style has not loaded yet — try again in a moment.")
-                self.prefetchTask = nil
+                return
+            }
+
+            let keys = self.tileKeys(
+                for: route,
+                sources: sources,
+                bufferMeters: bufferMeters,
+                zoomRange: zoomRange
+            )
+            guard !keys.isEmpty else {
+                self.state = .failed("No tiles cover this route at z\(zoomRange.lowerBound)–\(zoomRange.upperBound)")
+                return
+            }
+            self.applyEstimate(for: keys)
+
+            // Resolve every upstream before fetching, so the requests themselves
+            // are pure cache writes and cannot fail on a missing template.
+            var pending: [(key: TileCacheKey, url: URL)] = []
+            for key in keys {
+                guard let template = await styleBuilder.upstreamTemplate(forSource: key.source),
+                      let url = key.upstreamURL(template: template)
+                else { continue }
+                pending.append((key, url))
+            }
+            guard !pending.isEmpty else {
+                self.state = .failed("The basemap style has not resolved its tile sources yet.")
                 return
             }
 
             self.state = .downloading(progress: 0)
-            // Progress is reported per source group rather than per tile: the
-            // loopback cache is keyed by z/x/y and three sources share tiles, so
-            // counting individual fetches overstates the work.
-            var done = 0
-            let total = sources.count
-            for (source, template) in templates {
-                guard !Task.isCancelled else { break }
-                var group: [URL] = []
-                for tile in tiles {
-                    let key = VectorTileCache.Key(z: tile.z, x: tile.x, y: tile.y)
-                    if let url = Self.upstreamURL(template: template, key: key) {
-                        group.append(url)
-                    }
-                }
-                let results = await Self.fetch(
-                    Array(group.prefix(tiles.count)),
-                    tiles: tiles,
-                    into: cache
-                )
-                if Task.isCancelled { break }
-                done += 1
-                self.state = .downloading(progress: Double(done) / Double(total))
-                if results == 0 {
-                    self.state = .failed("MapTiler returned no tiles for \(source).")
-                    self.prefetchTask = nil
-                    return
-                }
-            }
+            let (stored, skipped) = await self.prefetch(pending)
+            if Task.isCancelled { return }
 
-            guard !Task.isCancelled else { return }
             await self.refreshCacheFigures()
-            self.state = .complete
-            self.prefetchTask = nil
+            self.skippedTileCount = skipped
+            self.state = stored == 0
+                ? .failed("MapTiler returned no tiles. Check that the key allows native requests.")
+                : .complete
         }
     }
 
-    /// Fetch one source's tiles through the cache, so they land on disk exactly
-    /// the way a live map request would.
-    private static func fetch(
-        _ urls: [URL],
-        tiles: [TileCoordinate],
-        into cache: VectorTileCache
-    ) async -> Int {
+    /// Fetch a list of tiles, a few at a time, reporting after each one.
+    ///
+    /// The cache deduplicates what is already on disk, so a corridor overlapping
+    /// somewhere already looked at costs nothing to ask for.
+    private func prefetch(
+        _ pending: [(key: TileCacheKey, url: URL)]
+    ) async -> (stored: Int, skipped: Int) {
         var stored = 0
-        for (url, tile) in zip(urls, tiles) {
-            if Task.isCancelled { return stored }
-            let key = VectorTileCache.Key(z: tile.z, x: tile.x, y: tile.y)
-            do {
-                _ = try await cache.data(for: key) { _ in
-                    var request = URLRequest(url: url)
-                    request.setValue(MapNetworkIdentity.userAgent, forHTTPHeaderField: "User-Agent")
-                    request.setValue(
-                        MapNetworkIdentity.versionHeader,
-                        forHTTPHeaderField: "X-GPXNav-Version"
-                    )
-                    let (data, response) = try await URLSession.shared.data(for: request)
-                    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                        throw VectorTileCache.CacheError.upstreamFailed(http.statusCode)
-                    }
-                    return data
-                }
-                stored += 1
-            } catch {
-                // One missing tile should not abandon the corridor; the map will
-                // fall back to fetching it live when it is needed.
-            }
-        }
-        return stored
-    }
+        var skipped = 0
+        var completed = 0
 
-    private static func upstreamURL(template: String, key: VectorTileCache.Key) -> URL? {
-        URL(string: template
-            .replacingOccurrences(of: "{z}", with: "\(key.z)")
-            .replacingOccurrences(of: "{x}", with: "\(key.x)")
-            .replacingOccurrences(of: "{y}", with: "\(key.y)"))
+        for chunk in pending.chunked(into: Self.maxConcurrentFetches) {
+            let results = await withTaskGroup(of: Bool.self) { group in
+                for item in chunk {
+                    group.addTask { [cache] in
+                        do {
+                            _ = try await cache.data(for: item.key) { _ in
+                                try await SlopeServer.fetch(item.url)
+                            }
+                            return true
+                        } catch {
+                            // One missing tile should not abandon the corridor;
+                            // the map falls back to fetching it live.
+                            return false
+                        }
+                    }
+                }
+                var outcomes: [Bool] = []
+                for await ok in group {
+                    outcomes.append(ok)
+                }
+                return outcomes
+            }
+
+            for ok in results {
+                completed += 1
+                if ok { stored += 1 } else { skipped += 1 }
+            }
+            state = .downloading(progress: Double(completed) / Double(pending.count))
+        }
+        return (stored, skipped)
     }
 
     // MARK: - Removal
@@ -223,6 +276,16 @@ final class OfflinePackManager: ObservableObject {
             await cache.clear()
             await refreshCacheFigures()
             state = .none
+        }
+    }
+}
+
+extension Array {
+    /// Split into fixed-size chunks, the last one shorter if needed.
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
         }
     }
 }

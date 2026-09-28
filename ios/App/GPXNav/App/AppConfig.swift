@@ -80,15 +80,37 @@ enum AppConfig {
 
     static let demoStyleURL = URL(string: "https://demotiles.maplibre.org/style.json")!
 
-    /// The basemap vector tiles the style points at, served by the loopback
-    /// caching proxy. Every basemap request therefore passes through disk, which
-    /// is what makes an offline map possible at all.
+    /// The basemap and elevation tiles the style points at, served by the
+    /// loopback caching proxy. Every tile request therefore passes through disk,
+    /// which is what makes an offline map possible at all.
     ///
-    /// The source name is in the path because the basemap's vector sources have
-    /// *different* upstreams — `outdoor`, `contours`, and `maptiler_planet` are
-    /// separate tile sets, and one shared template would serve the wrong tiles.
-    static func cachedTileURLTemplate(forSource source: String) -> String {
-        "http://127.0.0.1:\(slopePort)/tiles/\(source)/{z}/{x}/{y}.pbf"
+    /// The source name and the format extension are both in the path, because
+    /// the style's sources are *different* tile sets at the same coordinates
+    /// (`outdoor`, `contours`, `maptiler_planet`, and on the satellite basemap a
+    /// raster `satellite`), and one shared template would serve the wrong bytes.
+    static func cachedTileURLTemplate(forSource source: String, format: TileFormat) -> String {
+        loopbackBase + TileCacheKey(source: source, z: 0, x: 0, y: 0, format: format).loopbackTemplate
+    }
+
+    static var loopbackBase: String { "http://127.0.0.1:\(slopePort)" }
+
+    /// Style source id for elevation. One name for the style's `raster-dem`
+    /// source, the hillshade layer, the slope generator's DEM fetch, and the
+    /// cache file prefix, so all four agree on what "the DEM" is.
+    static let demSource = "terrain"
+
+    /// Terrain-RGB tiles, through the loopback cache so hillshade and 3D terrain
+    /// survive being offline.
+    static var demTileURLTemplate: String {
+        guard styleSource == .mapTiler else {
+            // Terrarium-encoded demo terrain, straight from MapLibre's public
+            // tileset. `MLNRasterDEMSource` documents support for the Mapbox
+            // Terrain-RGB encoding only, so relief is expected to stay blank
+            // here — it exists to exercise the wiring, not to prove the encoding.
+            // The demo basemap has no key, and offline is not a goal.
+            return "https://demotiles.maplibre.org/terrain-tiles/{z}/{x}/{y}.png"
+        }
+        return cachedTileURLTemplate(forSource: demSource, format: .webp)
     }
 
     /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
@@ -122,20 +144,6 @@ enum AppConfig {
         }
         guard styleSource == .mapTiler else { return demoStyleURL }
         return mapStyleURL(for: style, terrain3D: terrain3D)
-    }
-
-    /// DEM tiles for relief shading.
-    static var terrainTileURL: String {
-        switch styleSource {
-        case .mapTiler:
-            return MapTilerConfig(apiKey: maptilerAPIKey).terrainTileURL
-        case .mapLibreDemo:
-            // Terrarium-encoded demo terrain. `MLNRasterDEMSource` documents
-            // support for the Mapbox Terrain-RGB encoding only, so relief is
-            // expected to stay blank on this basemap — it is here so the wiring
-            // can be exercised, not to prove the encoding.
-            return "https://demotiles.maplibre.org/terrain-tiles/{z}/{x}/{y}.png"
-        }
     }
 
     private static var maptilerAPIKey: String {
@@ -208,37 +216,25 @@ enum AppConfig {
 
     // MARK: - Offline
 
-    /// Zoom range downloaded for offline use, per the plan (§8).
+    /// Zoom range downloaded for offline use, per the plan (§9).
     ///
     /// Capped at z14 because that is the highest zoom MapTiler's `outdoor-v2`
     /// style serves; asking for z15–16 would only ever produce empty tiles.
     static let offlineZoomRange = 12...14
 
-    /// Whether `MLNOfflineStorage` packs can be used at all.
+    /// Whether a corridor can be downloaded.
     ///
-    /// False on MapLibre Native 6.31.0. `addPack` succeeds, but the pack never
-    /// leaves `Inactive` and reports zero expected resources, so no tile is ever
-    /// requested. Verified against MapTiler's TileJSON-only style and the same
-    /// style rewritten with inline `tiles`, and for both polygon and bounding-box
-    /// regions — so it is not the style, the zoom range, or the region shape.
-    /// Offline is deferred until this is resolved; see docs/ios-plan.md §8.
-    static let isOfflinePackDownloadSupported = false
-
-    /// Whether an offline pack can be downloaded at all.
-    ///
-    /// The public demo tileset stops at z6, so a z12–14 corridor has nothing to
-    /// fetch even once packs work.
+    /// Needs a key: the download is a prefetch through the loopback cache, and
+    /// the public demo tileset stops at z6, so a z12–14 corridor has nothing to
+    /// fetch.
     static var canDownloadOffline: Bool {
-        isOfflinePackDownloadSupported && styleSource == .mapTiler
+        styleSource == .mapTiler
     }
 
     /// Why offline download is unavailable, or nil when it works.
     static var offlineLimitation: String? {
         guard canDownloadOffline else {
-            if styleSource == .mapLibreDemo {
-                return "Offline download needs a basemap that serves z\(offlineZoomRange.lowerBound)–\(offlineZoomRange.upperBound). The demo tileset stops at z6, so there is nothing to download."
-            }
-            return "Offline download is not available yet: MapLibre accepts the corridor pack but never reports any downloadable tiles, so the pack would stay at 0%. See docs/ios-plan.md §8."
+            return "Offline download needs a basemap that serves z\(offlineZoomRange.lowerBound)–\(offlineZoomRange.upperBound). The demo tileset stops at z6, so there is nothing to download."
         }
         return nil
     }

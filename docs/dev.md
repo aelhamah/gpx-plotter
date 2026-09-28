@@ -47,7 +47,7 @@ The native app has two pieces, described in full in [`ios-plan.md`](ios-plan.md)
 ```bash
 cd ios/RouteKit
 swift build       # builds the library
-swift test        # runs 90 XCTest cases
+swift test        # runs 115 XCTest cases
 ```
 
 Targets iOS 17 / macOS 14, Swift 6 language mode. CI runs both commands in
@@ -100,9 +100,10 @@ xcrun simctl launch booted com.example.GPXNav
 | --- | --- |
 | `-openFirstRoute` | Pushes the last-opened route (or the first) so the map opens directly. |
 | `-demoTiles` | Uses MapLibre's keyless public demo basemap instead of MapTiler. |
+| `-satellite` | Starts on the satellite basemap instead of outdoor. |
 | `-showRelief` | Turns on the MapTiler hillshade layer at launch. |
 | `-showSlope` | Turns on the loopback slope raster at launch. |
-| `-downloadOffline` | Starts the corridor pack at launch. Currently a no-op in practice, see [`ios-plan.md`](ios-plan.md) §8. |
+| `-downloadOffline` | Starts the corridor tile download at launch. |
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
 
@@ -120,11 +121,29 @@ xcrun simctl launch booted com.example.GPXNav -importGPX my-track.gpx
 ```
 
 The demo basemap is z0–6, so terrain overlays are disabled there with an
-on-screen explanation; they require MapTiler. Offline download is currently
-disabled for a different reason — MapLibre's offline packs never enumerate any
-tiles, which is documented in [`ios-plan.md`](ios-plan.md) §8. The MapTiler key
-model differs between web and native — see [`ios-plan.md`](ios-plan.md) §5.1
-before touching key restrictions.
+on-screen explanation; they require MapTiler. Offline download needs a key for
+the same reason. The MapTiler key model differs between web and native — see
+[`ios-plan.md`](ios-plan.md) §5.1 before touching key restrictions.
+
+### Checking the tile cache
+
+Every tile the map draws passes through disk, so what the app has downloaded can
+be inspected directly, and the loopback it serves from can be queried by hand:
+
+```bash
+DATA=$(xcrun simctl get_app_container booted com.example.GPXNav data)
+ls "$DATA/Library/Application Support/tiles"          # one file per source/z/x/y
+du -sh "$DATA/Library/Application Support/tiles"
+
+# The app's loopback, which the simulator shares with the host:
+curl -sI "http://127.0.0.1:8080/tiles/outdoor/12/830/1563.pbf"   # a cached tile: 200
+curl -sI "http://127.0.0.1:8080/tiles/outdoor/12/1/1.pbf"        # not cached: fetched
+```
+
+File names are `{source}_{z}_{x}_{y}.{format}`, and the source is part of the
+name on purpose — see [`ios-plan.md`](ios-plan.md) §9. Writing a sentinel into a
+cached file and then `curl`-ing the loopback for that tile is the quickest way to
+confirm a hit is being answered from disk rather than the network.
 
 ## Scripts
 

@@ -46,8 +46,10 @@ enum MapNetworkIdentity {
 
     /// Apply the identity to MapLibre's shared session.
     ///
-    /// Must run before the first `MLNMapView` is created *or* `MLNOfflineStorage`
-    /// is touched, because `NSURLSession` copies the configuration at init.
+    /// Must run before the first `MLNMapView` is created, because `NSURLSession`
+    /// copies the configuration at init — which also means every tile request
+    /// the map makes through the loopback cache leaves with the allowlisted
+    /// user-agent, and MapTiler accepts them (§5.1).
     static func apply() {
         // The property is `null_resettable`; MapLibre documents that nil means
         // "use the default session configuration", so mirror that here.

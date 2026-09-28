@@ -62,7 +62,8 @@ struct ViewerScreen: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .task {
                 workspace.selectedRouteId = route.id
-                packs.estimate(for: route)
+                await packs.estimate(for: route)
+                await packs.refreshCacheFigures()
                 analysis.fillMissingElevations()
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                     isSearching = true

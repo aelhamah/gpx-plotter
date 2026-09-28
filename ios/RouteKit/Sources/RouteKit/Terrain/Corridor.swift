@@ -11,7 +11,12 @@ public enum Corridor {
     public static let defaultBufferMeters: Double = 1_000
     /// Zoom range for satellite imagery, per the plan.
     public static let defaultImageryZoomRange = 12...16
-    /// DEM tiles are only needed at one zoom, per the plan.
+    /// The single zoom the web app reads DEM tiles at, per the plan.
+    ///
+    /// Also the ceiling for the native app: MapTiler's `terrain-rgb-v2` stops at
+    /// z14, and MapLibre asks a `raster-dem` source for a tile at the camera's
+    /// zoom, so a corridor download wants every zoom of the basemap range *up to*
+    /// this — not only z14, or relief and 3D terrain go missing at the others.
     public static let demZoomRange = 14...14
 
     // MARK: - Shape
@@ -182,22 +187,17 @@ public enum Corridor {
 
     // MARK: - Size estimate
 
-    /// Rough bytes per tile, by zoom. Vector and satellite tiles both land in
-    /// this range; the numbers are only used to warn the user *before* a
-    /// multi-megabyte download, so precision is not the point.
-    static let approximateBytesPerTile: [Int: Int] = [
-        12: 12_000,
-        13: 16_000,
-        14: 22_000,
-        15: 30_000,
-        16: 40_000,
-    ]
-
-    /// Estimated download size for a tile list. Deliberately an estimate: the
-    /// pack is resolved for real by `MLNOfflineStorage` once added.
+    /// Estimated download size for a tile list, read as vector tiles.
+    ///
+    /// Deliberately an estimate, and deliberately only the vector case: a style
+    /// also carries a raster source and the DEM, whose tiles are up to two orders
+    /// of magnitude larger, so a real estimate sums
+    /// `TileSourceSize.approximateBytes(source:format:zoom:)` per source. This
+    /// stays for the single-tileset case, and `CorridorTests` uses it to hold the
+    /// plan's own 100–200 tile claim.
     public static func estimatedBytes(for tiles: [TileCoordinate]) -> Int {
         tiles.reduce(0) { total, tile in
-            total + (approximateBytesPerTile[tile.z] ?? 20_000)
+            total + TileFormat.pbf.approximateBytes(atZoom: tile.z)
         }
     }
 }

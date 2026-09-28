@@ -35,7 +35,7 @@ enum MapLayers {
 
     // MARK: - Terrain
 
-    static let demSource = "terrain"
+    static let demSource = AppConfig.demSource
     static let slopeSource = "slope"
     static let reliefLayer = "relief"
     static let slopeLayer = "slope-shading"
@@ -93,10 +93,15 @@ enum MapLayers {
     }
 
     /// The DEM source both the relief layer and 3D terrain read from.
+    ///
+    /// It normally does not have to be added: `StyleBuilder` puts a `terrain`
+    /// source in the style so 3D terrain has a block to point at, and it shares
+    /// this id. The keyless demo basemap loads MapLibre's style untouched, so
+    /// there the layer has to bring its own.
     static func makeDEMSource() -> MLNRasterDEMSource {
         MLNRasterDEMSource(
             identifier: demSource,
-            tileURLTemplates: [AppConfig.terrainTileURL],
+            tileURLTemplates: [AppConfig.demTileURLTemplate],
             options: [
                 MLNTileSourceOption.tileSize: Paint.tileSize,
                 MLNTileSourceOption.maximumZoomLevel: demMaxZoom
