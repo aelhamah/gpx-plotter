@@ -26,32 +26,13 @@ struct RouteProfileChart: View {
                     // and the area fill collided with the bottom edge.
                     .padding(.bottom, 14)
                     .padding(.top, 4)
-                    .contentShape(Rectangle())
-                    .gesture(scrubGesture)
             }
             footer
         }
         .frame(height: 170)
     }
 
-    /// Drag along the profile to trace the position onto the map.
-    private var scrubGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                guard samples.count > 1 else { return }
-                let fraction = min(max(value.location.x / max(plotWidth, 1), 0), 1)
-                scrubbedDistance = fraction * (analysis.totalDistance)
-            }
-            .onEnded { _ in
-                // Leave the trace where it was dropped; tapping elsewhere clears
-                // it. Matches the web app, which keeps the trace on the map.
-            }
-    }
 
-    /// Approximate plot width, used to turn a drag position into a distance.
-    private var plotWidth: CGFloat {
-        UIScreen.main.bounds.width - 48
-    }
 
     private var samples: [ProfileSample] {
         analysis.samples()
@@ -92,6 +73,26 @@ struct RouteProfileChart: View {
         // The axes carry raw metres; only the labels are converted, so the
         // plotted values stay in one unit.
         .chartYScale(domain: elevationDomain)
+        // The chart proxy converts a touch position into a data value, so the
+        // axis insets are accounted for. Estimating the plot width from the
+        // screen instead put the trace in the wrong place whenever the axes
+        // were not full width.
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let origin = geometry[proxy.plotAreaFrame].origin
+                                let x = value.location.x - origin.x
+                                guard let distance: Double = proxy.value(atX: x) else { return }
+                                scrubbedDistance = min(max(distance, 0), analysis.totalDistance)
+                            }
+                    )
+            }
+        }
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine()

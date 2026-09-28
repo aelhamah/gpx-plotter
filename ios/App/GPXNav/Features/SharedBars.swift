@@ -64,11 +64,11 @@ struct OfflinePackBar: View {
     private var action: some View {
         switch packs.state {
         case .complete:
-            Button("Remove") { packs.removeCurrentPack() }
+            Button("Clear") { packs.removeCurrentPack() }
                 .buttonStyle(.bordered)
         case .none, .failed:
             Button("Download") {
-                packs.download(route: route, styleURL: AppConfig.styleURL(for: .outdoor))
+                packs.download(for: route)
             }
             .buttonStyle(.borderedProminent)
             .disabled(packs.estimatedTileCount == 0 || !AppConfig.canDownloadOffline)

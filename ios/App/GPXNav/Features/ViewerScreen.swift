@@ -11,7 +11,7 @@ import RouteKit
 struct ViewerScreen: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
-    @StateObject private var packs: OfflinePackManager
+    @EnvironmentObject private var services: AppServices
     @StateObject private var analysis: RouteAnalysis
     @State private var isPanelPresented = true
     @State private var isSearching = false
@@ -21,11 +21,18 @@ struct ViewerScreen: View {
 
     init(route: Route) {
         self.route = route
-        _packs = StateObject(wrappedValue: OfflinePackManager())
         _analysis = StateObject(wrappedValue: RouteAnalysis(route: route))
     }
 
+    private var packs: OfflinePackManager { services.offline }
+
     var body: some View {
+        content
+    }
+
+    /// Rebuilt with the shared cache the first time the environment provides it.
+    @ViewBuilder
+    private var content: some View {
         MapView(route: route, scrubbedDistance: $scrubbedDistance)
             .ignoresSafeArea()
             .overlay(alignment: .topLeading) {
@@ -60,11 +67,20 @@ struct ViewerScreen: View {
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                     isSearching = true
                 }
+                // `-scrub 0.4` seeds the profile scrub at a fraction of the
+                // route. `simctl` cannot drag, so this is how the map trace gets
+                // checked on the simulator.
+                let arguments = ProcessInfo.processInfo.arguments
+                if let index = arguments.firstIndex(of: "-scrub"),
+                   arguments.count > index + 1,
+                   let fraction = Double(arguments[index + 1]) {
+                    scrubbedDistance = min(max(fraction, 0), 1) * analysis.totalDistance
+                }
                 // `simctl launch` cannot tap, so `-downloadOffline` starts the
                 // corridor pack straight away.
                 if ProcessInfo.processInfo.arguments.contains("-downloadOffline"),
                    AppConfig.canDownloadOffline {
-                    packs.download(route: route, styleURL: AppConfig.styleURL(for: workspace.mapStyle))
+                    packs.download(for: route)
                 }
             }
             .sheet(isPresented: $isSearching) {

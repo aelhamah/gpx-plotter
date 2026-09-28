@@ -1,25 +1,21 @@
 import Foundation
 import RouteKit
 
-/// Fetches MapTiler's hosted style and injects the 3D terrain block that
-/// MapLibre Native has no imperative setter for.
+/// Fetches MapTiler's hosted style, resolves its basemap sources, and rewrites
+/// it for what MapLibre Native cannot do on its own.
 ///
-/// The web app calls `map.setTerrain({ source: 'terrain', exaggeration: 1.15 })`,
-/// which is a MapLibre GL **JS** API. Native's ObjC headers expose no terrain
-/// setter at all, so the only way to get 3D terrain is to have
-/// `"terrain": { "source": …, "exaggeration": … }` present in the style JSON
-/// before the map loads it.
+/// Two rewrites, both forced by Native's missing APIs:
 ///
-/// The style is still MapTiler's own — this patches a copy rather than
-/// hand-authoring one, so the basemap keeps tracking MapTiler's design. The DEM
-/// source is added with an inline `tiles` template rather than a TileJSON `url`
-/// for the same reason the web app's own source works: a `raster-dem` source
-/// built from a TileJSON document has to be resolved before the terrain block
-/// can reference it, and MapLibre Native does not resolve it for a style it
-/// loaded from a URL.
+/// - **3D terrain.** The web app calls `map.setTerrain({ source, exaggeration })`,
+///   a MapLibre GL **JS** API. Native's ObjC headers expose no terrain setter,
+///   so `"terrain": { … }` has to be in the style JSON before the map loads it.
+/// - **Cached tiles.** MapTiler's sources are all TileJSON `url`s, which
+///   MapLibre resolves for a live map but which leave us no seam to intercept a
+///   tile. They are resolved here and repointed at the loopback cache, so every
+///   basemap request passes through disk. That is what makes an offline map
+///   possible at all — see `VectorTileCache`.
 ///
-/// Results are cached per (style, terrain) pair, so toggling terrain does not
-/// refetch MapTiler's style.
+/// The basemap is still MapTiler's own; only these two things are changed.
 actor StyleBuilder {
     /// Terrain exaggeration, matching the web app's `setTerrain` call.
     static let terrainExaggeration = 1.15
@@ -27,7 +23,10 @@ actor StyleBuilder {
     private let session: URLSession
     private let config: MapTilerConfig?
     private var cache: [String: Data] = [:]
-    private var inFlight: [String: Task<Data, Error>] = [:]
+    private var inFlight: [String: Task<(Data, [String: String]), Error>] = [:]
+    /// Source id → MapTiler's own tile URL template, from that source's
+    /// TileJSON. The loopback server substitutes coordinates into it on a miss.
+    private var upstreamTemplates: [String: String] = [:]
 
     init(config: MapTilerConfig?) {
         self.config = config
@@ -47,26 +46,24 @@ actor StyleBuilder {
         guard let config else { return nil }
         let key = "\(style.rawValue)-\(terrain)"
         if let cached = cache[key] { return cached }
-        if let existing = inFlight[key] { return try? await existing.value }
+        if let existing = inFlight[key] { return try? await existing.value.0 }
 
-        let task = Task<Data, Error> { [config, session] in
-            guard let url = URL(string: Self.styleURLString(for: style, config: config)) else {
-                throw URLError(.badURL)
-            }
-            var request = URLRequest(url: url)
-            request.setValue(MapNetworkIdentity.userAgent, forHTTPHeaderField: "User-Agent")
-            request.setValue(MapNetworkIdentity.versionHeader, forHTTPHeaderField: "X-GPXNav-Version")
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
-            return try Self.patching(data, terrain: terrain, config: config)
+        let task = Task<(Data, [String: String]), Error> { [config, session] in
+            let raw = try await Self.fetchStyle(for: style, config: config, session: session)
+            let resolved = try await Self.resolveVectorSources(in: raw, session: session)
+            let patched = try Self.patching(
+                resolved.style,
+                terrain: terrain,
+                config: config
+            )
+            return (patched, resolved.upstreams)
         }
         inFlight[key] = task
         defer { inFlight[key] = nil }
 
         do {
-            let patched = try await task.value
+            let (patched, upstreams) = try await task.value
+            upstreamTemplates.merge(upstreams) { _, new in new }
             cache[key] = patched
             return patched
         } catch {
@@ -75,6 +72,14 @@ actor StyleBuilder {
         }
     }
 
+    /// MapTiler's tile URL template for a basemap source, or nil if the style
+    /// has not been built yet.
+    func upstreamTemplate(forSource source: String) -> String? {
+        upstreamTemplates[source]
+    }
+
+    // MARK: - Fetching
+
     private static func styleURLString(for style: MapStyle, config: MapTilerConfig) -> String {
         switch style {
         case .outdoor: config.mapStyleURL
@@ -82,15 +87,97 @@ actor StyleBuilder {
         }
     }
 
-    /// Add the DEM source, and the terrain block when it is wanted.
-    static func patching(_ data: Data, terrain: Bool, config: MapTilerConfig) throws -> Data {
-        guard var style = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    private static func fetchStyle(
+        for style: MapStyle,
+        config: MapTilerConfig,
+        session: URLSession
+    ) async throws -> [String: Any] {
+        guard let url = URL(string: styleURLString(for: style, config: config)) else {
+            throw URLError(.badURL)
+        }
+        let data = try await fetch(url: url, session: session)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw URLError(.cannotParseResponse)
         }
+        return json
+    }
 
-        var sources = style["sources"] as? [String: Any] ?? [:]
-        // Name it `terrain` to match the web app's source id, so the relief
-        // layer and the terrain block refer to the same thing.
+    /// Resolve every vector source's TileJSON into an inline `tiles` array, and
+    /// return the upstream template for each.
+    ///
+    /// The zoom range comes from the TileJSON and is kept; only the URL is
+    /// repointed. A source that fails to resolve is left as MapTiler sent it, so
+    /// one bad TileJSON cannot take the whole style down.
+    private static func resolveVectorSources(
+        in style: [String: Any],
+        session: URLSession
+    ) async throws -> (style: [String: Any], upstreams: [String: String]) {
+        var resolved = style
+        guard var sources = resolved["sources"] as? [String: Any] else {
+            return (resolved, [:])
+        }
+        var upstreams: [String: String] = [:]
+
+        for (id, raw) in sources {
+            guard var source = raw as? [String: Any],
+                  source["type"] as? String == "vector",
+                  let tileJSONURL = source["url"] as? String,
+                  let url = URL(string: tileJSONURL)
+            else { continue }
+
+            guard let data = try? await fetch(url: url, session: session),
+                  let tileJSON = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let templates = tileJSON["tiles"] as? [String], let first = templates.first
+            else { continue }
+
+            source["tiles"] = [first]
+            if let minzoom = tileJSON["minzoom"] { source["minzoom"] = minzoom }
+            if let maxzoom = tileJSON["maxzoom"] { source["maxzoom"] = maxzoom }
+            if let bounds = tileJSON["bounds"] { source["bounds"] = bounds }
+            source.removeValue(forKey: "url")
+            sources[id] = source
+            upstreams[id] = first
+        }
+
+        resolved["sources"] = sources
+        return (resolved, upstreams)
+    }
+
+    private static func fetch(url: URL, session: URLSession) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.setValue(MapNetworkIdentity.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(MapNetworkIdentity.versionHeader, forHTTPHeaderField: "X-GPXNav-Version")
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return data
+    }
+
+    // MARK: - Patching
+
+    /// Point the vector sources at the loopback cache, and add the DEM source
+    /// plus the terrain block.
+    static func patching(
+        _ style: [String: Any],
+        terrain: Bool,
+        config: MapTilerConfig
+    ) throws -> Data {
+        var patched = style
+        var sources = patched["sources"] as? [String: Any] ?? [:]
+
+        for (id, raw) in sources {
+            guard var source = raw as? [String: Any],
+                  source["type"] as? String == "vector"
+            else { continue }
+            source["tiles"] = [AppConfig.cachedTileURLTemplate(forSource: id)]
+            source.removeValue(forKey: "url")
+            sources[id] = source
+        }
+
+        // Named `terrain` to match the web app's source id, so the relief layer
+        // and the terrain block refer to the same thing. Inline tiles rather than
+        // a TileJSON url, for the same reason the basemap sources are resolved.
         sources["terrain"] = [
             "type": "raster-dem",
             "tiles": [config.terrainTileURL],
@@ -98,17 +185,17 @@ actor StyleBuilder {
             "maxzoom": MapLayers.demMaxZoom,
             "encoding": "mapbox",
         ]
-        style["sources"] = sources
+        patched["sources"] = sources
 
         if terrain {
-            style["terrain"] = [
+            patched["terrain"] = [
                 "source": "terrain",
                 "exaggeration": terrainExaggeration,
             ]
         } else {
-            style.removeValue(forKey: "terrain")
+            patched.removeValue(forKey: "terrain")
         }
 
-        return try JSONSerialization.data(withJSONObject: style)
+        return try JSONSerialization.data(withJSONObject: patched)
     }
 }

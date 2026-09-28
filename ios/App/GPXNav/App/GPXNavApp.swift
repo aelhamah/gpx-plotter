@@ -4,7 +4,7 @@ import RouteKit
 @main
 struct GPXNavApp: App {
     @StateObject private var workspace = WorkspaceStore()
-    @StateObject private var slopeServer = SlopeServerManager()
+    @StateObject private var services = AppServices()
     @StateObject private var location = LocationController()
 
     init() {
@@ -20,7 +20,8 @@ struct GPXNavApp: App {
             RootTabView()
                 .environmentObject(workspace)
                 .environmentObject(location)
-                .task { slopeServer.start() }
+                .environmentObject(services)
+                .task { services.start() }
         }
     }
 }
@@ -188,23 +189,43 @@ enum RoutePalette {
     }
 }
 
-/// Keeps the loopback slope server alive for the app's lifetime.
+/// The app's long-lived services: the loopback server, the tile cache it serves
+/// from, the style builder both it and the offline manager need, and the offline
+/// manager itself.
+///
+/// These are one object because they are genuinely one thing: the loopback
+/// server repoints the basemap at the cache, so a tile only reaches the disk
+/// once, and the offline manager is prefetching into the same cache the map is
+/// already warming. Handing each view its own instance would mean the map and
+/// the download filled two different caches.
 @MainActor
-final class SlopeServerManager: ObservableObject {
+final class AppServices: ObservableObject {
+    let cache = VectorTileCache()
+    let styleBuilder: StyleBuilder
+    let offline: OfflinePackManager
+
     private var server: SlopeServer?
 
+    init() {
+        let config = AppConfig.terrainTileConfig
+        styleBuilder = StyleBuilder(config: config)
+        offline = OfflinePackManager(cache: cache, styleBuilder: styleBuilder)
+    }
+
+    /// Bring up the loopback server. Everything else is lazy.
     func start() {
         guard server == nil else { return }
         do {
             let server = try SlopeServer(
                 terrainStore: TerrainTileStore(config: AppConfig.terrainConfig),
-                styleBuilder: StyleBuilder(config: AppConfig.terrainTileConfig),
+                styleBuilder: styleBuilder,
+                tileCache: cache,
                 port: AppConfig.slopePort
             )
             server.start()
             self.server = server
         } catch {
-            print("Slope server failed to start: \(error)")
+            print("Loopback server failed to start: \(error)")
         }
     }
 

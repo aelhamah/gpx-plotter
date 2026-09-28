@@ -80,6 +80,17 @@ enum AppConfig {
 
     static let demoStyleURL = URL(string: "https://demotiles.maplibre.org/style.json")!
 
+    /// The basemap vector tiles the style points at, served by the loopback
+    /// caching proxy. Every basemap request therefore passes through disk, which
+    /// is what makes an offline map possible at all.
+    ///
+    /// The source name is in the path because the basemap's vector sources have
+    /// *different* upstreams — `outdoor`, `contours`, and `maptiler_planet` are
+    /// separate tile sets, and one shared template would serve the wrong tiles.
+    static func cachedTileURLTemplate(forSource source: String) -> String {
+        "http://127.0.0.1:\(slopePort)/tiles/\(source)/{z}/{x}/{y}.pbf"
+    }
+
     /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
     static let terrainPitch: CGFloat = 55
 
