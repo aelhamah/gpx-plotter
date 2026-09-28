@@ -72,7 +72,10 @@ struct RouteProfileChart: View {
                 RuleMark(x: .value("Scrubbed", scrubbedDistance))
                     .foregroundStyle(Color(hex: route.color).opacity(0.9))
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
-                    .annotation(position: .top, overflowResolution: .init(x: .fit, y: .disabled)) {
+                    // `y: .fit` so the readout flips below the rule near the top of
+                    // the profile instead of escaping the plot and landing on the
+                    // stats bar, which is what `y: .disabled` did.
+                    .annotation(position: .top, overflowResolution: .init(x: .fit, y: .fit)) {
                         readout(at: scrubbedDistance)
                     }
             }

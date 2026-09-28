@@ -363,10 +363,17 @@ makes the profile-trace interaction (§ below) possible.
 over the map rather than in a `VStack` beside it.
 
 The sheet has two detents: collapsed it is **just the stats row**, expanded it
-carries the stats, the profile, and the offline row. It reads its own height to
-decide which, because a sheet's content does not otherwise know which detent it
-is in — a fixed-height profile in the short detent is what clipped the stats row
-when this was first built.
+carries the stats, the profile, and the offline row. The expanded detent is
+`.height(330)` — the content's own height, not `.large`. A profile is for
+scrubbing, and scrubbing traces the position on the map, so the map has to stay
+visible while the sheet is up; `.large` covered nearly the whole display and left
+a sliver to look at. The content measures 290 pt, and the rest is the home
+indicator's inset.
+
+The panel knows which layout to draw from the **detent selection** rather than by
+measuring its own height. A sheet's content does not otherwise know which detent
+it is in, and inferring it from the geometry is what clipped the stats row when
+this was first built.
 
 Dragging the sheet away entirely leaves the map full-bleed with the stats, which
 is the state the map is really used in. `presentationBackgroundInteraction`
@@ -789,11 +796,9 @@ computed rather than tuned to hit the plan's number.
   later at all.
 - Seed the app with the existing demo tracks in `web/public/demos/`. Currently a
   hardcoded `DemoData.route` stands in; the document picker lands in M2.
-- **Collapsible panel mechanism** (§7). A two-state collapse is the simpler
-  thing to build and to reason about; a draggable sheet with detents is nicer to
-  use but adds gesture handling that has to coexist with the map's own pan and
-  pinch. Worth deciding before M2's layout work, because the map overlay
-  structure depends on it.
+- **Collapsible panel mechanism** (§7) — **settled.** A draggable sheet with two
+  detents, sized to the panel's content rather than to the screen, so the map
+  stays visible for the profile trace.
 - **What "fix the download" means** (§9) — **settled.** `MLNOfflineStorage` was
   dropped in favour of a tile cache every map request already passes through, so
   the button is enabled and the download works. What is left is the licensing

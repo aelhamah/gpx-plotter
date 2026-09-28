@@ -119,9 +119,17 @@ enum AppConfig {
     /// Height of the bottom sheet's short detent, which shows only the stats row.
     static let statsOnlyPanelHeight: CGFloat = 96
 
-    /// Below this sheet height the panel shows just the stats row, so the
-    /// profile and the offline row cannot overflow the short detent.
-    static let expandedPanelThreshold: CGFloat = 320
+    /// Height of the sheet's tall detent: the stats row, the profile, and the
+    /// offline row, and nothing more.
+    ///
+    /// Sized to the content rather than to the screen, on purpose. `.large` put
+    /// the sheet over almost the whole display, which is the opposite of what a
+    /// profile is for — scrubbing it traces the position on the map, so the map
+    /// has to stay visible while the sheet is up. The content measures 290 pt
+    /// (stats 60 + chart 170 + offline row 56), and the rest is the home
+    /// indicator's inset plus a little slack for the key-missing warning that
+    /// appears above the chart.
+    static let expandedPanelHeight: CGFloat = 330
 
     /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
     /// no Terrain-RGB source to point the terrain block at.
