@@ -8,8 +8,8 @@ struct GPXNavApp: App {
     @StateObject private var location = LocationController()
 
     init() {
-        // Must happen before the first MLNMapView is created or MLNOfflineStorage
-        // is used, since NSURLSession copies its configuration at init.
+        // Must happen before the first MLNMapView is created, since NSURLSession
+        // copies its configuration at init.
         MapNetworkIdentity.apply()
         print("[MapNetworkIdentity] allowlist this on the MapTiler key: \(MapNetworkIdentity.allowlistToken)")
         print("[MapNetworkIdentity] full User-Agent: \(MapNetworkIdentity.userAgent)")
@@ -32,7 +32,9 @@ final class WorkspaceStore: ObservableObject {
     @Published var waypoints: [Waypoint] = []
     @Published var selectedRouteId: Int? = nil
     @Published var unitSystem: UnitSystem = Units.defaultUnitSystem()
-    @Published var mapStyle: MapStyle = .outdoor
+    @Published var mapStyle: MapStyle = ProcessInfo.processInfo.arguments.contains("-satellite")
+        ? .satellite
+        : .outdoor
     @Published var showHillshade = false
     @Published var showSlope = false
     @Published var showTerrain3D = false
@@ -60,7 +62,9 @@ final class WorkspaceStore: ObservableObject {
         }
         // Terrain overlays normally start off and are toggled in Settings, but
         // `simctl launch` cannot tap, so `-showRelief` / `-showSlope` turn them
-        // on for the M0 terrain check.
+        // on for the M0 terrain check. `-satellite` does the same for the base
+        // layer, which is how the raster tileset's half of the offline cache gets
+        // exercised.
         let arguments = ProcessInfo.processInfo.arguments
         showHillshade = arguments.contains("-showRelief")
         showSlope = arguments.contains("-showSlope")
@@ -200,7 +204,7 @@ enum RoutePalette {
 /// the download filled two different caches.
 @MainActor
 final class AppServices: ObservableObject {
-    let cache = VectorTileCache()
+    let cache = TileCache()
     let styleBuilder: StyleBuilder
     let offline: OfflinePackManager
 
@@ -217,7 +221,6 @@ final class AppServices: ObservableObject {
         guard server == nil else { return }
         do {
             let server = try SlopeServer(
-                terrainStore: TerrainTileStore(config: AppConfig.terrainConfig),
                 styleBuilder: styleBuilder,
                 tileCache: cache,
                 port: AppConfig.slopePort

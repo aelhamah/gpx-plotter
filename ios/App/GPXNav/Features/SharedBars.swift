@@ -3,7 +3,7 @@ import RouteKit
 
 
 
-/// Offline corridor download, per the plan: route + 1 km buffer, z12–z16.
+/// Offline corridor download, per the plan: route + 1 km buffer, z12–z14.
 struct OfflinePackBar: View {
     let route: Route
     @ObservedObject var packs: OfflinePackManager
@@ -30,7 +30,13 @@ struct OfflinePackBar: View {
     private var subtitle: String {
         switch packs.state {
         case .complete:
-            return "Ready for airplane mode"
+            var text = "Ready for airplane mode"
+            if packs.skippedTileCount > 0 {
+                // Honest about the holes: the map fills them in from the network
+                // when there is one, which there is not in airplane mode.
+                text += " · \(packs.skippedTileCount) tile\(packs.skippedTileCount == 1 ? "" : "s") unavailable"
+            }
+            return text
         case .failed(let message):
             return message
         default:
@@ -72,6 +78,7 @@ struct OfflinePackBar: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(packs.estimatedTileCount == 0 || !AppConfig.canDownloadOffline)
+            .help("Fetches every tile this route's corridor covers, for every source the basemap needs")
         case .preparing, .downloading:
             ProgressView()
         }
@@ -81,9 +88,14 @@ struct OfflinePackBar: View {
 struct RouteStatsBar: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     let route: Route
-    /// When supplied, the figures come from the resampled profile the chart
-    /// draws, so the bar and the profile always agree.
-    var analysis: RouteAnalysis?
+    /// The figures come from the resampled profile the chart draws, so the bar
+    /// and the profile always agree.
+    ///
+    /// Observed, not just held: as a plain property the bar would keep showing
+    /// the figures from before the terrain fill published a new profile, which
+    /// is how the bar once reported 1,493 ft of ascent next to a chart whose
+    /// axis was 3,600 m.
+    @ObservedObject var analysis: RouteAnalysis
 
     var body: some View {
         let summary = RouteSummary(route: route, system: workspace.unitSystem, analysis: analysis)
@@ -111,6 +123,9 @@ struct RouteStatsBar: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var services: AppServices
+
+    private var packs: OfflinePackManager { services.offline }
 
     var body: some View {
         NavigationStack {
@@ -159,13 +174,27 @@ struct SettingsView: View {
                     LabeledContent("Basemap", value: AppConfig.basemapStatus)
                 }
 
-                Section("Data") {
+                Section {
+                    LabeledContent("Offline tiles") {
+                        Text("\(packs.cachedTileCount) · \(packs.cachedSizeDescription)")
+                            .foregroundStyle(.secondary)
+                    }
                     Button("Clear All Routes", role: .destructive) {
                         workspace.clearAll()
                     }
+                    if packs.cachedTileCount > 0 {
+                        Button("Clear Offline Maps", role: .destructive) {
+                            packs.removeCurrentPack()
+                        }
+                    }
+                } header: {
+                    Text("Data")
+                } footer: {
+                    Text("Tiles are cached as you look at the map, and a corridor download fetches the rest for a route. The cache grows until it is cleared here.")
                 }
             }
             .navigationTitle("Settings")
+            .task { await packs.refreshCacheFigures() }
         }
     }
 }

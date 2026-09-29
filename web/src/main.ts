@@ -3,7 +3,7 @@ import maplibregl, { type MapMouseEvent, type Marker } from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
-import { colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, type UnitSystem } from './geo';
+import { blendTerrainElevations, colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, profileNeedsTerrain, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, terrainSamplesNeeded, type UnitSystem } from './geo';
 import { geocode, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
 import { PERMISSION_DENIED, locateButtonLabel, locateErrorMessage, locateUnavailableMessage, locationGeoJSON, zoomForAccuracy, type LocatePermission, type LocateUnavailable, type LocationFix } from './locate';
@@ -359,15 +359,26 @@ async function refreshRouteStats() {
   }
   const token = ++statsToken;
   setStatsLoading(true);
-  const profile = routeProfilePoints(route.points, STATS_PROFILE_STEP_METERS);
-  const jobs: { point: RoutePoint; promise: Promise<number | undefined> }[] = [];
-  for (const point of profile) {
-    if (!Number.isFinite(point.elevation)) jobs.push({ point, promise: elevationAt(point.lon, point.lat) });
-  }
-  const elevations = await Promise.all(jobs.map((j) => j.promise));
-  for (let i = 0; i < jobs.length; i++) {
-    const elevation = elevations[i];
-    if (elevation !== undefined) jobs[i].point.elevation = elevation;
+  const resampled = routeProfilePoints(route.points, STATS_PROFILE_STEP_METERS);
+  // The DEM supplies the ground between the route's vertices and the track's own
+  // elevations anchor it, so the two cannot sawtooth: using both raw put a dip
+  // at every vertex. Only a track with no elevation at all is left to the DEM on
+  // its own, which is the case it is good at.
+  const needsTerrain = profileNeedsTerrain(resampled);
+  const wanted = needsTerrain ? resampled.map((_, index) => index) : terrainSamplesNeeded(resampled);
+  const jobs: { index: number; promise: Promise<number | undefined> }[] = wanted.map((index) => ({
+    index,
+    promise: elevationAt(resampled[index].lon, resampled[index].lat),
+  }));
+  const elevations = await Promise.all(jobs.map((job) => job.promise));
+  const terrain: (number | undefined)[] = new Array(resampled.length);
+  for (let i = 0; i < jobs.length; i++) terrain[jobs[i].index] = elevations[i];
+  const profile = needsTerrain ? resampled : blendTerrainElevations(terrain, resampled);
+  if (needsTerrain) {
+    for (let i = 0; i < jobs.length; i++) {
+      const elevation = elevations[i];
+      if (elevation !== undefined) resampled[jobs[i].index].elevation = elevation;
+    }
   }
   if (token !== statsToken) return;
   setStatsLoading(false);

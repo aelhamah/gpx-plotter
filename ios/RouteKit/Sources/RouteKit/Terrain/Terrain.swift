@@ -187,12 +187,16 @@ public actor TerrainTileStore {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw TerrainError.tileFailed(key: "\(z)/\(x)/\(y)", status: http.statusCode)
         }
-        return try decodeTileData(data)
+        return try Self.decodeTileData(data)
     }
 
     /// Decode PNG/WebP image data to elevation grid.
     /// On macOS/iOS uses ImageIO; on Linux falls back to a simplified decoder.
-    private func decodeTileData(_ data: Data) throws -> TerrainTile {
+    ///
+    /// Static so the loopback server can decode a DEM tile it read out of the
+    /// tile cache, rather than going back to the network for elevation the map
+    /// already has on disk.
+    public static func decodeTileData(_ data: Data) throws -> TerrainTile {
         #if canImport(ImageIO) && canImport(CoreGraphics)
         let imageSource = CGImageSourceCreateWithData(data as CFData, nil)!
         let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil)!
@@ -221,6 +225,11 @@ public actor TerrainTileStore {
         #endif
     }
 
+    /// Decode PNG/WebP image data to elevation grid.
+    /// On macOS/iOS uses ImageIO; on Linux falls back to a simplified decoder.
+    private func decodeTileData(_ data: Data) throws -> TerrainTile {
+        try Self.decodeTileData(data)
+    }
     /// Sample elevation at lng/lat from the DEM.
     public func elevationAt(lng: Double, lat: Double) async throws -> Double? {
         let z = DEMMaxZoom

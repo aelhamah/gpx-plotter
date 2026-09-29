@@ -16,6 +16,14 @@ struct ViewerScreen: View {
     @State private var isPanelPresented = true
     @State private var isSearching = false
     @State private var scrubbedDistance: Double?
+    /// Which detent the sheet is at. Bound rather than fixed so `-expandedPanel`
+    /// can open it, and so the panel knows which of its two layouts to show
+    /// without measuring its own height: `simctl` cannot drag a sheet, and the
+    /// profile chart is only in the expanded one.
+    @State private var panelDetent: PresentationDetent = ProcessInfo.processInfo
+        .arguments.contains("-expandedPanel")
+        ? .height(AppConfig.expandedPanelHeight)
+        : .height(AppConfig.statsOnlyPanelHeight)
 
     let route: Route
 
@@ -51,7 +59,10 @@ struct ViewerScreen: View {
             }
             .sheet(isPresented: $isPanelPresented) {
                 panel
-                    .presentationDetents([.height(AppConfig.statsOnlyPanelHeight), .large])
+                    .presentationDetents(
+                        [.height(AppConfig.statsOnlyPanelHeight), .height(AppConfig.expandedPanelHeight)],
+                        selection: $panelDetent
+                    )
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(20)
@@ -62,7 +73,8 @@ struct ViewerScreen: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .task {
                 workspace.selectedRouteId = route.id
-                packs.estimate(for: route)
+                await packs.estimate(for: route)
+                await packs.refreshCacheFigures()
                 analysis.fillMissingElevations()
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                     isSearching = true
@@ -90,44 +102,47 @@ struct ViewerScreen: View {
 
     /// The sheet's contents, which change with the detent.
     ///
-    /// Collapsed it is just the stats row — the "just the stats" state. The
-    /// height is read rather than assumed, because a sheet's content does not
-    /// otherwise know which detent it is in, and letting a fixed-height profile
-    /// sit in the short detent is what clipped the stats before.
+    /// Collapsed it is just the stats row. Which one is showing is read from the
+    /// detent selection rather than measured from this view's own height: a
+    /// sheet's content does not otherwise know which detent it is in, and
+    /// letting a fixed-height profile sit in the short detent is what clipped
+    /// the stats row before.
     private var panel: some View {
-        GeometryReader { proxy in
-            let isCompact = proxy.size.height < AppConfig.expandedPanelThreshold
-            VStack(spacing: 0) {
-                RouteStatsBar(route: route, analysis: analysis)
+        VStack(spacing: 0) {
+            RouteStatsBar(route: route, analysis: analysis)
 
-                if !isCompact {
-                    if let problem = AppConfig.keyProblemDescription {
-                        Label {
-                            Text(problem).font(.caption)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                        }
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.bottom, 6)
+            if !isPanelCompact {
+                if let problem = AppConfig.keyProblemDescription {
+                    Label {
+                        Text(problem).font(.caption)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
                     }
-
-                    RouteProfileChart(
-                        analysis: analysis,
-                        route: route,
-                        system: workspace.unitSystem,
-                        scrubbedDistance: $scrubbedDistance
-                    )
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.bottom, 6)
-
-                    OfflinePackBar(route: route, packs: packs)
                 }
+
+                RouteProfileChart(
+                    analysis: analysis,
+                    route: route,
+                    system: workspace.unitSystem,
+                    scrubbedDistance: $scrubbedDistance
+                )
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+
+                OfflinePackBar(route: route, packs: packs)
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-            .background(.bar)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(.bar)
+    }
+
+    /// Whether the sheet is at its short detent.
+    private var isPanelCompact: Bool {
+        panelDetent == .height(AppConfig.statsOnlyPanelHeight)
     }
 
     @ViewBuilder

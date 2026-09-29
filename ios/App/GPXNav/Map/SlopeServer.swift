@@ -5,32 +5,30 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Loopback HTTP server for the two things MapLibre Native cannot be given
+/// Loopback HTTP server for the three things MapLibre Native cannot be given
 /// directly.
 ///
-/// - `GET /slope/{z}/{x}/{y}.png` — slope rasters. Native has no equivalent of
-///   the web app's `addProtocol('slope', …)`: `MLNMapViewDelegate`'s tile
-///   callback is observational only, so it cannot supply data. Serving the same
-///   PNGs over loopback mirrors `addProtocol` almost one-to-one and works inside
-///   offline packs too.
+/// - `GET /tiles/{source}/{z}/{x}/{y}.{ext}` — basemap and elevation tiles.
+///   Native has no equivalent of the web app's `addProtocol('slope', …)`:
+///   `MLNMapViewDelegate`'s tile callback is observational only, so it cannot
+///   supply data. The style is repointed here instead, which is what puts every
+///   tile on disk — see `TileCache` and docs/ios-plan.md §9.
+/// - `GET /slope/{z}/{x}/{y}.png` — slope rasters, from the same cached DEM.
 /// - `GET /style.json?style=…&terrain=…` — MapTiler's style with the 3D terrain
 ///   block injected, because Native has no `setTerrain` equivalent either.
 ///
-/// Both ride the one listener rather than opening a second port.
+/// All three ride the one listener rather than opening a second port.
 final class SlopeServer: @unchecked Sendable {
     private let listener: NWListener
-    private let terrainStore: TerrainTileStore
     private let styleBuilder: StyleBuilder
-    private let tileCache: VectorTileCache
+    private let tileCache: TileCache
     private let port: NWEndpoint.Port
 
     init(
-        terrainStore: TerrainTileStore,
         styleBuilder: StyleBuilder,
-        tileCache: VectorTileCache,
+        tileCache: TileCache,
         port: UInt16
     ) throws {
-        self.terrainStore = terrainStore
         self.styleBuilder = styleBuilder
         self.tileCache = tileCache
         self.port = NWEndpoint.Port(rawValue: port) ?? 8080
@@ -60,8 +58,8 @@ final class SlopeServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
-            if let (source, key) = Self.parseTileRequest(request) {
-                Task { await self.serveVectorTile(source: source, key: key, to: connection) }
+            if let key = Self.parseTileRequest(request) {
+                Task { await self.serveTile(key, to: connection) }
                 return
             }
             if let query = Self.parseStyleRequest(request) {
@@ -76,13 +74,18 @@ final class SlopeServer: @unchecked Sendable {
         }
     }
 
-    /// `GET /slope/{z}/{x}/{y}.png` → tile coordinates.
-    static func parse(_ request: String) -> (z: Int, x: Int, y: Int)? {
+    /// The request target, e.g. `/tiles/outdoor/12/656/1583.pbf`, or nil when
+    /// this is not a GET.
+    static func requestPath(_ request: String) -> String? {
         guard let line = request.split(separator: "\r\n").first else { return nil }
         let parts = line.split(separator: " ")
         guard parts.count >= 2, parts[0] == "GET" else { return nil }
+        return String(parts[1])
+    }
 
-        let path = String(parts[1])
+    /// `GET /slope/{z}/{x}/{y}.png` → tile coordinates.
+    static func parse(_ request: String) -> (z: Int, x: Int, y: Int)? {
+        guard let path = requestPath(request) else { return nil }
         let pieces = path.split(separator: "/")
         guard pieces.count == 4, pieces[0] == "slope" else { return nil }
         guard pieces[3].hasSuffix(".png"),
@@ -92,60 +95,50 @@ final class SlopeServer: @unchecked Sendable {
         return (z, x, y)
     }
 
-    /// `GET /tiles/{z}/{x}/{y}.pbf` → a basemap vector tile.
-    static func parseTileRequest(_ request: String) -> (source: String, key: VectorTileCache.Key)? {
-        guard let line = request.split(separator: "\r\n").first else { return nil }
-        let parts = line.split(separator: " ")
-        guard parts.count >= 2, parts[0] == "GET" else { return nil }
-
-        // /tiles/{source}/{z}/{x}/{y}.pbf — the source is in the path because
-        // the basemap's vector sources are different tile sets.
-        let pieces = String(parts[1]).split(separator: "/")
-        guard pieces.count == 5, pieces[0] == "tiles" else { return nil }
-        let name = String(pieces[4])
-        guard name.hasSuffix(".pbf"),
-              let z = Int(pieces[2]), let x = Int(pieces[3]), let y = Int(name.dropLast(4))
-        else { return nil }
-        return (String(pieces[1]), VectorTileCache.Key(z: z, x: x, y: y))
+    /// `GET /tiles/{source}/{z}/{x}/{y}.{ext}` → the cache key, whose source
+    /// name and format extension are what keep the style's tile sets apart.
+    static func parseTileRequest(_ request: String) -> TileCacheKey? {
+        guard let path = requestPath(request) else { return nil }
+        return TileCacheKey.parse(path: path)
     }
 
-    /// Serve a vector tile from disk, fetching through to MapTiler on a miss.
+    /// Serve a tile from disk, fetching through to MapTiler on a miss.
     ///
-    /// This is the seam that makes offline work at all: the style's basemap
-    /// sources point here, so a cached tile never leaves the device, and looking
-    /// at an area warms the cache as a side effect.
-    private func serveVectorTile(
-        source: String,
-        key: VectorTileCache.Key,
-        to connection: NWConnection
-    ) async {
-        guard let template = await styleBuilder.upstreamTemplate(forSource: source) else {
+    /// This is the seam that makes offline work at all: the style's basemap and
+    /// elevation sources point here, so a cached tile never leaves the device,
+    /// and looking at an area warms the cache as a side effect.
+    private func serveTile(_ key: TileCacheKey, to connection: NWConnection) async {
+        guard let template = await styleBuilder.upstreamTemplate(forSource: key.source) else {
             respond(to: connection, status: 404, type: "text/plain", body: Data("no basemap".utf8))
             return
         }
-        let path = template
-            .replacingOccurrences(of: "{z}", with: "\(key.z)")
-            .replacingOccurrences(of: "{x}", with: "\(key.x)")
-            .replacingOccurrences(of: "{y}", with: "\(key.y)")
-        guard let upstream = URL(string: path) else {
+        guard let upstream = key.upstreamURL(template: template) else {
             respond(to: connection, status: 404, type: "text/plain", body: Data("bad upstream".utf8))
             return
         }
         do {
             let data = try await tileCache.data(for: key) { _ in
-                var request = URLRequest(url: upstream)
-                request.setValue(MapNetworkIdentity.userAgent, forHTTPHeaderField: "User-Agent")
-                request.setValue(MapNetworkIdentity.versionHeader, forHTTPHeaderField: "X-GPXNav-Version")
-                let (data, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    throw VectorTileCache.CacheError.upstreamFailed(http.statusCode)
-                }
-                return data
+                try await Self.fetch(upstream)
             }
-            respond(to: connection, status: 200, type: "application/x-protobuf", body: data)
+            respond(to: connection, status: 200, type: key.format.contentType, body: data)
         } catch {
             respond(to: connection, status: 502, type: "text/plain", body: Data("\(error)".utf8))
         }
+    }
+
+    /// A tile request with MapTiler's allowlisted identity applied.
+    ///
+    /// `MapNetworkIdentity.apply()` only reaches the session MapLibre created, so
+    /// requests the app makes itself have to set the headers per request.
+    static func fetch(_ url: URL) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.setValue(MapNetworkIdentity.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(MapNetworkIdentity.versionHeader, forHTTPHeaderField: "X-GPXNav-Version")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw TileCache.CacheError.upstreamFailed(http.statusCode)
+        }
+        return data
     }
 
     /// `GET /style.json?style=outdoor&terrain=1` → the patched style JSON.
@@ -177,12 +170,30 @@ final class SlopeServer: @unchecked Sendable {
 
     private func serve(z: Int, x: Int, y: Int, to connection: NWConnection) async {
         do {
-            let tile = try await terrainStore.fetchTile(z: z, x: x, y: y)
+            // Decode straight from the cached DEM tile rather than through
+            // `terrainStore`, so slope shading works from the same bytes hillshade
+            // and 3D terrain read — and therefore offline, once the corridor
+            // download has fetched the DEM.
+            let key = TileCacheKey(source: AppConfig.demSource, z: z, x: x, y: y, format: .webp)
+            let data = try await demTileData(key)
+            let tile = try TerrainTileStore.decodeTileData(data)
             let png = SlopeRaster.png(for: tile, z: z, x: x, y: y)
             respond(to: connection, status: 200, type: "image/png", body: png)
         } catch {
             respond(to: connection, status: 502, type: "text/plain", body: Data("\(error)".utf8))
         }
+    }
+
+    /// The DEM tile's bytes, from the cache, fetching from MapTiler on a miss.
+    private func demTileData(_ key: TileCacheKey) async throws -> Data {
+        if let cached = await tileCache.cached(key) { return cached }
+        guard let template = await styleBuilder.upstreamTemplate(forSource: key.source) else {
+            throw TerrainError.missingConfiguration
+        }
+        guard let upstream = key.upstreamURL(template: template) else {
+            throw URLError(.badURL)
+        }
+        return try await tileCache.data(for: key) { _ in try await Self.fetch(upstream) }
     }
 
     private func respond(to connection: NWConnection, status: Int, type: String, body: Data) {

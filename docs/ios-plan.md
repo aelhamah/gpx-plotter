@@ -4,10 +4,12 @@ A native iPhone/iPad app for viewing and navigating the same GPX routes as the
 web app in [`web/`](../web), with offline satellite imagery you control, Live
 Activity guidance, and off-course alerts.
 
-**Status:** M1 Core is complete and green (RouteKit, 90 XCTest cases, `swift test`
-passing). M0 Spike is **code-complete and partially verified** — see
-[§9.1](#9-milestones) for exactly what is proven and what is still blocked on a
-MapTiler key that permits native requests.
+**Status:** M1 Core is complete and green (RouteKit, 139 XCTest cases, `swift test`
+passing). Offline is implemented on our own tile cache rather than MapLibre's
+pack API, and the corridor download works — see [§9](#9-offline) and the M5 row
+in [§10.1](#101-actual-state). The M0 spike is code-complete and partially
+verified; the one thing no simulator can settle is a real airplane-mode run on a
+device.
 
 ---
 
@@ -306,13 +308,19 @@ The web app generates slope rasters through a custom protocol
 equivalent** — `MLNMapViewDelegate`'s tile callback is observational only, it
 cannot supply data. Two viable designs:
 
-- **Loopback HTTP (preferred).** An `NWListener` on `127.0.0.1`; the style points
-  the `slope` raster source at `http://127.0.0.1:<port>/slope/{z}/{x}/{y}.png`.
-  Mirrors `addProtocol` almost one-to-one and works both online and inside
-  offline packs. Needs `NSAllowsLocalNetworking`.
+- **Loopback HTTP (preferred, and what shipped).** An `NWListener` on
+  `127.0.0.1`; the style points the `slope` raster source at
+  `http://127.0.0.1:<port>/slope/{z}/{x}/{y}.png`. Mirrors `addProtocol` almost
+  one-to-one. Needs `NSAllowsLocalNetworking`.
 - **`MLNOfflineStorage.preloadData(_:for:…)`.** Compute the PNG and insert it
   under the exact URL the style requests. Clean and fully offline, but the app
   has to drive on-demand generation.
+
+The loopback listener turned out to be worth more than slope shading. Because
+the app is already assembling its own style, it repoints **every** tile source —
+basemap, labels, contours, satellite rasters, and the DEM — at the same listener,
+which is what makes offline work at all (§9). One mechanism serves slope rasters,
+the style, the tile cache, and the offline download.
 
 Also unverified: the style spec's support matrix marks `raster-dem` **custom**
 encodings as unsupported on Native iOS ([#2783]). MapTiler `terrain-rgb-v2` uses
@@ -355,10 +363,17 @@ makes the profile-trace interaction (§ below) possible.
 over the map rather than in a `VStack` beside it.
 
 The sheet has two detents: collapsed it is **just the stats row**, expanded it
-carries the stats, the profile, and the offline row. It reads its own height to
-decide which, because a sheet's content does not otherwise know which detent it
-is in — a fixed-height profile in the short detent is what clipped the stats row
-when this was first built.
+carries the stats, the profile, and the offline row. The expanded detent is
+`.height(330)` — the content's own height, not `.large`. A profile is for
+scrubbing, and scrubbing traces the position on the map, so the map has to stay
+visible while the sheet is up; `.large` covered nearly the whole display and left
+a sliver to look at. The content measures 290 pt, and the rest is the home
+indicator's inset.
+
+The panel knows which layout to draw from the **detent selection** rather than by
+measuring its own height. A sheet's content does not otherwise know which detent
+it is in, and inferring it from the geometry is what clipped the stats row when
+this was first built.
 
 Dragging the sheet away entirely leaves the map full-bleed with the stats, which
 is the state the map is really used in. `presentationBackgroundInteraction`
@@ -384,6 +399,15 @@ usable once the profile is an overlay rather than a sibling of the map.
 - **The profile overlapped its axes.** The chart filled its whole frame, so the
   x-axis labels and the area fill collided with the bottom edge. The plot now has
   its own padding inside the frame.
+- **The profile's area fill painted a slab over the rest of the panel.** An
+  `AreaMark` with a single `y` fills down to *zero*, and zero is far below this
+  chart's y domain — a Colorado route sits around 3,000 m — so the fill was
+  drawn hundreds of points under the plot area and was not clipped, covering the
+  offline row and everything below it in the route's colour. The baseline is now
+  stated explicitly as the domain's floor, which is what the fill was always
+  meant to do. Worth knowing as a class of bug: a y domain that excludes the
+  implicit baseline is enough to trigger it, and the mark renders correctly
+  inside the chart the whole time.
 - **One location button, and it points north.** There were two: a disabled
   *Navigate* toolbar item and a floating locate button. The toolbar one is gone
   — Navigate is a tab now. Tapping the remaining button recentres **and** rotates
@@ -461,19 +485,20 @@ Background location via `CLBackgroundActivitySession` (iOS 17+),
 
 ## 9. Offline
 
-**Deferred: `MLNOfflineStorage` packs do not work on MapLibre Native 6.31.0.**
-The corridor geometry, tile selection, size estimates, and progress state
-machine are all implemented and tested, but the pack never downloads anything,
-so the feature is disabled in the UI rather than left half-working. What was
-measured:
+**Implemented, on our own tile cache rather than `MLNOfflineStorage`.** The
+corridor download works: it fetches every tile the route's corridor crosses, for
+every tile set the loaded style needs, and the map draws from disk with the
+network gone. What follows is the evidence for dropping MapLibre's pack API, the
+mechanism that replaced it, and the one thing still outstanding.
 
-- `addPack(for:withContext:)` succeeds — the completion handler returns
-  `error=nil` and the pack appears in `storage.packs`.
-- The pack then never leaves `MLNOfflinePackStateInactive`, and
-  `countOfResourcesExpected` and `maximumResourcesExpected` both stay `0`.
-- No TileJSON request and no tile request is ever made by the offline path.
+### Why not `MLNOfflineStorage`
 
-Causes ruled out by changing one variable at a time:
+Packs do not work on MapLibre Native 6.31.0. `addPack(for:withContext:)`
+succeeds — the completion handler returns `error=nil` and the pack appears in
+`storage.packs` — and then the pack never leaves `MLNOfflinePackStateInactive`,
+`countOfResourcesExpected` and `maximumResourcesExpected` both stay `0`, and no
+TileJSON or tile request is ever made. Causes ruled out by changing one variable
+at a time:
 
 | Style | Region | Pack state | Expected resources |
 | --- | --- | --- | --- |
@@ -485,38 +510,71 @@ Causes ruled out by changing one variable at a time:
 The region is not the problem: the corridor ring is a valid 50-point polygon
 over the right bounding box. It is not the zoom range either — z0–5 and z12–16
 behave identically. So it is neither the TileJSON-only style, nor the region
-shape, nor the requested zooms. Note also that `countOfResourcesExpected` is
-documented as a *lower bound* that grows as a download progresses, so a `0`
-there is a statement that MapLibre enumerated nothing at all.
+shape, nor the requested zooms. `countOfResourcesExpected` is documented as a
+*lower bound* that grows as a download progresses, so a `0` there is a statement
+that MapLibre enumerated nothing at all.
 
-Options for M5, in the order worth trying:
+Retry-on-a-newer-release was the cheap first option and was not taken: the app
+already had to build its own style to inject the 3D terrain block, and once it
+does, a locally-built style and a hand-rolled tile cache are the same amount of
+machinery. The tile-fetching half is the part `MLNOfflineStorage` was going to
+do for us.
 
-1. Retry on a newer MapLibre Native release; this may be a fixed bug.
-2. Drop `MLNOfflineStorage` and manage the corridor cache directly. RouteKit
-   already produces the tile list and byte estimate that the pack would have
-   used, so the remaining work is fetching those tiles and serving them to the
-   map.
-3. Keep packs but drop the map's dependency on MapLibre's ambient cache by
-   serving a locally-built style, as the loopback slope server already does.
+### The mechanism: every tile passes through disk
 
-**This is now a blocking decision, not a someday item.** The Download control is
-disabled with this reason on screen, and the feedback from using the app was
-"fix the ability to download" — so one of the three has to be chosen before the
-control can be enabled again. Option 1 is the cheapest and should be tried
-first; if it fails, option 2 is the honest answer, because it stops depending on
-a MapLibre feature that does not work.
+`StyleBuilder` resolves each source's TileJSON, learns MapTiler's own
+`{z}/{x}/{y}` template, and repoints the style at the loopback server:
 
-Note that option 2 interacts with the style builder already in flight: if the
-app is assembling its own style anyway, a locally-built style and a hand-rolled
-tile cache are the same amount of machinery, and the tile-fetching half is the
-part `MLNOfflineStorage` was going to do for us.
+```
+/tiles/{source}/{z}/{x}/{y}.{ext}   →  TileCache  →  MapTiler on a miss
+```
 
-The rest of the original design still holds: offer a corridor download on
-import, the route polyline plus roughly a 1 km buffer.
+Three things follow from that, and all three are why offline works:
+
+- **The cache is the offline store.** A tile on disk *is* a tile the map can
+  draw, because the style asks the loopback for it and the loopback answers from
+  disk without touching the network. There is no second mechanism and no
+  "activate pack" step.
+- **Browsing warms the cache.** Every tile the map displays passes through it on
+  the way in, so an area you have already looked at is already offline. The
+  corridor download is a bulk prefetch of the rest, not the only way to get
+  anything offline.
+- **The DEM goes through it too**, as `raster-dem` source `terrain`, so relief,
+  3D terrain, and the slope generator all read the same cached elevation. Slope
+  rasters are decoded from those bytes rather than re-fetched, which is why they
+  work offline as well.
+
+**The source name is part of the tile's identity, and it has to be.** This was a
+real bug, not a hypothetical. A style's sources are different payloads at the
+same `z/x/y` — `outdoor` is the basemap geometry, `contours` the elevation lines,
+`maptiler_planet` the labels, `terrain` the DEM — so a cache keyed by
+coordinates alone answers a `contours` request with `outdoor`'s bytes, and a
+corridor prefetch that believed it had fetched all four sources had fetched one
+and stored it four times over. `TileCacheKey` in RouteKit owns the identity
+(source, coordinates, format) and everything derived from it, with the round trip
+through the loopback path under test.
+
+Raster sources are cached too, not only vector ones: the satellite basemap is a
+`jpg` tileset, and an offline map holding the labels but not the imagery under
+them would be a map of nowhere. The list of sources to fetch is read from the
+loaded style rather than hardcoded, so switching basemaps changes what a
+download covers.
+
+**The download is not restricted to the basemap either.** Elevation is fetched
+across z12–z14, not only at z14, because MapLibre asks a `raster-dem` source
+for a tile at the *camera's* zoom — a corridor that covered the basemap at three
+zooms but elevation at one would lose its hillshade and 3D terrain at the other
+two.
+
+### The rest of the design
+
+Offer a corridor download on import: the route polyline plus roughly a 1 km
+buffer.
 
 **The zoom range is z12–z14, not z12–z16.** MapTiler's `outdoor-v2` style tops
-out at z14 (`outdoor` z5–14, `maptiler_planet` z0–15), so z15–z16 would only
-ever produce empty tiles. `AppConfig.offlineZoomRange` is capped accordingly.
+out at z14 (`outdoor` z5–14, `contours` z9–14), so z15–z16 would only ever
+produce empty tiles. `AppConfig.offlineZoomRange` is capped accordingly. The
+satellite raster goes to z22, so nothing caps it, but nothing needs it to.
 
 The plan originally said to test each tile centre against distance-to-route. As
 written that selects **nothing at low zoom**, because a z12 tile is ~9.8 km across
@@ -525,13 +583,31 @@ implemented rule keeps the intent and adds the tile's own half-diagonal to the
 tolerance, which keeps every tile the corridor actually crosses and still drops
 the inside-corner tiles a bounding rectangle would sweep in. See §9.1.
 
-Ground tile size is `40075016.686 / 2^z` m, so a 10 km route works out to
-roughly 100–200 tiles / 8–15 MB. The in-app estimate for the 3.4 mi Maroon
-Bells loop is 136 tiles / ~4.6 MB at z12–z14.
+### The size estimate is measured, and the plan's figure was wrong
 
-**Before M5:** confirm MapTiler's terms permit offline tile caching in a
-distributed app. That is a licensing question, not an engineering one, and it
-can invalidate the approach.
+The plan says "roughly 100–200 tiles / 8–15 MB" for a 10 km route. The tile count
+is right; the byte figure came from assuming satellite rasters, and it does not
+describe what is actually downloaded. Measured over the 3.4 mi Maroon Bells loop
+at z12–z14, 68 tiles, **4.4 MB**, and the four tile sets are nowhere near the
+same size:
+
+| Source | z12 | z13 | z14 |
+| --- | --- | --- | --- |
+| `outdoor` (pbf) | 4.6 KB | 2.5 KB | 1.2 KB |
+| `maptiler_planet` (pbf, labels) | 9.2 KB | 10.6 KB | 7.2 KB |
+| `contours` (pbf) | 123 KB | 182 KB | 74 KB |
+| `terrain` (webp DEM) | 210 KB | 138 KB | 86 KB |
+| `satellite` (jpg, satellite basemap only) | 65 KB | 72 KB | 74 KB |
+
+So the estimate is **per source**, from `TileSourceSize`, and it is the reason
+the earlier flat per-format table was wrong in both directions: it promised
+5× more than the satellite tiles need and 5× less than the DEM does. Contour
+lines dominate an outdoor download, which is not obvious until it is measured.
+
+**Still outstanding:** confirm MapTiler's terms permit offline tile caching in a
+distributed app. That is a licensing question, not an engineering one, and it can
+invalidate the approach. It is the one item from this section that code cannot
+settle.
 
 ## 10. Milestones
 
@@ -546,14 +622,14 @@ can invalidate the approach.
 
 #### 10.1 Actual state
 
-**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **90 tests, 0
+**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **139 tests, 0
 failures.** The gate is "import a GPX and see real numbers", and that now works
 end to end: import through the document picker, the numbers come from the same
 RouteKit code the web app uses, and they survive a relaunch.
 
 | Gate item | State |
 | --- | --- |
-| `RouteKit` + tests | **Done.** 90 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). |
+| `RouteKit` + tests | **Done.** 139 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
 | GPX import | **Done.** `fileImporter` filtered to `.gpx`, security-scoped read, `RouteKit.parseGPX`. Verified with the repo's own demos: *The Enchantments Traverse* (7,153 pts → 18.49 mi, 8,080 ft ascent, 7,838 ft high) and *Afternoon Hike* (13,360 pts → 4.42 mi, 14,079 ft high). Route ids are reassigned on import and colored from the web app's `routeColorForId`. |
 | Stats | **Done.** Distance/ascent/descent/high from `RouteKit`, formatted through `Units`, switching with the unit picker. A GPX with no `<ele>` shows `—` rather than zeros. |
 | Swift Charts profile | **Done.** Elevation against distance along, with the y-domain padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. |
@@ -582,6 +658,24 @@ Three defects found while wiring the UI, all fixed:
   dots and statistics that only saw those dozen points. The gaps are now filled
   from MapTiler's Terrain-RGB tiles, exactly as the web does, and vertex
   elevations are never overwritten.
+- **Filling those gaps from the terrain model put a dip in the profile at every
+  vertex.** The DEM and the GPX are two different measurements of the same
+  hillside; measured at the demo route's own coordinates they differ by up to
+  **352 m**, so a series that used the track's elevation at a vertex and the
+  terrain 30 m either side of it sawtoothed, and ascent read 2,703 m for a
+  450 m climb. Interpolating between the track's own elevations removes the
+  sawtooth but throws away the ground between the vertices, which on a sparse
+  route is most of the profile. `ElevationFill.blended` keeps both: the terrain
+  supplies the detail and each vertex says how far above or below it the track
+  put the route, so the correction is carried across the gap. Two sources cannot
+  sawtooth when one is expressed as an offset from the other. Ascent for the demo
+  is now 696 m — more than the 455 m of a straight line between the vertices,
+  because the ground between them is not straight.
+- **The stats bar did not observe the analysis.** `RouteStatsBar` held its
+  `RouteAnalysis` as a plain property, so publishing a new profile re-rendered
+  the chart and left the bar showing the figures from before it: 1,493 ft of
+  ascent next to a chart whose axis was the terrain's 3,600 m. The "one profile,
+  three views" rule was true of the code and false on screen.
 
 Three porting bugs worth recording, all found by the tests rather than review:
 
@@ -606,7 +700,7 @@ Three porting bugs worth recording, all found by the tests rather than review:
 | Loopback slope server | **Done end to end.** Serves a real 512×512 RGBA PNG derived from MapTiler Terrain-RGB (`GET http://127.0.0.1:8080/slope/12/656/1583.png` → 200, ~27 KB), and the layer is visible on the map. |
 | MapTiler style renders | **Done.** The key allows both web origins and the native `User-Agent` on the same key (§5.1), and the style, satellite style, Terrain-RGB tile, and geocoding all return 200. |
 | `raster-dem` Terrain-RGB | **Done.** `MLNRasterDEMSource` over MapTiler Terrain-RGB renders hillshaded relief. |
-| Offline pack survives airplane mode | **Not achievable as designed.** `addPack` succeeds but MapLibre never enumerates resources, so no tile is ever fetched. Deferred; evidence and options in §9. Airplane-mode validation would additionally need a device, since `simctl` has no connectivity toggle. |
+| Offline pack survives airplane mode | **Superseded.** `addPack` succeeds but MapLibre never enumerates resources, so no tile is ever fetched through it. Offline now runs on our own tile cache instead — see the M5 row below and §9. Airplane-mode validation would additionally need a device, since `simctl` has no connectivity toggle. |
 
 M0 defects the simulator surfaced, all fixed:
 
@@ -660,6 +754,19 @@ Terrain-RGB tiles, while that figure appears to assume satellite rasters, which
 are much larger at high zoom. The in-app estimate is therefore reported as
 computed rather than tuned to hit the plan's number.
 
+**M5 Offline — the mechanism works; the gate is a device.**
+
+| Gate item | State |
+| --- | --- |
+| Every tile passes through disk | **Done.** `StyleBuilder` resolves each TileJSON, learns MapTiler's template, and repoints the style at `/tiles/{source}/{z}/{x}/{y}.{ext}` on the loopback. A hit is answered from the cache and never reaches the network; a miss fetches and stores. |
+| Corridor prefetch | **Done.** Downloads the route's corridor for **every source the loaded style declares**, z12–z14, four requests in flight. Verified on the simulator: 68 tiles / 4.4 MB for the Maroon Bells loop, with `outdoor`, `contours`, `maptiler_planet`, and `terrain` each present as their own files. |
+| Satellite basemap offline | **Done.** Raster sources go through the same seam, so `satellite`'s jpg tiles are cached alongside the labels. Verified with `-satellite`. |
+| Per-source tile identity | **Fixed.** The cache was keyed by `z/x/y` alone, so all four sources collided: `contours` was answered with `outdoor`'s bytes, and a prefetch of four sources fetched one. `TileCacheKey` (source, coordinates, format) now owns the identity, with the loopback path round trip under test. |
+| Elevation offline | **Done.** The DEM is cached as `raster-dem` source `terrain` across z12–z14 — not just z14, because MapLibre asks for a DEM tile at the camera's zoom — and the slope generator decodes the cached bytes rather than re-fetching. |
+| Size estimate | **Measured, per source.** `TileSourceSize` replaces a flat per-format table that was 5× high for satellite rasters and 5× low for the DEM. See §9. |
+| Progress and honesty | **Done.** Per-tile progress; a partial download reports how many tiles it could not fetch rather than claiming clean coverage, and Settings shows the cache's size with a way to clear it. |
+| Full hike in airplane mode | **Not yet run.** The disk-hit path is verified two ways — a unit test that a stored tile is answered without the upstream closure ever being called, and a live check that a sentinel written into a cache file comes back byte-for-byte over the loopback — but the end-to-end gate still wants a physical device, since `simctl` has no connectivity toggle. |
+
 ## 11. Risks
 
 1. **`raster-dem` custom encoding** unsupported on Native iOS ([#2783]). M0 item
@@ -671,15 +778,26 @@ computed rather than tuned to hit the plan's number.
    workaround — the most complex piece in the plan. **Confirmed** during M0: the
    delegate's tile callback is observational only, and
    `MLNNetworkConfiguration` is the supported hook for custom tile-request headers.
-3. **MapTiler terms on offline caching** in a distributed app. Resolve before M5.
+   **Now load-bearing twice over:** the same listener is what puts every basemap
+   and DEM tile on disk, so it is not only a slope-shading workaround but the
+   offline mechanism itself (§9).
+3. **MapTiler terms on offline caching** in a distributed app. **Unresolved, and
+   now urgent** — the app caches MapTiler tiles on the user's device and serves
+   them back with no network. A licensing question, not an engineering one, and it
+   can invalidate §9 entirely.
 4. **Swift 6 concurrency** against an unaudited Obj-C framework. **Confirmed
    real:** `MLNOfflinePack` is non-`Sendable` and cannot be retained, sent across
-   an isolation boundary, or even captured in a completion handler — the offline
-   manager matches its pack by region identity and polls instead.
+   an isolation boundary, or even captured in a completion handler. The offline
+   manager no longer touches packs, so this is now only a constraint on any future
+   MapLibre object that has to be held.
 5. **MapTiler key restrictions do not transfer to native** (§5.1). Not a
    MapTiler bug, but it invalidates the plan's original key guidance: the key
    needs both an origin allowlist and a user-agent allowlist, and the iOS
    half of that is easy to leave out.
+6. **No cache eviction.** `TileCache` drops its whole in-memory corpus at 32 MB
+   and has no LRU on disk, so the cache only shrinks when the user clears it from
+   Settings. Fine while a download is one corridor; worth revisiting before
+   offline packs for several routes, or a satellite basemap over a long trip.
 
 ## 12. Open questions
 
@@ -696,17 +814,13 @@ computed rather than tuned to hit the plan's number.
   later at all.
 - Seed the app with the existing demo tracks in `web/public/demos/`. Currently a
   hardcoded `DemoData.route` stands in; the document picker lands in M2.
-- **Collapsible panel mechanism** (§7). A two-state collapse is the simpler
-  thing to build and to reason about; a draggable sheet with detents is nicer to
-  use but adds gesture handling that has to coexist with the map's own pan and
-  pinch. Worth deciding before M2's layout work, because the map overlay
-  structure depends on it.
-- **What "fix the download" means** (§9). The corridor download is blocked by
-  MapLibre, not by our code — `addPack` succeeds and then reports zero
-  downloadable resources. The three ways forward are listed in §9 and they are
-  different amounts of work: retry on a newer MapLibre is a day, a hand-rolled
-  tile cache is a week, and a locally-built style is somewhere between. Until one
-  is chosen the button stays disabled with the reason on screen.
+- **Collapsible panel mechanism** (§7) — **settled.** A draggable sheet with two
+  detents, sized to the panel's content rather than to the screen, so the map
+  stays visible for the profile trace.
+- **What "fix the download" means** (§9) — **settled.** `MLNOfflineStorage` was
+  dropped in favour of a tile cache every map request already passes through, so
+  the button is enabled and the download works. What is left is the licensing
+  question, not an engineering one, plus a real airplane-mode run on a device.
 - **Whether the Create tab draws freehand or snaps to trails.** The web app snaps
   to marked trails and peaks (`trailGraph`, `snapSources`), and §3 keeps
   `snap.ts` partly. Snapping is more useful on a phone but pulls in the vector
