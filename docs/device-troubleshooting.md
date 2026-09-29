@@ -160,13 +160,35 @@ and enabling Developer Mode first means you only do the trust dance once.
 
 ## 5. Trusting the developer profile after the first install
 
-The install itself succeeds; the app then refuses to launch until you trust the
-profile, which presents as a hang or an immediate crash with no error:
+The install succeeds and the app is on the phone, but the **first launch is
+refused** until the profile is trusted. `devicectl` puts it plainly:
+
+```
+error: Unable to launch com.example.GPXNav because it has an invalid code
+signature, inadequate entitlements or its profile has not been explicitly
+trusted by the user.
+  FBSOpenApplicationErrorDomain error 3 (0x03)
+  BSErrorCodeDescription = Security
+```
+
+Read the wording carefully: it names three causes, and only the third is
+applicable to a build that just succeeded. An invalid signature or inadequate
+entitlements would be a real packaging fault, but a green signed build rules
+those out — this is the trust prompt, and the first two are just the message
+hedging.
 
 **Settings → General → VPN & Device Management → Apple Development: <name> →
 Trust**
 
-Nothing to do on the Mac. If the entry is missing, the app did not install.
+Nothing to do on the Mac, and no rebuild needed — the installed app is fine.
+Trusting is per-app, so it survives reinstalls but not a wiped device or a new
+certificate. If the entry is missing from that list, the app did not install
+and the problem is earlier in this list.
+
+The symptom is a tap that has to happen once per certificate, which is why
+enabling Developer Mode (§4) first is worth the restart: otherwise you trust
+the computer, then discover Developer Mode, then build and install, and only
+then find out there is a second trust to do.
 
 ## 6. Signing succeeds but every map request fails
 
