@@ -11,18 +11,19 @@ import RouteKit
 /// ascent and descent drift away from the chart on a track with dense fixes.
 ///
 /// `Profile.routeSamples` carries elevation only on the original vertices — the
-/// interpolated samples come back `nil` — so a track whose fixes are far apart
-/// has a nearly empty profile. The web refills those from the DEM via
-/// `elevationAt`; this does the same through `TerrainTileStore`.
+/// interpolated samples come back `nil` — so `fillMissingElevations` completes
+/// the series from the terrain model, anchored to the elevations the track
+/// already carries. See `ElevationFill` for why the two are blended rather than
+/// used raw.
 @MainActor
 final class RouteAnalysis: ObservableObject {
     /// Resampling step, matching the web app's `STATS_PROFILE_STEP_METERS`.
     static let stepMeters: Double = 30
 
     @Published private(set) var profile: RouteProfile
-    /// True while the DEM lookups for the gaps are in flight.
+    /// True while the DEM lookups for a track with no elevation are in flight.
     @Published private(set) var isFillingTerrain = false
-    /// Set when the gaps could not be filled, so the UI can say why.
+    /// Set when the terrain could not be reached, so the UI can say why.
     @Published private(set) var terrainUnavailable = false
 
     private let store: TerrainTileStore
@@ -37,43 +38,69 @@ final class RouteAnalysis: ObservableObject {
         fillTask?.cancel()
     }
 
-    /// Fill the interpolated samples from MapTiler's Terrain-RGB tiles.
+    /// Complete the profile's elevation series.
     ///
-    /// Vertex elevations are never overwritten, so a GPX that carries its own
-    /// elevation is trusted and only the gaps are looked up.
+    /// The terrain model supplies the ground between the route's vertices, and
+    /// the track's own elevations anchor it: each of the track's samples says how
+    /// far above or below the terrain it put the route, and that correction is
+    /// carried across the gaps. Two sources cannot sawtooth against each other
+    /// when one is expressed as an offset from the other, which is what put a dip
+    /// in the profile at every vertex when both were used raw.
+    ///
+    /// Vertex elevations are never overwritten, and a failed terrain lookup costs
+    /// that one sample its detail rather than the profile its shape: the
+    /// interpolation between the track's own elevations is the fallback. A GPX
+    /// with no `<ele>` at all is the case the terrain model is for, and it is
+    /// used as it stands.
     func fillMissingElevations() {
         guard fillTask == nil, !isFillingTerrain else { return }
-        guard AppConfig.terrainConfig != nil else {
-            terrainUnavailable = true
-            return
-        }
+        let track = profile.points.map(\.elevation)
         let gaps = profile.points.indices.filter { profile.points[$0].elevation == nil }
         guard !gaps.isEmpty else { return }
+        guard AppConfig.terrainConfig != nil else {
+            // No terrain to ask: the track's own line between its vertices is
+            // what is left, and it is better than a profile of bare samples.
+            apply(ElevationFill.interpolating(track))
+            return
+        }
 
         isFillingTerrain = true
         let base = profile
         fillTask = Task { [store] in
-            var filled = base.points
-            var filledAny = false
-            for index in gaps {
+            // Every gap, plus the samples that bound each run of them: the
+            // correction that carries the track's elevations across the gaps is
+            // measured against those, so a track's terrain is never fetched for
+            // vertices that no gap depends on.
+            let wanted = ElevationFill.terrainSamplesNeeded(track: track)
+            let gaps = Set(gaps)
+            var terrain = [Double?](repeating: nil, count: track.count)
+            var answered = 0
+            for index in wanted {
                 if Task.isCancelled { return }
-                let point = filled[index]
-                let result = try? await store.elevationAt(lng: point.lon, lat: point.lat)
-                if let elevation = result ?? nil {
-                    filled[index] = RoutePoint(point.coordinate, elevation: elevation)
-                    filledAny = true
+                let point = base.points[index]
+                if let elevation = try? await store.elevationAt(lng: point.lon, lat: point.lat) {
+                    terrain[index] = elevation
+                    if gaps.contains(index) { answered += 1 }
                 }
             }
             guard !Task.isCancelled else { return }
-            self.profile = RouteProfile(
-                points: filled,
-                cumulativeDistances: base.cumulativeDistances,
-                totalDistance: base.totalDistance
-            )
-            self.terrainUnavailable = !filledAny
+            self.apply(ElevationFill.blended(terrain: terrain, track: track))
+            self.terrainUnavailable = answered == 0
             self.isFillingTerrain = false
             self.fillTask = nil
         }
+    }
+
+    /// Replace the profile's elevations, keeping its distances.
+    private func apply(_ values: [Double?]) {
+        let points = zip(profile.points, values).map { point, elevation in
+            RoutePoint(point.coordinate, elevation: elevation)
+        }
+        profile = RouteProfile(
+            points: points,
+            cumulativeDistances: profile.cumulativeDistances,
+            totalDistance: profile.totalDistance
+        )
     }
 
     // MARK: - Derived values

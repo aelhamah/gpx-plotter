@@ -4,7 +4,7 @@ A native iPhone/iPad app for viewing and navigating the same GPX routes as the
 web app in [`web/`](../web), with offline satellite imagery you control, Live
 Activity guidance, and off-course alerts.
 
-**Status:** M1 Core is complete and green (RouteKit, 115 XCTest cases, `swift test`
+**Status:** M1 Core is complete and green (RouteKit, 139 XCTest cases, `swift test`
 passing). Offline is implemented on our own tile cache rather than MapLibre's
 pack API, and the corridor download works — see [§9](#9-offline) and the M5 row
 in [§10.1](#101-actual-state). The M0 spike is code-complete and partially
@@ -622,14 +622,14 @@ settle.
 
 #### 10.1 Actual state
 
-**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **115 tests, 0
+**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **139 tests, 0
 failures.** The gate is "import a GPX and see real numbers", and that now works
 end to end: import through the document picker, the numbers come from the same
 RouteKit code the web app uses, and they survive a relaunch.
 
 | Gate item | State |
 | --- | --- |
-| `RouteKit` + tests | **Done.** 115 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
+| `RouteKit` + tests | **Done.** 139 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
 | GPX import | **Done.** `fileImporter` filtered to `.gpx`, security-scoped read, `RouteKit.parseGPX`. Verified with the repo's own demos: *The Enchantments Traverse* (7,153 pts → 18.49 mi, 8,080 ft ascent, 7,838 ft high) and *Afternoon Hike* (13,360 pts → 4.42 mi, 14,079 ft high). Route ids are reassigned on import and colored from the web app's `routeColorForId`. |
 | Stats | **Done.** Distance/ascent/descent/high from `RouteKit`, formatted through `Units`, switching with the unit picker. A GPX with no `<ele>` shows `—` rather than zeros. |
 | Swift Charts profile | **Done.** Elevation against distance along, with the y-domain padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. |
@@ -658,6 +658,24 @@ Three defects found while wiring the UI, all fixed:
   dots and statistics that only saw those dozen points. The gaps are now filled
   from MapTiler's Terrain-RGB tiles, exactly as the web does, and vertex
   elevations are never overwritten.
+- **Filling those gaps from the terrain model put a dip in the profile at every
+  vertex.** The DEM and the GPX are two different measurements of the same
+  hillside; measured at the demo route's own coordinates they differ by up to
+  **352 m**, so a series that used the track's elevation at a vertex and the
+  terrain 30 m either side of it sawtoothed, and ascent read 2,703 m for a
+  450 m climb. Interpolating between the track's own elevations removes the
+  sawtooth but throws away the ground between the vertices, which on a sparse
+  route is most of the profile. `ElevationFill.blended` keeps both: the terrain
+  supplies the detail and each vertex says how far above or below it the track
+  put the route, so the correction is carried across the gap. Two sources cannot
+  sawtooth when one is expressed as an offset from the other. Ascent for the demo
+  is now 696 m — more than the 455 m of a straight line between the vertices,
+  because the ground between them is not straight.
+- **The stats bar did not observe the analysis.** `RouteStatsBar` held its
+  `RouteAnalysis` as a plain property, so publishing a new profile re-rendered
+  the chart and left the bar showing the figures from before it: 1,493 ft of
+  ascent next to a chart whose axis was the terrain's 3,600 m. The "one profile,
+  three views" rule was true of the code and false on screen.
 
 Three porting bugs worth recording, all found by the tests rather than review:
 

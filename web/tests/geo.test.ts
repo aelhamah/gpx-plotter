@@ -5,6 +5,10 @@ import {
   mercatorY,
   inverseMercator,
   routeProfilePoints,
+  blendTerrainElevations,
+  interpolateProfileElevations,
+  profileNeedsTerrain,
+  terrainSamplesNeeded,
   summarizeProfile,
   segmentSlopeDegrees,
   profileAxisStep,
@@ -12,6 +16,7 @@ import {
   colorToAlpha,
   metersToKm,
 } from '../src/geo';
+import type { RoutePoint } from '../src/gpx';
 
 describe('mercator helpers', () => {
   it('round-trips a point through mercator and back', () => {
@@ -148,5 +153,120 @@ describe('metersToKm', () => {
   it('converts meters to kilometers', () => {
     expect(metersToKm(1000)).toBeCloseTo(1, 9);
     expect(metersToKm(3218.688)).toBeCloseTo(3.219, 2);
+  });
+});
+describe('profileNeedsTerrain', () => {
+  it('is false once the track carries any elevation of its own', () => {
+    expect(profileNeedsTerrain([{ lat: 0, lon: 0, elevation: 3000 }, { lat: 0, lon: 0 }])).toBe(false);
+  });
+  it('is true when the track recorded nothing usable', () => {
+    expect(profileNeedsTerrain([{ lat: 0, lon: 0 }, { lat: 0, lon: 0 }])).toBe(true);
+    expect(profileNeedsTerrain([{ lat: 0, lon: 0, elevation: NaN }])).toBe(true);
+    expect(profileNeedsTerrain([])).toBe(true);
+  });
+});
+
+describe('interpolateProfileElevations', () => {
+  it('fills a gap by interpolating between the two known values', () => {
+    const filled = interpolateProfileElevations([
+      { lat: 0, lon: 0, elevation: 100 },
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 0, elevation: 400 },
+    ]);
+    expect(filled.map((p) => p.elevation)).toEqual([100, 200, 300, 400]);
+  });
+
+  it('never overwrites an elevation the track recorded', () => {
+    const filled = interpolateProfileElevations([
+      { lat: 0, lon: 0, elevation: 2960 },
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 0, elevation: 3410 },
+    ]);
+    expect(filled[0].elevation).toBe(2960);
+    expect(filled[2].elevation).toBe(3410);
+  });
+
+  it('holds leading and trailing runs flat rather than extrapolating', () => {
+    const filled = interpolateProfileElevations([
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 0, elevation: 500 },
+      { lat: 0, lon: 0 },
+    ]);
+    expect(filled.map((p) => p.elevation)).toEqual([500, 500, 500]);
+  });
+
+  it('leaves a profile with nothing to work from alone, for the DEM to fill', () => {
+    const profile = [{ lat: 0, lon: 0 }, { lat: 0, lon: 0 }];
+    expect(interpolateProfileElevations(profile).map((p) => p.elevation)).toEqual([undefined, undefined]);
+  });
+
+  // The defect: filling every gap from the DEM put a dip at each vertex, because
+  // the terrain and the track disagree by hundreds of metres on a hand-drawn
+  // route. Interpolating cannot produce a sample below both its neighbours.
+  it('produces no dip below both neighbours', () => {
+    const profile: RoutePoint[] = [{ lat: 0, lon: 0, elevation: 3000 }];
+    for (let step = 1; step <= 4; step++) {
+      profile.push({ lat: 0, lon: 0, elevation: 3000 + step * 100 });
+      for (let i = 0; i < 9; i++) profile.push({ lat: 0, lon: 0 });
+    }
+    const elevations = interpolateProfileElevations(profile).map((p) => p.elevation as number);
+    for (let i = 1; i < elevations.length - 1; i++) {
+      expect(elevations[i] >= Math.min(elevations[i - 1], elevations[i + 1])).toBe(true);
+    }
+    expect(elevations[elevations.length - 1]).toBe(3400);
+  });
+
+  it('keeps the sample count, since distances are indexed against it', () => {
+    const profile = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 0, elevation: 100 },
+      { lat: 0, lon: 0 },
+    ];
+    expect(interpolateProfileElevations(profile)).toHaveLength(3);
+  });
+});
+
+describe('terrainSamplesNeeded', () => {
+  it('asks for every gap and the samples that bound it', () => {
+    expect(terrainSamplesNeeded([{ elevation: 100 }, {}, {}, {}, { elevation: 200 }])).toEqual([0, 1, 2, 3, 4]);
+  });
+  it('does not repeat a sample that bounds two runs', () => {
+    expect(terrainSamplesNeeded([{ elevation: 100 }, {}, { elevation: 200 }, {}, { elevation: 300 }])).toEqual([0, 1, 2, 3, 4]);
+  });
+  it('asks for nothing when the track recorded every sample, as a dense fix does', () => {
+    expect(terrainSamplesNeeded([{ elevation: 100 }, { elevation: 200 }])).toEqual([]);
+  });
+});
+
+describe('blendTerrainElevations', () => {
+  it('keeps the track\'s own elevations and the DEM\'s shape between them', () => {
+    // A flat track across five samples, with a gully the track never recorded.
+    const track = [{ elevation: 1000 }, {}, {}, {}, {}, { elevation: 1000 }];
+    const blended = blendTerrainElevations([1000, 1000, 800, 800, 1000, 1000], track);
+    expect(blended.map((p) => p.elevation)).toEqual([1000, 1000, 800, 800, 1000, 1000]);
+  });
+
+  it('puts the track above the DEM by the same amount at both ends of a gap', () => {
+    // The track sits 100 m above the DEM at both bounding vertices, so the DEM\'s
+    // shape between them is carried across 100 m rather than dropped.
+    const track = [{ elevation: 1100 }, {}, {}, {}, { elevation: 1100 }];
+    const blended = blendTerrainElevations([1000, 1000, 900, 1000, 1000], track);
+    expect(blended.map((p) => p.elevation)).toEqual([1100, 1100, 1000, 1100, 1100]);
+  });
+
+  it('uses the DEM as it stands for a track with no elevation at all', () => {
+    const blended = blendTerrainElevations([100, 200, 300], [{}, {}, {}]);
+    expect(blended.map((p) => p.elevation)).toEqual([100, 200, 300]);
+  });
+
+  it('falls back to the track\'s line where the DEM did not answer', () => {
+    const track = [{ elevation: 100 }, {}, {}, { elevation: 400 }];
+    const blended = blendTerrainElevations([100, undefined, undefined, 400], track);
+    expect(blended.map((p) => p.elevation)).toEqual([100, 200, 300, 400]);
+  });
+
+  it('keeps the sample count, since distances are indexed against it', () => {
+    expect(blendTerrainElevations([1, 2, 3], [{ elevation: 1 }, {}, {}])).toHaveLength(3);
   });
 });

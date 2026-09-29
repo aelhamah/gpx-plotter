@@ -47,7 +47,7 @@ The native app has two pieces, described in full in [`ios-plan.md`](ios-plan.md)
 ```bash
 cd ios/RouteKit
 swift build       # builds the library
-swift test        # runs 115 XCTest cases
+swift test        # runs 139 XCTest cases
 ```
 
 Targets iOS 17 / macOS 14, Swift 6 language mode. CI runs both commands in

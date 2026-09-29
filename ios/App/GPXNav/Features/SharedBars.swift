@@ -88,9 +88,14 @@ struct OfflinePackBar: View {
 struct RouteStatsBar: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     let route: Route
-    /// When supplied, the figures come from the resampled profile the chart
-    /// draws, so the bar and the profile always agree.
-    var analysis: RouteAnalysis?
+    /// The figures come from the resampled profile the chart draws, so the bar
+    /// and the profile always agree.
+    ///
+    /// Observed, not just held: as a plain property the bar would keep showing
+    /// the figures from before the terrain fill published a new profile, which
+    /// is how the bar once reported 1,493 ft of ascent next to a chart whose
+    /// axis was 3,600 m.
+    @ObservedObject var analysis: RouteAnalysis
 
     var body: some View {
         let summary = RouteSummary(route: route, system: workspace.unitSystem, analysis: analysis)
