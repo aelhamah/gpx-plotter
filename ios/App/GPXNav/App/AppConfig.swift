@@ -116,20 +116,23 @@ enum AppConfig {
     /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
     static let terrainPitch: CGFloat = 55
 
-    /// Height of the bottom sheet's short detent, which shows only the stats row.
+    /// Height of the sheet's short detent, which shows only the stats row.
     static let statsOnlyPanelHeight: CGFloat = 96
 
-    /// Height of the sheet's tall detent: the stats row, the profile, and the
-    /// offline row, and nothing more.
+    /// Height of the sheet's tall detent: the stats rows, the profile, the slope
+    /// legend, and the offline row, and nothing more.
     ///
     /// Sized to the content rather than to the screen, on purpose. `.large` put
     /// the sheet over almost the whole display, which is the opposite of what a
     /// profile is for — scrubbing it traces the position on the map, so the map
-    /// has to stay visible while the sheet is up. The content measures 290 pt
-    /// (stats 60 + chart 170 + offline row 56), and the rest is the home
-    /// indicator's inset plus a little slack for the key-missing warning that
-    /// appears above the chart.
-    static let expandedPanelHeight: CGFloat = 330
+    /// has to stay visible while the sheet is up.
+    ///
+    /// 436 pt is what the content measures: stats 92 + key warning 22 + chart 170
+    /// + scrub caption 20 + legend 44 + offline row 54 + home indicator 34, plus a
+    /// little slack. An earlier 466 left a visible band of dead space under the
+    /// offline row, and a 396 clipped the top stats row behind the sheet's
+    /// rounded corner.
+    static let expandedPanelHeight: CGFloat = 436
 
     /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
     /// no Terrain-RGB source to point the terrain block at.

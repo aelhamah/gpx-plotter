@@ -25,6 +25,31 @@ struct MapView: UIViewRepresentable {
     /// a device that means a dead-looking screen with nothing to go on, which is
     /// how a loopback or key problem reads as "the map is broken".
     @Binding var loadError: String?
+    /// Called every time a style finishes loading.
+    ///
+    /// The basemap's tile sources are only known once `StyleBuilder` has fetched
+    /// and resolved the style, so the corridor estimate has to wait for that.
+    /// Hearing about it beats polling: the estimate used to be computed once on
+    /// appear, always before the style arrived, and never retried, so the
+    /// Download button stayed disabled for the whole session.
+    ///
+    /// A callback rather than a binding because the coordinator writes it, and a
+    /// `@Binding` cannot be written through a `let` copy of the representable.
+    var onStyleLoaded: (() -> Void)?
+    /// Waypoint names projected into the map view's own coordinates, for the
+    /// screen-space label overlay.
+    ///
+    /// Drawn in SwiftUI rather than with an `MLNSymbolStyleLayer` because MapLibre
+    /// Native will not resolve a feature attribute for `text` on this version:
+    /// `NSExpression(forKeyPath: "label")` leaves the layer drawing nothing, while
+    /// a constant string on the same layer renders fine. The labels are projected
+    /// with `MLNMapView.convert(_:toPointTo:)`, which goes through the camera, so
+    /// they still sit on their waypoint under pitch and 3D terrain.
+    @Binding var waypointLabels: [ProjectedWaypoint]
+    /// Incremented to ask the map to frame the route again. `ViewerScreen` has no
+    /// handle on the `MLNMapView`, so the fit button raises this instead. Only
+    /// read here, so a binding is enough.
+    @Binding var fitToken: Int
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
 
@@ -38,15 +63,27 @@ struct MapView: UIViewRepresentable {
     /// same position do no work. Reset whenever the style is replaced, because a
     /// style swap drops the trace's source and it has to be re-added.
     private let traceState = TraceState()
+    /// The `fitToken` the representable last acted on, so `updateUIView` only
+    /// refits when the button was actually tapped.
+    private let fitState = FitState()
 
     init(
         route: Route,
         scrubbedDistance: Binding<Double?> = .constant(nil),
-        loadError: Binding<String?> = .constant(nil)
+        loadError: Binding<String?> = .constant(nil),
+        onStyleLoaded: (() -> Void)? = nil,
+        waypointLabels: Binding<[ProjectedWaypoint]> = .constant([]),
+        fitToken: Binding<Int> = .constant(0)
     ) {
         self.route = route
         self._scrubbedDistance = scrubbedDistance
         self._loadError = loadError
+        self.onStyleLoaded = onStyleLoaded
+        self._waypointLabels = waypointLabels
+        self._fitToken = fitToken
+        // Seeded, so the first `updateUIView` does not read as a fit request and
+        // animate the camera over the fit the coordinator has already done.
+        self.fitState.token = fitToken.wrappedValue
     }
 
     func makeUIView(context: Context) -> MLNMapView {
@@ -70,9 +107,15 @@ struct MapView: UIViewRepresentable {
             mapView.styleURL = desired
             context.coordinator.hasFitted = false
             traceState.index = nil
+            fitState.token = nil
             return
         }
         applyEverything(to: mapView)
+        refreshWaypointLabels(for: mapView)
+        if fitState.token != fitToken {
+            fitState.token = fitToken
+            fitMapToRoute(mapView, route: route, animated: true)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -196,16 +239,12 @@ struct MapView: UIViewRepresentable {
 
         if style.layer(withIdentifier: sourceID) == nil {
             let layer = MLNCircleStyleLayer(identifier: sourceID, source: source)
-            layer.circleRadius = NSExpression(
-                forConstantValue: selected
-                    ? MapLayers.Paint.routePointSelectedRadius
-                    : MapLayers.Paint.routePointRadius
+            layer.circleRadius = MapLayers.markerRadiusExpression(
+                boost: selected ? MapLayers.Paint.selectedMarkerBoost : 0
             )
             layer.circleColor = NSExpression(forConstantValue: UIColor(route.color))
-            layer.circleStrokeColor = NSExpression(
-                forConstantValue: selected ? MapLayers.Paint.routePointSelectedStroke : UIColor.white
-            )
-            layer.circleStrokeWidth = NSExpression(forConstantValue: MapLayers.Paint.routePointStrokeWidth)
+            layer.circleStrokeColor = NSExpression(forConstantValue: MapLayers.Paint.markerStrokeColor)
+            layer.circleStrokeWidth = MapLayers.markerStrokeExpression()
             style.addLayer(layer)
         }
     }
@@ -217,8 +256,10 @@ struct MapView: UIViewRepresentable {
         let waypoints = workspace.waypoints
 
         guard !waypoints.isEmpty else {
-            if let layer = style.layer(withIdentifier: MapLayers.waypointLayer) {
-                style.removeLayer(layer)
+            for identifier in [MapLayers.waypointLayer] {
+                if let layer = style.layer(withIdentifier: identifier) {
+                    style.removeLayer(layer)
+                }
             }
             if let source = style.source(withIdentifier: MapLayers.waypointSource) {
                 style.removeSource(source)
@@ -226,23 +267,44 @@ struct MapView: UIViewRepresentable {
             return
         }
 
-        let coordinates = waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
-        let points = MLNPointCollection(coordinates: coordinates, count: UInt(coordinates.count))
-        if style.source(withIdentifier: MapLayers.waypointSource) == nil {
-            style.addSource(MLNShapeSource(identifier: MapLayers.waypointSource, shape: points, options: nil))
-        } else if let existing = style.source(withIdentifier: MapLayers.waypointSource) as? MLNShapeSource {
-            existing.shape = points
+        // Features rather than a bare point collection: the label layer reads a
+        // preformatted string off each feature, and an `MLNPointCollection` has
+        // nowhere to put attributes.
+        let features = waypoints.map { waypoint -> MLNPointFeature in
+            let feature = MLNPointFeature()
+            feature.coordinate = CLLocationCoordinate2D(latitude: waypoint.lat, longitude: waypoint.lon)
+            // Formatted here rather than in the style expression because a MapLibre
+            // expression cannot turn metres into feet, and the unit system is the
+            // user's choice.
+            let elevation = waypoint.elevation.map {
+                Units.formatElevation($0, system: workspace.unitSystem)
+            }
+            feature.attributes = [
+                "label": [waypoint.name, elevation].compactMap { $0 }.joined(separator: " · ")
+            ]
+            return feature
         }
-        guard style.layer(withIdentifier: MapLayers.waypointLayer) == nil,
-              let source = style.source(withIdentifier: MapLayers.waypointSource) as? MLNSource
-        else { return }
+        let collection = MLNShapeCollection(shapes: features)
+        if style.source(withIdentifier: MapLayers.waypointSource) == nil {
+            style.addSource(MLNShapeSource(
+                identifier: MapLayers.waypointSource,
+                shape: collection,
+                options: nil
+            ))
+        } else if let existing = style.source(withIdentifier: MapLayers.waypointSource) as? MLNShapeSource {
+            existing.shape = collection
+        }
+        guard let source = style.source(withIdentifier: MapLayers.waypointSource) as? MLNSource else { return }
 
-        let layer = MLNCircleStyleLayer(identifier: MapLayers.waypointLayer, source: source)
-        layer.circleRadius = NSExpression(forConstantValue: MapLayers.Paint.waypointRadius)
-        layer.circleColor = NSExpression(forConstantValue: MapLayers.Paint.waypointFill)
-        layer.circleStrokeColor = NSExpression(forConstantValue: UIColor.white)
-        layer.circleStrokeWidth = NSExpression(forConstantValue: MapLayers.Paint.routePointStrokeWidth)
-        style.addLayer(layer)
+        if style.layer(withIdentifier: MapLayers.waypointLayer) == nil {
+            let layer = MLNCircleStyleLayer(identifier: MapLayers.waypointLayer, source: source)
+            layer.circleRadius = MapLayers.markerRadiusExpression()
+            layer.circleColor = NSExpression(forConstantValue: MapLayers.Paint.waypointFill)
+            layer.circleStrokeColor = NSExpression(forConstantValue: UIColor.white)
+            layer.circleStrokeWidth = MapLayers.markerStrokeExpression()
+            style.addLayer(layer)
+        }
+
     }
 
     // MARK: - Location
@@ -506,6 +568,45 @@ struct MapView: UIViewRepresentable {
         var index: Int?
     }
 
+    /// Reference box for the last acted-on `fitToken`, for the same reason as
+    /// `TraceState`: the representable is a struct, but `updateUIView` has to
+    /// remember whether this update was caused by the fit button.
+    private final class FitState {
+        var token: Int?
+    }
+
+    /// Re-project the waypoint labels after the camera moves.
+    ///
+    /// Called from the coordinator's region-change callback as well as from
+    /// `updateUIView`: panning does not change any SwiftUI state, so without the
+    /// callback the labels would stay pinned where the last state change left
+    /// them.
+    func refreshWaypointLabels(for mapView: MLNMapView) {
+        guard mapView.bounds.width > 0, mapView.bounds.height > 0 else {
+            waypointLabels = []
+            return
+        }
+        // Keep labels clear of the nav bar and the sheet, so they are never drawn
+        // under chrome the reader cannot see past.
+        var visible = mapView.bounds.insetBy(dx: -8, dy: -8)
+        visible.origin.y += MapChrome.topInset
+        visible.size.height -= MapChrome.topInset + MapChrome.bottomInset
+
+        waypointLabels = workspace.waypoints.compactMap { waypoint in
+            let coordinate = CLLocationCoordinate2D(latitude: waypoint.lat, longitude: waypoint.lon)
+            let point = mapView.convert(coordinate, toPointTo: mapView)
+            guard visible.contains(point) else { return nil }
+            let elevation = waypoint.elevation.map {
+                Units.formatElevation($0, system: workspace.unitSystem)
+            }
+            return ProjectedWaypoint(
+                id: "\(waypoint.lat),\(waypoint.lon)",
+                text: [waypoint.name, elevation].compactMap { $0 }.joined(separator: " · "),
+                point: point
+            )
+        }
+    }
+
     // MARK: - Coordinator
 
     @MainActor
@@ -519,6 +620,7 @@ struct MapView: UIViewRepresentable {
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
             parent.loadError = nil
+            parent.onStyleLoaded?()
             parent.applyEverything(to: mapView)
             if !hasFitted {
                 parent.fitMapToRoute(mapView, route: parent.route, animated: false)
@@ -533,5 +635,18 @@ struct MapView: UIViewRepresentable {
             print("[Map] style failed to load: \(nsError.localizedDescription) (\(nsError.domain) \(nsError.code))")
             parent.loadError = "Map failed to load: \(nsError.localizedDescription)"
         }
+
+        func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
+            // Panning changes no SwiftUI state, so this is the only signal that the
+            // projected waypoint labels need re-laying out.
+            parent.refreshWaypointLabels(for: mapView)
+        }
     }
+}
+
+/// A waypoint name placed at a point in the map view's coordinates.
+struct ProjectedWaypoint: Identifiable, Equatable {
+    let id: String
+    let text: String
+    let point: CGPoint
 }

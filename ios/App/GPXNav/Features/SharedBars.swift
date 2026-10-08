@@ -44,7 +44,7 @@ struct OfflinePackBar: View {
                 return limitation
             }
             let tiles = packs.estimatedTileCount
-            guard tiles > 0 else { return "No offline estimate yet" }
+            guard tiles > 0 else { return packs.pendingEstimateNote }
             return "\(tiles) tiles · about \(packs.estimatedSizeDescription)"
         }
     }
@@ -96,23 +96,37 @@ struct RouteStatsBar: View {
     /// is how the bar once reported 1,493 ft of ascent next to a chart whose
     /// axis was 3,600 m.
     @ObservedObject var analysis: RouteAnalysis
+    /// Whether the panel is expanded. Only then is there room for the second
+    /// row — the collapsed detent is sized to the four headline figures.
+    var isExpanded: Bool = false
 
     var body: some View {
         let summary = RouteSummary(route: route, system: workspace.unitSystem, analysis: analysis)
-        HStack(spacing: 0) {
-            stat("Distance", summary?.distance ?? "—")
-            stat("Ascent", summary?.gain ?? "—")
-            stat("Descent", summary?.loss ?? "—")
-            stat("High", summary?.high ?? "—")
+        VStack(spacing: 0) {
+            row(summary?.primary ?? [])
+            if isExpanded, let secondary = summary?.secondary, !secondary.isEmpty {
+                row(secondary)
+                    .padding(.top, 8)
+            }
         }
         .padding(.vertical, 10)
         .background(.bar)
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func row(_ stats: [(label: String, value: String)]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(stats.enumerated()), id: \.offset) { _, stat in
+                statCell(stat.label, stat.value)
+            }
+        }
+    }
+
+    private func statCell(_ label: String, _ value: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.subheadline.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -205,6 +219,9 @@ struct RouteSummary {
     let gain: String
     let loss: String
     let high: String
+    let low: String
+    let maxSlope: String
+    let pointCount: String
 
     /// - Parameter analysis: the resampled profile to read from. Pass it on the
     ///   viewer screen so these numbers come from the same samples the profile
@@ -215,10 +232,26 @@ struct RouteSummary {
         guard route.points.count >= 2 else { return nil }
         let profile = analysis?.profile ?? RouteProfile.make(from: route.points)
         distance = Units.formatDistance(profile.totalDistance, system: system)
-        let elevation = analysis?.elevation ?? Slope.stats(for: profile.points)
+        // One pass for every elevation figure: `summary` carries gain, loss, the
+        // extremes and the steepest segment, and it reads the terrain between
+        // vertices rather than only the track's own ones.
+        let elevation = Slope.summary(for: profile.points)
         gain = Units.formatElevation(elevation.gain, system: system)
         loss = Units.formatElevation(elevation.loss, system: system)
         high = Units.formatElevation(elevation.max, system: system)
+        low = Units.formatElevation(elevation.min, system: system)
+        maxSlope = Units.formatSlope(elevation.maxSlope)
+        pointCount = Units.grouped(route.points.count)
+    }
+
+    /// The figures that fit on one row, in the order the web app shows them.
+    var primary: [(label: String, value: String)] {
+        [("Distance", distance), ("Ascent", gain), ("Descent", loss), ("High", high)]
+    }
+
+    /// The rest, shown only when the panel is expanded.
+    var secondary: [(label: String, value: String)] {
+        [("Low", low), ("Max slope", maxSlope), ("Points", pointCount)]
     }
 
     var subtitle: String {

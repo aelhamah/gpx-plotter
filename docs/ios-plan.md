@@ -4,7 +4,7 @@ A native iPhone/iPad app for viewing and navigating the same GPX routes as the
 web app in [`web/`](../web), with offline satellite imagery you control, Live
 Activity guidance, and off-course alerts.
 
-**Status:** M1 Core is complete and green (RouteKit, 139 XCTest cases, `swift test`
+**Status:** M1 Core is complete and green (RouteKit, 152 XCTest cases, `swift test`
 passing). Offline is implemented on our own tile cache rather than MapLibre's
 pack API, and the corridor download works — see [§9](#9-offline) and the M5 row
 in [§10.1](#101-actual-state). The M0 spike is code-complete and partially
@@ -622,17 +622,58 @@ settle.
 
 #### 10.1 Actual state
 
-**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **139 tests, 0
+**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **152 tests, 0
 failures.** The gate is "import a GPX and see real numbers", and that now works
 end to end: import through the document picker, the numbers come from the same
 RouteKit code the web app uses, and they survive a relaunch.
 
 | Gate item | State |
 | --- | --- |
-| `RouteKit` + tests | **Done.** 139 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
+| `RouteKit` + tests | **Done.** 152 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
 | GPX import | **Done.** `fileImporter` filtered to `.gpx`, security-scoped read, `RouteKit.parseGPX`. Verified with the repo's own demos: *The Enchantments Traverse* (7,153 pts → 18.49 mi, 8,080 ft ascent, 7,838 ft high) and *Afternoon Hike* (13,360 pts → 4.42 mi, 14,079 ft high). Route ids are reassigned on import and colored from the web app's `routeColorForId`. |
-| Stats | **Done.** Distance/ascent/descent/high from `RouteKit`, formatted through `Units`, switching with the unit picker. A GPX with no `<ele>` shows `—` rather than zeros. |
-| Swift Charts profile | **Done.** Elevation against distance along, with the y-domain padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. |
+| Stats | **Done.** Distance/ascent/descent/high from `RouteKit`, formatted through `Units`, switching with the unit picker. A GPX with no `<ele>` shows `—` rather than zeros. Low, max slope and point count joined them, all from one `Slope.summary(for:)` pass so the bar cannot disagree with the chart. |
+| Swift Charts profile | **Done.** Elevation against distance along, with the y-domain padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. Segments are coloured by the six avalanche slope bands, so the chart and the on-map shading agree about where the ground is steep. |
+
+**Viewer polish.** The route screen was audited against the web app and the
+things that were missing or wrong on a phone rather than a desktop map are now
+done: map-side basemap/relief/slope/3D toggles, a fit button, waypoint names,
+slope legend, seven statistics, and round axis numbers.
+
+Four findings from that pass are worth keeping, because each looks like a styling
+choice and is not:
+
+- **Axis ticks have to be chosen in the unit they are printed in.** Choosing them
+  in metres and labelling in feet is round in a unit nobody reads: a 450 m climb
+  came out as 9,843 / 10,171 / 10,499 ft. `Units.niceElevationTicks` and
+  `niceDistanceTicks` pick in feet or miles and convert back to metres, because
+  the plot is in metres.
+- **Rounding a tick step up can halve the grid.** Over 0–5,486 m the rough step is
+  1,371 m, which rounds up to 2,000 and leaves three gridlines. Candidate steps
+  are scored on the tick count they actually produce.
+- **`NSExpression(forKeyPath:)` does not resolve feature attributes** on MapLibre
+  Native 6.x, so a symbol layer's `text-field` set from one draws nothing, while
+  a constant string on the same layer renders fine. Waypoint names are drawn in
+  SwiftUI from `MLNMapView.convert(_:toPointTo:)` instead; that projection goes
+  through the camera, so they stay put under pitch.
+- **A fixed marker radius and stroke only suits a desktop map.** At 7 pt with a
+  2 pt ring, a 14-vertex route on a 390 pt-wide phone drew as a chain of dark
+  balls; both are now interpolated with zoom. The stroke in particular — at a 3 pt
+  radius a 1.5 pt ring covers the fill and the route's colour disappears.
+
+Two things the audit turned up that are **not** fixed here, and are worth a
+decision before M3:
+
+- **Ascent is still sensitive to how the profile is filled.** With no MapTiler key
+  the gaps are filled by interpolating between the track's own vertices, which
+  gives 1,493 ft for the demo route's 450 m climb — about right. The earlier
+  DEM-anchored fill reported 2,283 ft for the same climb. Both are the same
+  underlying weakness: gain is the sum of every sample-to-sample delta over a
+  30 m resample, so any noise in the elevations is integrated. A deadband on
+  small deltas is the usual fix and is not implemented.
+- **Offline download has never actually run.** The estimate now completes (it was
+  racing the style load and staying at zero, which left a permanently disabled
+  button), but there is still no MapTiler key on this machine to download
+  through.
 
 Three defects found while wiring the UI, all fixed:
 

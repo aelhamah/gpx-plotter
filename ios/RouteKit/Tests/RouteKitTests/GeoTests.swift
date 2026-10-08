@@ -180,6 +180,108 @@ final class GeoTests: XCTestCase {
         XCTAssertEqual(Units.formatDistanceAxis(15000, system: .metric), "15")
     }
 
+    func testNiceTicksPickRoundDistances() {
+        // The real case from the profile chart: a 3.42 mi route. `.automatic`
+        // gave 0.0 / 1.2 / 2.5.
+        let ticks = Units.niceTicks(in: 0...5486, targetCount: 5)
+        XCTAssertEqual(ticks, [0, 1000, 2000, 3000, 4000, 5000])
+        XCTAssertEqual(ticks.map { Units.formatDistanceAxis($0, system: .imperial) },
+                       ["0.0", "0.6", "1.2", "1.9", "2.5", "3.1"])
+    }
+
+    func testNiceTicksPickRoundElevations() {
+        // Metric side of the same profile.
+        XCTAssertEqual(Units.niceTicks(in: 2_918...3_467, targetCount: 5),
+                       [2_800, 3_000, 3_200, 3_400])
+    }
+
+    func testNiceTicksStayInsideTheSpan() {
+        // 1,000 is the next step up and would not fit under a 900 ceiling.
+        XCTAssertEqual(Units.niceTicks(in: 100...900, targetCount: 5), [0, 200, 400, 600, 800])
+    }
+
+    func testNiceTicksPreferTheGridClosestToTheTarget() {
+        // A 450 m span wants ~6 lines. A 50 m step would give 10 of them and a
+        // 200 m step only 3, so it lands on 100 m — and every label is round.
+        let ticks = Units.niceTicks(in: 2_960...3_410, targetCount: 6)
+        XCTAssertEqual(ticks, [2_900, 3_000, 3_100, 3_200, 3_300, 3_400])
+    }
+
+    func testNiceTicksTieGoesToTheSparserGrid() {
+        // Both a 100 m and a 200 m step are two lines from five; the sparser one
+        // wins so the axis is not needlessly dense.
+        XCTAssertEqual(Units.niceTicks(in: 2_918...3_467, targetCount: 5),
+                       [2_800, 3_000, 3_200, 3_400])
+    }
+
+    func testNiceTicksHandleDegenerateRanges() {
+        XCTAssertEqual(Units.niceTicks(in: 5...5), [])
+        XCTAssertEqual(Units.niceTicks(in: 0...0), [])
+        XCTAssertEqual(Units.niceTicks(in: 0...1, targetCount: 1), [])
+    }
+
+    func testNiceTicksProduceExactlyRepresentableValues() {
+        // 0.2 is not representable in binary, so neither accumulating the step
+        // nor `first + i * step` keeps the labels clean. The fourth came out as
+        // 0.6000000000000001 before the ticks were rounded to the step's own
+        // precision.
+        XCTAssertEqual(Units.niceTicks(in: 0...0.7, targetCount: 5), [0, 0.2, 0.4, 0.6])
+    }
+
+func testNiceTicksUseQuarterStepsWhereTenthsWouldOverfill() {
+        // 2.5 is in the step set so a span this size does not fall back to
+        // tenths and put ten gridlines on a 170pt chart.
+        XCTAssertEqual(Units.niceTicks(in: 0...0.9, targetCount: 4), [0, 0.25, 0.5, 0.75])
+    }
+
+    func testElevationTicksAreRoundInFeetNotMetres() {
+        // The profile chart's real case: 2,960–3,410 m, padded. Choosing the
+        // step in metres gave 2,800 / 3,000 / 3,200 m, which labels as
+        // 9,186 / 9,843 / 10,499 ft — round in a unit nobody reads.
+        let ticks = Units.niceElevationTicks(inMeters: 2_924...3_446, system: .imperial)
+        XCTAssertFalse(ticks.isEmpty)
+        for feet in ticks.map({ Units.feet($0) }) {
+            XCTAssertEqual(feet.truncatingRemainder(dividingBy: 500), 0, accuracy: 1,
+                           "\(feet) ft is not a round number of feet")
+        }
+        // And they are still metres out, so they plot against the profile. The
+        // lowest tick may sit one step below the domain — that is what gives the
+        // axis a gridline under the lowest point of the line.
+        for meters in ticks {
+            XCTAssertTrue((2_800...3_500).contains(meters), "\(meters) m fell outside the domain")
+        }
+    }
+
+    func testElevationTicksStayRoundInMetres() {
+        let ticks = Units.niceElevationTicks(inMeters: 2_924...3_446, system: .metric)
+        for meters in ticks {
+            XCTAssertEqual(meters.truncatingRemainder(dividingBy: 100), 0, accuracy: 0.001,
+                           "\(meters) m is not a round number of metres")
+        }
+    }
+
+    func testDistanceTicksAreRoundInMiles() {
+        let ticks = Units.niceDistanceTicks(inMeters: 0...5_486, system: .imperial)
+        XCTAssertFalse(ticks.isEmpty)
+        for miles in ticks.map({ Units.miles($0) }) {
+            XCTAssertEqual(miles.truncatingRemainder(dividingBy: 0.5), 0, accuracy: 0.01,
+                           "\(miles) mi is not a round number of miles")
+        }
+    }
+
+    func testDistanceTicksStayRoundInKilometres() {
+        let ticks = Units.niceDistanceTicks(inMeters: 0...5_486, system: .metric)
+        for meters in ticks {
+            XCTAssertEqual(meters.truncatingRemainder(dividingBy: 1_000), 0, accuracy: 0.001,
+                           "\(meters) m is not a round number of kilometres")
+        }
+    }
+
+    func testUnitAwareTicksRejectAFlatRange() {
+        XCTAssertEqual(Units.niceElevationTicks(inMeters: 3_000...3_000, system: .imperial), [])
+        XCTAssertEqual(Units.niceDistanceTicks(inMeters: 0...0, system: .metric), [])
+    }
+
     func testNamesNormalization() {
         XCTAssertEqual(Names.normalizeRouteName("  Maroon Bells  ", id: 7), "Maroon Bells")
         XCTAssertEqual(Names.normalizeRouteName("", id: 3), "Route 3")

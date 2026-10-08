@@ -18,6 +18,17 @@ struct ViewerScreen: View {
     @State private var scrubbedDistance: Double?
     /// Why the basemap is not showing, or nil when it loaded.
     @State private var mapError: String?
+    /// Raised by the fit button; `MapView` watches it to frame the route.
+    @State private var fitToken = 0
+    /// Waypoint names projected into map coordinates, redrawn as the camera moves.
+    @State private var waypointLabels: [ProjectedWaypoint] = []
+    /// Bumped each time the map finishes loading a style.
+    ///
+    /// The corridor estimate can only be worked out once `StyleBuilder` knows
+    /// which tile sets the basemap needs, so it is redone on every style load
+    /// rather than once on appear — which always beat the style and left the
+    /// estimate permanently at zero.
+    @State private var styleGeneration = 0
     /// Which detent the sheet is at. Bound rather than fixed so `-expandedPanel`
     /// can open it, and so the panel knows which of its two layouts to show
     /// without measuring its own height: `simctl` cannot drag a sheet, and the
@@ -43,8 +54,18 @@ struct ViewerScreen: View {
     /// Rebuilt with the shared cache the first time the environment provides it.
     @ViewBuilder
     private var content: some View {
-        MapView(route: route, scrubbedDistance: $scrubbedDistance, loadError: $mapError)
+        MapView(
+            route: route,
+            scrubbedDistance: $scrubbedDistance,
+            loadError: $mapError,
+            onStyleLoaded: { styleGeneration += 1 },
+            waypointLabels: $waypointLabels,
+            fitToken: $fitToken
+        )
             .ignoresSafeArea()
+            .overlay {
+                WaypointLabelOverlay(labels: waypointLabels)
+            }
             .overlay(alignment: .top) {
                 if let mapError {
                     Label {
@@ -69,10 +90,22 @@ struct ViewerScreen: View {
                 // Clear the translucent navigation bar, which the map now runs under.
                 .padding(.top, 52)
             }
-            .overlay(alignment: .bottomTrailing) {
-                LocateButton()
+            .overlay(alignment: .topTrailing) {
+                MapLayerControls()
                     .padding(.trailing, 12)
-                    .padding(.bottom, 12)
+                    .padding(.top, 52)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                // Lifted clear of the sheet. The panel owns the bottom of the
+                // screen, so a flat 12pt inset put the locate button on top of
+                // the stats row — and its hit area swallowed taps meant for the
+                // figures underneath.
+                VStack(spacing: 10) {
+                    FitButton { fitToken += 1 }
+                    LocateButton()
+                }
+                .padding(.trailing, 12)
+                .padding(.bottom, panelHeight + 12)
             }
             .sheet(isPresented: $isPanelPresented) {
                 panel
@@ -88,6 +121,9 @@ struct ViewerScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            .onChange(of: styleGeneration) {
+                Task { await packs.estimate(for: route) }
+            }
             .task {
                 workspace.selectedRouteId = route.id
                 await packs.estimate(for: route)
@@ -126,16 +162,22 @@ struct ViewerScreen: View {
     /// the stats row before.
     private var panel: some View {
         VStack(spacing: 0) {
-            RouteStatsBar(route: route, analysis: analysis)
+            RouteStatsBar(route: route, analysis: analysis, isExpanded: !isPanelCompact)
 
             if !isPanelCompact {
                 if let problem = AppConfig.keyProblemDescription {
+                    // One line, truncated, with the full explanation in Settings'
+                    // Status section and the tooltip. Spelled out here it ran to
+                    // three lines and pushed the profile's own bottom edge off the
+                    // sheet, which is a bad trade for a message about a
+                    // misconfiguration the developer has to fix anyway.
                     Label {
-                        Text(problem).font(.caption)
+                        Text(problem).font(.caption).lineLimit(1)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill")
                     }
                     .foregroundStyle(.orange)
+                    .help(problem)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.bottom, 6)
@@ -149,6 +191,10 @@ struct ViewerScreen: View {
                 )
                 .padding(.horizontal)
                 .padding(.bottom, 6)
+
+                // The chart is coloured by these bands, so it is explained whether
+                // or not the on-map slope overlay happens to be switched on.
+                SlopeLegend()
 
                 OfflinePackBar(route: route, packs: packs)
             }
@@ -166,6 +212,12 @@ struct ViewerScreen: View {
     /// Whether the sheet is at its short detent.
     private var isPanelCompact: Bool {
         panelDetent == .height(AppConfig.statsOnlyPanelHeight)
+    }
+
+    /// How much of the bottom the sheet currently covers, so the map controls can
+    /// sit above it rather than under it.
+    private var panelHeight: CGFloat {
+        isPanelCompact ? AppConfig.statsOnlyPanelHeight : AppConfig.expandedPanelHeight
     }
 
     @ViewBuilder

@@ -46,6 +46,9 @@ final class OfflinePackManager: ObservableObject {
     /// offline row.
     @Published private(set) var cachedTileCount: Int = 0
     @Published private(set) var cachedBytes: Int = 0
+    /// True once an estimate has been asked for while the style's sources were
+    /// still unresolved. Drives the "still working" wording in the offline row.
+    @Published private var isAwaitingSources = false
 
     private let cache: TileCache
     private let styleBuilder: StyleBuilder
@@ -101,13 +104,35 @@ final class OfflinePackManager: ObservableObject {
         zoomRange: ClosedRange<Int> = AppConfig.offlineZoomRange
     ) async {
         let sources = await styleBuilder.basemapSources()
-        guard !sources.isEmpty else { return }
+        guard !sources.isEmpty else {
+            // No sources means the style has not finished resolving, not that
+            // there is nothing to download. Leaving the estimate at zero and
+            // saying nothing is what left a permanently disabled Download button
+            // with "No offline estimate yet" under it.
+            isAwaitingSources = true
+            return
+        }
+        isAwaitingSources = false
         applyEstimate(for: tileKeys(
             for: route,
             sources: sources,
             bufferMeters: bufferMeters,
             zoomRange: zoomRange
         ))
+    }
+
+    /// What to say when there is still no estimate.
+    ///
+    /// "Still working" and "never going to work" are different problems, and
+    /// showing the same dead row for both is why this read as a broken control.
+    var pendingEstimateNote: String {
+        if isAwaitingSources {
+            return "Working out which tiles this route needs…"
+        }
+        if AppConfig.styleSource == .mapLibreDemo {
+            return "Offline download needs a MapTiler basemap. The demo tileset stops at z6."
+        }
+        return "The basemap's tile sources could not be read, so there is nothing to estimate."
     }
 
     /// The estimate, from a tile list that has already been worked out.
