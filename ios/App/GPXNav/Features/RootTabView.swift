@@ -17,7 +17,7 @@ struct RootTabView: View {
     var body: some View {
         TabView(selection: $selection) {
             CreateView()
-                .tabItem { Label("Create", systemImage: "square.and.arrow.down") }
+                .tabItem { Label("Create", systemImage: "square.and.pencil") }
                 .tag(Tab.create)
 
             MapsListView()

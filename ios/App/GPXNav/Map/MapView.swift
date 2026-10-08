@@ -18,6 +18,13 @@ struct MapView: UIViewRepresentable {
     /// covered portion as a trace, the way the web app's `profile-trace` layer
     /// does. Nil hides it.
     @Binding var scrubbedDistance: Double?
+    /// Set when the style or the basemap fails to load, so the screen can say so.
+    ///
+    /// Without this a failure is invisible: MapLibre just leaves the view blank,
+    /// and the only other symptom is that the route polyline is missing too. On
+    /// a device that means a dead-looking screen with nothing to go on, which is
+    /// how a loopback or key problem reads as "the map is broken".
+    @Binding var loadError: String?
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
 
@@ -27,10 +34,19 @@ struct MapView: UIViewRepresentable {
     /// because the layer methods are non-mutating and are also called by the
     /// coordinator, which cannot mutate the representable's own storage.
     private let profileCache = ProfileCache()
+    /// The profile index the trace was last cut at, so repeated frames at the
+    /// same position do no work. Reset whenever the style is replaced, because a
+    /// style swap drops the trace's source and it has to be re-added.
+    private let traceState = TraceState()
 
-    init(route: Route, scrubbedDistance: Binding<Double?> = .constant(nil)) {
+    init(
+        route: Route,
+        scrubbedDistance: Binding<Double?> = .constant(nil),
+        loadError: Binding<String?> = .constant(nil)
+    ) {
         self.route = route
         self._scrubbedDistance = scrubbedDistance
+        self._loadError = loadError
     }
 
     func makeUIView(context: Context) -> MLNMapView {
@@ -53,6 +69,7 @@ struct MapView: UIViewRepresentable {
             // re-adds them on `didFinishLoading`.
             mapView.styleURL = desired
             context.coordinator.hasFitted = false
+            traceState.index = nil
             return
         }
         applyEverything(to: mapView)
@@ -416,7 +433,20 @@ struct MapView: UIViewRepresentable {
         // profile the chart and the stats use.
         let cutIndex = profile.index(nearestTo: distance)
         guard cutIndex > 0 else { return }
-        let coordinates = profile.points[0...cutIndex].map {
+
+        // The scrub moves the trace on every frame of a drag, and the trace is
+        // usually most of the profile, so re-cutting the whole polyline each
+        // frame is what made the gesture stutter. MapLibre has no partial-shape
+        // update, so the cut is quantised instead: at 0.05% of the route a step
+        // is under a pixel wide on screen, and a drag that only re-geometries
+        // every few frames is indistinguishable from a smooth one.
+        let step = max(profile.totalDistance / 2000, 1)
+        let quantised = (distance / step).rounded() * step
+        let quantisedIndex = profile.index(nearestTo: quantised)
+        guard quantisedIndex > 0, quantisedIndex != traceState.index else { return }
+        traceState.index = quantisedIndex
+
+        let coordinates = profile.points[0...quantisedIndex].map {
             CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
         }
         let line = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
@@ -469,6 +499,13 @@ struct MapView: UIViewRepresentable {
         }
     }
 
+    /// Reference box for the last drawn trace index, for the same reason:
+    /// the representable is a struct but the gesture needs to remember where it
+    /// got to.
+    private final class TraceState {
+        var index: Int?
+    }
+
     // MARK: - Coordinator
 
     @MainActor
@@ -481,6 +518,7 @@ struct MapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
+            parent.loadError = nil
             parent.applyEverything(to: mapView)
             if !hasFitted {
                 parent.fitMapToRoute(mapView, route: parent.route, animated: false)
@@ -488,6 +526,12 @@ struct MapView: UIViewRepresentable {
             }
             // After the fit, so fitting the route does not undo the tilt.
             parent.applyTerrainCamera(to: mapView)
+        }
+
+        func mapView(_ mapView: MLNMapView, didFailToLoadWithError error: Error) {
+            let nsError = error as NSError
+            print("[Map] style failed to load: \(nsError.localizedDescription) (\(nsError.domain) \(nsError.code))")
+            parent.loadError = "Map failed to load: \(nsError.localizedDescription)"
         }
     }
 }

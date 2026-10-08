@@ -16,6 +16,8 @@ struct ViewerScreen: View {
     @State private var isPanelPresented = true
     @State private var isSearching = false
     @State private var scrubbedDistance: Double?
+    /// Why the basemap is not showing, or nil when it loaded.
+    @State private var mapError: String?
     /// Which detent the sheet is at. Bound rather than fixed so `-expandedPanel`
     /// can open it, and so the panel knows which of its two layouts to show
     /// without measuring its own height: `simctl` cannot drag a sheet, and the
@@ -41,8 +43,23 @@ struct ViewerScreen: View {
     /// Rebuilt with the shared cache the first time the environment provides it.
     @ViewBuilder
     private var content: some View {
-        MapView(route: route, scrubbedDistance: $scrubbedDistance)
+        MapView(route: route, scrubbedDistance: $scrubbedDistance, loadError: $mapError)
             .ignoresSafeArea()
+            .overlay(alignment: .top) {
+                if let mapError {
+                    Label {
+                        Text(mapError).font(.caption)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.red, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.top, 96)
+                    .padding(.horizontal, 12)
+                }
+            }
             .overlay(alignment: .topLeading) {
                 HStack(spacing: 8) {
                     searchButton
@@ -137,6 +154,12 @@ struct ViewerScreen: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The sheet runs to the bottom of the display, so without this the last
+        // row — the offline download button — sits under the home indicator and
+        // the indicator's tap target swallows presses aimed at it. Padding goes
+        // *inside* the background so the material still fills to the screen edge
+        // and the bar does not end in a visible seam above the home bar.
+        .padding(.bottom, Screen.safeAreaBottom)
         .background(.bar)
     }
 

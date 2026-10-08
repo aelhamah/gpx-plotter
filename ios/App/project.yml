@@ -67,6 +67,11 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
+        # Without this the target builds no icon at all and the app wears the
+        # generic placeholder on the home screen. One 1024 universal slot is
+        # enough — iOS scales it — and it is the same
+        # `logo/platform/ios/AppIcon-1024.png` the web build rasterises from.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # From Secrets.local.xcconfig, so a personal team id never gets
         # committed. Empty means simulator-only; see docs/dev.md.
         DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
