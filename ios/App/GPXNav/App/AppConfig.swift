@@ -248,6 +248,23 @@ enum AppConfig {
     }
 }
 
+/// The display's bottom safe-area inset — the home indicator's height, 0 on
+/// devices with a home button.
+///
+/// A sheet's own safe area cannot be relied on for this: the viewer puts the map
+/// behind the sheet with `ignoresSafeArea`, and a fixed-height detent gives the
+/// sheet content no bottom inset to inherit, so the last row lands on the home
+/// indicator. Read it off the window instead, which is the one place it is
+/// always correct.
+enum Screen {
+    @MainActor
+    static var safeAreaBottom: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let windows = scenes.flatMap { $0.windows }
+        return windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.bottom ?? 0
+    }
+}
+
 enum MapStyle: String, CaseIterable, Identifiable, Sendable {
     case outdoor
     case satellite

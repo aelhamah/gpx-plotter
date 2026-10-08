@@ -16,30 +16,37 @@ struct RouteProfileChart: View {
     /// trace. Nil when nothing is scrubbed.
     @Binding var scrubbedDistance: Double?
 
+    /// How many samples the chart draws.
+    ///
+    /// Each sample is two `Mark`s, and scrubbing re-renders every one of them on
+    /// every frame of the drag, so this is the dominant cost of the gesture. The
+    /// plot is about 340 pt wide and 130 pt tall, so 200 points is already more
+    /// than one per device pixel across and the curve is indistinguishable from
+    /// 600 — which was what made scrubbing stutter.
+    ///
+    /// The stats bar is unaffected: it reads the profile, not these samples.
+    private static let chartSamples = 200
+
     var body: some View {
+        let samples = analysis.samples(maxPoints: Self.chartSamples)
         VStack(spacing: 0) {
             if samples.count < 2 {
                 unavailable
             } else {
-                chart
+                chart(samples)
                     // The chart used to fill this frame, so the x-axis labels
                     // and the area fill collided with the bottom edge.
                     .padding(.bottom, 14)
                     .padding(.top, 4)
             }
-            footer
+            footer(samples)
         }
         .frame(height: 170)
     }
 
-
-
-    private var samples: [ProfileSample] {
-        analysis.samples()
-    }
-
-    private var chart: some View {
-        Chart(samples) { sample in
+    private func chart(_ samples: [ProfileSample]) -> some View {
+        let domain = elevationDomain(samples)
+        return Chart(samples) { sample in
             // The baseline is stated rather than left implicit. An `AreaMark`
             // with a single `y` fills down to zero, and zero is *below* this
             // chart's y domain — a hiking route starts around 3,000 m — so the
@@ -48,7 +55,7 @@ struct RouteProfileChart: View {
             // domain's floor fills to the axis, which is what was wanted.
             AreaMark(
                 x: .value("Distance", sample.distance),
-                yStart: .value("Base", elevationDomain.lowerBound),
+                yStart: .value("Base", domain.lowerBound),
                 yEnd: .value("Elevation", sample.elevation)
             )
             .foregroundStyle(
@@ -82,7 +89,7 @@ struct RouteProfileChart: View {
         }
         // The axes carry raw metres; only the labels are converted, so the
         // plotted values stay in one unit.
-        .chartYScale(domain: elevationDomain)
+        .chartYScale(domain: domain)
         // The chart proxy converts a touch position into a data value, so the
         // axis insets are accounted for. Estimating the plot width from the
         // screen instead put the trace in the wrong place whenever the axes
@@ -139,7 +146,7 @@ struct RouteProfileChart: View {
 
     /// Why there is no line, and what is being done about it.
     @ViewBuilder
-    private var footer: some View {
+    private func footer(_ samples: [ProfileSample]) -> some View {
         if analysis.isFillingTerrain {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
@@ -175,7 +182,7 @@ struct RouteProfileChart: View {
 
     /// Vertical domain padded by 8% of the range at each end, matching
     /// `profileData` in the web app — anchoring at zero would flatten the shape.
-    private var elevationDomain: ClosedRange<Double> {
+    private func elevationDomain(_ samples: [ProfileSample]) -> ClosedRange<Double> {
         let elevations = samples.map(\.elevation)
         guard let low = elevations.min(), let high = elevations.max() else { return 0...1 }
         let padding = ((high - low) == 0 ? 1 : high - low) * 0.08
