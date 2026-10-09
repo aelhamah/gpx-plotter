@@ -116,8 +116,21 @@ enum AppConfig {
     /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
     static let terrainPitch: CGFloat = 55
 
-    /// Height of the sheet's short detent, which shows only the stats row.
-    static let statsOnlyPanelHeight: CGFloat = 96
+    /// Height of the sheet's short detent: the expand affordance and the figures.
+    ///
+    /// The content is 28 (chevron) + 88 (two rows of figures) + 34 (home indicator)
+    /// = 150, and the detent has to **clear** it: a sheet taller than its detent
+    /// does not scroll, it compresses from the top, so the first row is what
+    /// disappears. That is how the chevron once measured 22pt in a layout pass and
+    /// still painted as a 3pt sliver.
+    ///
+    /// 132 is below the content on purpose. The sheet is sized by whichever is
+    /// larger, so a detent under the content's natural height lands the sheet on
+    /// the content exactly and the slack becomes the home-indicator inset instead
+    /// of a visible band. Verified on the simulator: 132 renders a 143pt sheet
+    /// against 150pt of content, and 150 rendered a 175pt sheet with 65pt of
+    /// nothing under the figures.
+    static let statsOnlyPanelHeight: CGFloat = 132
 
     /// Height of the sheet's tall detent: the stats rows, the profile, the slope
     /// legend, and the offline row, and nothing more.
@@ -127,12 +140,17 @@ enum AppConfig {
     /// profile is for — scrubbing it traces the position on the map, so the map
     /// has to stay visible while the sheet is up.
     ///
-    /// 436 pt is what the content measures: stats 92 + key warning 22 + chart 170
-    /// + scrub caption 20 + legend 44 + offline row 54 + home indicator 34, plus a
-    /// little slack. An earlier 466 left a visible band of dead space under the
-    /// offline row, and a 396 clipped the top stats row behind the sheet's
-    /// rounded corner.
-    static let expandedPanelHeight: CGFloat = 436
+    /// 460 pt is the content: chevron 28 + two stat rows 88 + key warning 22 + chart
+    /// 170 + scrub caption 20 + legend 44 + offline row 54 + home indicator 34.
+    /// 464 leaves a few points of slack. An earlier 466 left a visible band of
+    /// dead space under the offline row and a 396 clipped the top stats row behind
+    /// the sheet's rounded corner. Same ceiling as `statsOnlyPanelHeight`: the
+    /// detent has to clear the content or the sheet eats its own first row.
+    ///
+    /// The content is not fixed — with a MapTiler key the warning goes away, and
+    /// the scrub caption after the first drag — so this is sized for the tallest
+    /// layout and the slack collects harmlessly at the bottom.
+    static let expandedPanelHeight: CGFloat = 464
 
     /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
     /// no Terrain-RGB source to point the terrain block at.

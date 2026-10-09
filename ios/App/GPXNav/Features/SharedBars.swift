@@ -24,7 +24,6 @@ struct OfflinePackBar: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
-        .background(.bar)
     }
 
     private var subtitle: String {
@@ -96,21 +95,21 @@ struct RouteStatsBar: View {
     /// is how the bar once reported 1,493 ft of ascent next to a chart whose
     /// axis was 3,600 m.
     @ObservedObject var analysis: RouteAnalysis
-    /// Whether the panel is expanded. Only then is there room for the second
-    /// row — the collapsed detent is sized to the four headline figures.
-    var isExpanded: Bool = false
 
     var body: some View {
         let summary = RouteSummary(route: route, system: workspace.unitSystem, analysis: analysis)
         VStack(spacing: 0) {
+            // Both rows in every detent. They used to be one row when collapsed,
+            // which left the short sheet as four figures above a band of empty
+            // material — and the three extra figures are the ones a hiker wants
+            // most (how low, how steep, how many points) and could not see without
+            // expanding to get at a chart they had not asked for.
             row(summary?.primary ?? [])
-            if isExpanded, let secondary = summary?.secondary, !secondary.isEmpty {
-                row(secondary)
-                    .padding(.top, 8)
+            if let secondary = summary?.secondary, !secondary.isEmpty {
+                row(secondary).padding(.top, 8)
             }
         }
         .padding(.vertical, 10)
-        .background(.bar)
     }
 
     private func row(_ stats: [(label: String, value: String)]) -> some View {

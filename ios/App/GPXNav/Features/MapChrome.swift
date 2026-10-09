@@ -10,6 +10,32 @@ enum MapChrome {
     static var bottomInset: CGFloat { AppConfig.statsOnlyPanelHeight + 12 }
     /// How far in from a screen edge a waypoint label is allowed to sit.
     static let labelEdgeMargin: CGFloat = 68
+    /// Height of the sheet's expand/collapse affordance row.
+    static let expandChevronHeight: CGFloat = 28
+}
+
+/// Says which way the sheet drags, standing in for the system drag indicator.
+///
+/// The grabber it replaces is a neutral pill that says nothing about the result,
+/// which left the collapsed sheet looking like an unfinished row: four figures and
+/// then a band of empty material. This fills that band with the actual affordance
+/// and flips with the detent, so the collapsed state reads as "there is more" and
+/// the expanded one as "there is less".
+struct PanelExpandChevron: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            // Top padding, because the sheet's 20pt corner radius clips whatever
+            // sits flush against the edge and the glyph was being sliced in half.
+            .padding(.top, 6)
+            .frame(height: MapChrome.expandChevronHeight)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .accessibilityLabel(isExpanded ? "Collapse the panel" : "Expand the panel")
+    }
 }
 
 /// Waypoint names, drawn over the map in the map view's own coordinates.
@@ -156,7 +182,6 @@ struct SlopeLegend: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
     }
 }
 

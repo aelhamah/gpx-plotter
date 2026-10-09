@@ -114,7 +114,7 @@ struct ViewerScreen: View {
                         selection: $panelDetent
                     )
                     .presentationBackgroundInteraction(.enabled)
-                    .presentationDragIndicator(.visible)
+                    .presentationDragIndicator(.hidden)
                     .presentationCornerRadius(20)
             }
             .navigationTitle(route.name)
@@ -162,7 +162,13 @@ struct ViewerScreen: View {
     /// the stats row before.
     private var panel: some View {
         VStack(spacing: 0) {
-            RouteStatsBar(route: route, analysis: analysis, isExpanded: !isPanelCompact)
+            // In place of the system drag indicator, which is replaced so the
+            // collapsed sheet says what the drag will do. A grabber alone left the
+            // short detent reading as a dead white band: the four figures, then
+            // roughly 60 pt of nothing, which looks broken rather than collapsed.
+            PanelExpandChevron(isExpanded: !isPanelCompact)
+
+            RouteStatsBar(route: route, analysis: analysis)
 
             if !isPanelCompact {
                 if let problem = AppConfig.keyProblemDescription {
