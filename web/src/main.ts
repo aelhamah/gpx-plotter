@@ -22,6 +22,7 @@ import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
+import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, terrainAt, transitionProgress, type TerrainView } from './terrain';
 import './style.css';
 
 let routes: Route[] = [];
@@ -33,6 +34,10 @@ let waypointMode = false;
 let mergePickMode = false;
 let mergePick: Route | null = null;
 let terrainEnabled = false;
+/** Where the 3D transition has got to: the camera's tilt and the relief beneath it (see `terrain.ts`). */
+let terrainView: TerrainView = FLAT_VIEW;
+/** Bumped per transition so an interrupted one stops driving the map. */
+let terrainTransition = 0;
 let reliefEnabled = false;
 let satelliteEnabled = false;
 let slopeEnabled = false;
@@ -208,8 +213,76 @@ function applyGlobe() {
   map.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 14, 0] });
 }
 
+/**
+ * Build the terrain if it is missing, then put it at whatever exaggeration the
+ * 3D transition has reached. Called on every `style.load` as well, because
+ * swapping basemaps tears the terrain down and it has to be rebuilt at the
+ * exaggeration already showing rather than snapping back to full relief.
+ */
 function applyTerrain() {
-  map.setTerrain(terrainEnabled ? { source: 'terrain', exaggeration: 1.15 } : null);
+  // Turning the relief off is not "set the terrain to nothing": the transition
+  // needs the terrain alive to shrink the relief away, and only the last frame
+  // of that transition tears it down.
+  if (!terrainEnabled && !map.getTerrain()) return;
+  setTerrainExaggeration(terrainView.exaggeration);
+}
+
+/**
+ * `setTerrain` is MapLibre's only public terrain API, and every call rebuilds
+ * the terrain along with a pool of thirty render-to-texture framebuffers — far
+ * too much to spend once per frame. The exaggeration it was handed, though, is
+ * a plain field the renderer re-reads on every frame, which is what lets the
+ * relief ramp rather than snap. The field is not in the type definitions, so it
+ * is reached through a cast; should a future MapLibre move it, the cast stops
+ * matching and every frame falls back to the public call, which is slower but
+ * still correct.
+ */
+function setTerrainExaggeration(exaggeration: number) {
+  const terrain = (map as unknown as { terrain?: { exaggeration: number } }).terrain;
+  if (terrain) terrain.exaggeration = exaggeration;
+  else map.setTerrain({ source: 'terrain', exaggeration });
+  map.triggerRepaint();
+}
+
+/**
+ * Move between the flat map and the 3D relief map (see issue #6).
+ *
+ * `easeTo` owns the camera, so MapLibre keeps firing its move and pitch events —
+ * the workspace view is persisted on `moveend` — and a rAF loop on the same
+ * curve and the same duration owns the relief. Doing the two as separate steps
+ * is what used to jolt: the ground snapped to full height in one frame and the
+ * tilt only began afterwards, so the snap was the first thing the eye caught.
+ */
+function easeToTerrain(target: TerrainView) {
+  const from = terrainView;
+  // A toggle part-way through restarts from wherever the last one got to, so
+  // the relief carries on from there instead of jumping back to flat. The token
+  // retires the loop still running from that last one.
+  const token = ++terrainTransition;
+  const startedAt = performance.now();
+  // Build the terrain at the exaggeration already reached before the camera
+  // starts moving. Starting from flat, that first frame is indistinguishable
+  // from the map the user was just looking at.
+  applyTerrain();
+  map.easeTo({ pitch: target.pitch, duration: TERRAIN_TRANSITION_MS });
+  const frame = () => {
+    if (token !== terrainTransition) return;
+    const progress = transitionProgress(performance.now() - startedAt, TERRAIN_TRANSITION_MS);
+    terrainView = terrainAt(from, target, progress);
+    setTerrainExaggeration(terrainView.exaggeration);
+    if (progress < 1) requestAnimationFrame(frame);
+    // Only now that the ground is flat again is there anything to gain by
+    // tearing the terrain down; doing it earlier flattens it in a single frame
+    // while the camera is still tilted.
+    else if (!terrainEnabled) map.setTerrain(null);
+  };
+  requestAnimationFrame(frame);
+}
+
+function setTerrainEnabled(enabled: boolean) {
+  terrainEnabled = enabled;
+  $('terrain-toggle').classList.toggle('active', enabled);
+  easeToTerrain(enabled ? RELIEF_VIEW : FLAT_VIEW);
 }
 
 function addDataLayers() {
@@ -1353,12 +1426,7 @@ function setSnappingEnabled(enabled: boolean) {
 
 $('snap-toggle').addEventListener('click', () => setSnappingEnabled(!snappingEnabled));
 
-$('terrain-toggle').addEventListener('click', () => {
-  terrainEnabled = !terrainEnabled;
-  if (terrainEnabled) { applyTerrain(); map.easeTo({ pitch: 55, duration: 600 }); }
-  else { applyTerrain(); map.easeTo({ pitch: 0, duration: 600 }); }
-  $('terrain-toggle').classList.toggle('active', terrainEnabled);
-});
+$('terrain-toggle').addEventListener('click', () => setTerrainEnabled(!terrainEnabled));
 
 $('relief-toggle').addEventListener('click', () => {
   reliefEnabled = !reliefEnabled;

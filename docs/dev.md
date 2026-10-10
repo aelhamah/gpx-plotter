@@ -265,6 +265,7 @@ web/tests/
   simplify.test.ts   downsampling + distance-based budget
   style.test.ts      pointer-events layering in style.css
   fitPadding.test.ts sidebar-aware fitBounds padding
+  terrain.test.ts    the flat ↔ 3D transition: easing, clamping, relief and tilt in step
   snapHaloRidge.test.ts  snapping + trail-following measured on a real recorded hike
   sidebar.test.ts    sidebar controls are reachable and render in their default state
 ```
@@ -371,7 +372,9 @@ Because the app is map- and DOM-heavy, some checks are manual:
   confirm the downsample dialog, stats, and profile.
 - Draw a route, drag points, add/move/rename/delete a waypoint, undo/redo.
 - Toggle satellite, terrain, relief, and slope shading (watch for layer loss
-  after style swaps).
+  after style swaps). For terrain, watch the transition in both directions and on
+  a second click part-way through: the relief should rise with the tilt rather
+  than snapping to full height first, and should sink before the map flattens.
 - Press the locate button: the browser should prompt for location permission
   (only on the first press), the blue dot and its accuracy halo should land on
   the map, and the camera should frame the halo. Block the permission in the
