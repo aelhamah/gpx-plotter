@@ -47,7 +47,7 @@ The native app has two pieces, described in full in [`ios-plan.md`](ios-plan.md)
 ```bash
 cd ios/RouteKit
 swift build       # builds the library
-swift test        # runs 139 XCTest cases
+swift test        # runs 152 XCTest cases
 ```
 
 Targets iOS 17 / macOS 14, Swift 6 language mode. CI runs both commands in
@@ -155,6 +155,28 @@ xcrun simctl launch booted com.example.GPXNav
 
 `GPXNAV_STYLE_URL` (environment variable) overrides the style URL, which is how
 you point the app at a local server to inspect the headers iOS sends.
+
+The route screen's own toggles — basemap, relief, slope, 3D terrain, fit, locate,
+and the profile scrub — are reachable without arguments on a device, but
+`simctl launch` cannot tap, so the flags above exist for those. Anything the
+flags cannot reach is exercised on a device; see
+[`ios-plan.md`](ios-plan.md) for what is still unverified.
+
+### A MapLibre Native trap worth knowing
+
+`NSExpression(forKeyPath: "attribute")` does **not** resolve a feature attribute
+for a style layer's paint or layout property on MapLibre Native 6.x — a
+`text-field` set that way leaves the layer drawing nothing at all, while a
+constant string on the identical layer renders fine. Zoom expressions are
+unaffected, and are built with MapLibre's own
+`init(forMLNInterpolating:curveType:parameters:stops:)` over
+`NSExpression.zoomLevelVariable` rather than a format string, because
+`NSExpression(forFormat:arguments:)` does not exist on Darwin Foundation.
+
+Waypoint names are therefore drawn in SwiftUI from
+`MLNMapView.convert(_:toPointTo:)` rather than with an `MLNSymbolStyleLayer`; that
+projection goes through the camera, so the labels stay on their waypoint under
+pitch and 3D terrain.
 
 The toggle flags exist because `simctl launch` cannot tap, and System Events
 needs Accessibility permission, so the Settings screen cannot be driven from a
