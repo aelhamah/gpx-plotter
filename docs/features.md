@@ -9,7 +9,9 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   preserved across the style swap, and all custom layers + 3D terrain are
   re-applied after the new style loads.
 - **3D terrain** toggle using MapTiler Terrain-RGB with a 1.15× exaggeration,
-  plus ⌘/Ctrl-drag to tilt and rotate the camera.
+  plus ⌘/Ctrl-drag to tilt and rotate the camera. The relief and the tilt move
+  together in one eased move, so the ground rises out of the flat map instead of
+  snapping to full height and then tipping.
 - **Relief hillshade** toggle for a soft shaded-relief overlay.
 - **Slope-angle shading**: the terrain is colorized into avalanche bands
   (`<20°` green, `20–30°` yellow, `30–35°` orange, `35–40°` red, `40–45°`

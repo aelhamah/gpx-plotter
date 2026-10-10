@@ -55,6 +55,7 @@ web/                  The browser app — a self-contained Vite project
   src/segments.ts     Pure: per-segment bearing + midpoint, screen-space thinning
   src/arrows.ts       Direction-arrow icon, GeoJSON builder, and symbol layer spec
   src/fitPadding.ts   Pure: how much of the map the sidebar covers, per edge
+  src/terrain.ts      Pure: the flat ↔ 3D transition (pitch + relief exaggeration)
   src/geocode.ts      MapTiler geocoding search (peaks, towns, trails, trailheads)
   src/serviceStatus.ts  Names the service behind a failure and renders the banner
   src/locate.ts       Pure geolocation math: accuracy halo, camera zoom, permission copy
@@ -401,7 +402,9 @@ All mutable state is module-scoped in `main.ts`:
 - `routes: Route[]`, `waypoints: Waypoint[]`
 - `selectedRouteId`, `selectedIndex` (selected route point), `selectedWaypointIndex`
 - `drawing`, `waypointMode`
-- `terrainEnabled`, `reliefEnabled`, `satelliteEnabled`, `slopeEnabled`
+- `terrainEnabled`, `terrainView` (pitch + exaggeration the 3D transition has
+  reached), `terrainTransition` (token that cancels a transition in flight),
+  `reliefEnabled`, `satelliteEnabled`, `slopeEnabled`
 - `locationFix: LocationFix | null` (last device position; memory only, never persisted)
 - `unitSystem`
 - `history: AppState[]`, `future: AppState[]` (bounded to 50 snapshots)
@@ -418,6 +421,29 @@ The map is created with the Outdoor style. On `load` and on every `style.load`
 (the latter fires after style swaps such as switching to satellite), the app
 calls `addDataLayers()` and `applyTerrain()` so custom sources/layers and 3D
 terrain are re-applied — MapLibre drops them when the style is replaced.
+
+### The move into 3D
+
+The 3D toggle changes two things at once — the camera's pitch, and how far the
+ground is lifted — and has to change them *together*. Setting the terrain first
+and easing the camera afterwards jolts: the ground snaps to full relief in a
+single frame, which also snaps the camera's height above the map centre
+(MapLibre re-derives it from the terrain every frame), and only then does the
+tilt begin.
+
+So `easeToTerrain()` starts the terrain at exaggeration `0` — pixel-identical
+to having no terrain — and drives it up on a `requestAnimationFrame` loop while
+`map.easeTo()` drives the pitch. Both use `terrain.ts`'s easing and duration, so
+the two halves of the move stay in step. Coming back down, the terrain is torn
+down only once the relief has reached zero, instead of vanishing in one frame
+while the camera is still tilted. Re-toggling mid-flight restarts from whatever
+the previous transition had reached.
+
+MapLibre's only public terrain API is `setTerrain`, and every call rebuilds the
+terrain plus a pool of thirty render-to-texture framebuffers, so it is used once
+per build. The exaggeration is a plain field the renderer re-reads every frame;
+`setTerrainExaggeration()` writes that field directly, behind a cast, so a
+MapLibre release that moves it degrades to the public call rather than breaking.
 
 Sources and layers:
 
