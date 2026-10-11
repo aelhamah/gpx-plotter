@@ -6,12 +6,16 @@ import RouteKit
 enum MapChrome {
     /// The translucent navigation bar the map runs under.
     static let topInset: CGFloat = 52
-    /// Room for the bottom sheet at its shortest detent, plus the home indicator.
-    static var bottomInset: CGFloat { AppConfig.statsOnlyPanelHeight + 12 }
+    /// Room for the bottom sheet at its shortest detent, plus a margin.
+    ///
+    /// Drives where the map's own buttons sit so they clear the sheet, which is
+    /// why it follows the panel's height rather than being its own number.
+    @MainActor
+    static var bottomInset: CGFloat {
+        AppConfig.collapsedPanelHeight(safeAreaBottom: Screen.safeAreaBottom) + 12
+    }
     /// How far in from a screen edge a waypoint label is allowed to sit.
     static let labelEdgeMargin: CGFloat = 68
-    /// Height of the sheet's expand/collapse affordance row.
-    static let expandChevronHeight: CGFloat = 28
 }
 
 /// Says which way the sheet drags, standing in for the system drag indicator.
@@ -31,7 +35,7 @@ struct PanelExpandChevron: View {
             // Top padding, because the sheet's 20pt corner radius clips whatever
             // sits flush against the edge and the glyph was being sliced in half.
             .padding(.top, 6)
-            .frame(height: MapChrome.expandChevronHeight)
+            .frame(height: PanelMetrics.expandChevronHeight)
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
             .accessibilityLabel(isExpanded ? "Collapse the panel" : "Expand the panel")
@@ -182,6 +186,7 @@ struct SlopeLegend: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: PanelMetrics.legendHeight)
     }
 }
 

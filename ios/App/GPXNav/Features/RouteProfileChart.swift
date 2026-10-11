@@ -41,7 +41,11 @@ struct RouteProfileChart: View {
             }
             footer(samples)
         }
-        .frame(height: 170)
+        // A floor, not a height. The panel is what makes this row flexible — see
+        // `ViewerScreen` — because a `.frame(maxHeight: .infinity)` applied here
+        // would sit inside this view's own stack, and the panel would only ever
+        // see the stack's ideal height, so nothing would actually expand.
+        .frame(minHeight: PanelMetrics.chartMinimumHeight)
     }
 
     private func chart(_ samples: [ProfileSample]) -> some View {

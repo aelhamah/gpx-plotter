@@ -24,6 +24,7 @@ struct OfflinePackBar: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
+        .frame(height: PanelMetrics.offlineRowHeight)
     }
 
     private var subtitle: String {
@@ -110,6 +111,7 @@ struct RouteStatsBar: View {
             }
         }
         .padding(.vertical, 10)
+        .frame(height: PanelMetrics.statsBlockHeight)
     }
 
     private func row(_ stats: [(label: String, value: String)]) -> some View {

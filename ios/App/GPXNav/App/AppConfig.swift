@@ -118,39 +118,40 @@ enum AppConfig {
 
     /// Height of the sheet's short detent: the expand affordance and the figures.
     ///
-    /// The content is 28 (chevron) + 88 (two rows of figures) + 34 (home indicator)
-    /// = 150, and the detent has to **clear** it: a sheet taller than its detent
-    /// does not scroll, it compresses from the top, so the first row is what
-    /// disappears. That is how the chevron once measured 22pt in a layout pass and
-    /// still painted as a 3pt sliver.
-    ///
-    /// 132 is below the content on purpose. The sheet is sized by whichever is
-    /// larger, so a detent under the content's natural height lands the sheet on
-    /// the content exactly and the slack becomes the home-indicator inset instead
-    /// of a visible band. Verified on the simulator: 132 renders a 143pt sheet
-    /// against 150pt of content, and 150 rendered a 175pt sheet with 65pt of
-    /// nothing under the figures.
-    static let statsOnlyPanelHeight: CGFloat = 132
+    /// Computed from `PanelMetrics` and the display's bottom inset rather than
+    /// written down. Hardcoding it is what let the figures end up half-hidden
+    /// behind the sheet's rounded corner on a device whose inset differed from the
+    /// one the number was measured on.
+    @MainActor
+    static func collapsedPanelHeight(safeAreaBottom: CGFloat) -> CGFloat {
+        PanelMetrics.expandChevronHeight
+            + PanelMetrics.statsBlockHeight
+            + safeAreaBottom
+    }
 
-    /// Height of the sheet's tall detent: the stats rows, the profile, the slope
+    /// Height of the sheet's tall detent: the figures, the profile, the slope
     /// legend, and the offline row, and nothing more.
     ///
-    /// Sized to the content rather than to the screen, on purpose. `.large` put
-    /// the sheet over almost the whole display, which is the opposite of what a
-    /// profile is for — scrubbing it traces the position on the map, so the map
-    /// has to stay visible while the sheet is up.
+    /// Sized for the **tallest** layout — every optional row present — because the
+    /// profile chart is flexible and absorbs whatever is left over. Under-reporting
+    /// here would shrink the chart rather than show more of it, and the rows that
+    /// come and go are the warning (no MapTiler key) and the scrub caption (gone
+    /// after the first drag).
     ///
-    /// 460 pt is the content: chevron 28 + two stat rows 88 + key warning 22 + chart
-    /// 170 + scrub caption 20 + legend 44 + offline row 54 + home indicator 34.
-    /// 464 leaves a few points of slack. An earlier 466 left a visible band of
-    /// dead space under the offline row and a 396 clipped the top stats row behind
-    /// the sheet's rounded corner. Same ceiling as `statsOnlyPanelHeight`: the
-    /// detent has to clear the content or the sheet eats its own first row.
-    ///
-    /// The content is not fixed — with a MapTiler key the warning goes away, and
-    /// the scrub caption after the first drag — so this is sized for the tallest
-    /// layout and the slack collects harmlessly at the bottom.
-    static let expandedPanelHeight: CGFloat = 464
+    /// `.large` was rejected: it covers almost the whole display, and the map has
+    /// to stay visible while the sheet is up, because scrubbing the profile traces
+    /// the position on it.
+    @MainActor
+    static func expandedPanelHeight(safeAreaBottom: CGFloat) -> CGFloat {
+        PanelMetrics.expandChevronHeight
+            + PanelMetrics.statsBlockHeight
+            + PanelMetrics.keyWarningHeight
+            + PanelMetrics.chartHeight
+            + PanelMetrics.chartSpacing
+            + PanelMetrics.legendHeight
+            + PanelMetrics.offlineRowHeight
+            + safeAreaBottom
+    }
 
     /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
     /// no Terrain-RGB source to point the terrain block at.
@@ -267,6 +268,47 @@ enum AppConfig {
         }
         return nil
     }
+}
+
+/// Every height in the route screen's bottom sheet, in one place.
+///
+/// These were hand-added to the detent arithmetic in a comment, and were wrong
+/// twice, which is the whole reason this type exists. The failure is silent: a
+/// sheet whose content is taller than its detent does not scroll, it **compresses
+/// from the top**, so the first row is what vanishes — a chevron once measured
+/// 22pt in a layout pass while painting as a 3pt sliver.
+///
+/// Each row below is applied as an explicit `.frame(height:)` by the view that
+/// draws it, so the declared height and the measured height are the same number
+/// and cannot drift apart. Measured on the iPhone 17 Pro simulator, which is the
+/// worst case for the text-driven rows; larger type or a taller bottom inset will
+/// need these revisited, and the arithmetic in `AppConfig` will carry the change
+/// to both detents on its own.
+enum PanelMetrics {
+    /// The expand/collapse affordance replacing the system drag indicator.
+    static let expandChevronHeight: CGFloat = 28
+
+    /// Both rows of route figures and the gap between them, padding included.
+    static let statsBlockHeight: CGFloat = 89
+
+    /// The key-missing warning. Only present with no MapTiler key.
+    static let keyWarningHeight: CGFloat = 24
+
+    /// The six avalanche slope bands.
+    static let legendHeight: CGFloat = 47
+
+    /// The offline download row. Tallest when its explanation wraps to two lines.
+    static let offlineRowHeight: CGFloat = 71
+
+    /// Padding under the profile chart.
+    static let chartSpacing: CGFloat = 6
+
+    /// Floor for the profile chart, so it cannot collapse on a short sheet.
+    static let chartMinimumHeight: CGFloat = 140
+
+    /// The chart's height in the tallest layout — which is what the expanded
+    /// detent is built from. Everywhere else it is flexible and takes the slack.
+    static let chartHeight: CGFloat = 176
 }
 
 /// The display's bottom safe-area inset — the home indicator's height, 0 on
