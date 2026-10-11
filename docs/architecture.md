@@ -404,6 +404,7 @@ All mutable state is module-scoped in `main.ts`:
 - `drawing`, `waypointMode`
 - `terrainEnabled`, `terrainView` (pitch + exaggeration the 3D transition has
   reached), `terrainTransition` (token that cancels a transition in flight),
+  `terrainWarming` (terrain built ahead of a click, drawing flat),
   `reliefEnabled`, `satelliteEnabled`, `slopeEnabled`
 - `locationFix: LocationFix | null` (last device position; memory only, never persisted)
 - `unitSystem`
@@ -439,9 +440,28 @@ down only once the relief has reached zero, instead of vanishing in one frame
 while the camera is still tilted. Re-toggling mid-flight restarts from whatever
 the previous transition had reached.
 
+### Why the terrain is built on hover
+
+Ramping the relief is not enough on its own. Enabling MapLibre's terrain costs
+a few hundred milliseconds of solid main thread — a pool of thirty
+render-to-texture framebuffers, a DEM tile reload, then the tiles themselves —
+and MapLibre only charges it when the terrain is switched on. Build it on the
+click and the 700 ms transition runs to completion *inside* that stall: measured
+against a live preview on a retina canvas, the page painted nothing for the
+length of the transition and the first frame the user saw was already the end
+state.
+
+`warmUpTerrain()` therefore runs on `pointerenter` and `focus` of the toggle,
+at exaggeration `0`, where it draws exactly what no terrain draws. The click
+then only writes a number per frame. A click that outruns the warm-up waits on
+the unchanged map rather than cutting, capped by `TERRAIN_WARM_TIMEOUT_MS` so a
+terrain service that never answers cannot leave the button dead. Measured at
+idle, a terrain sitting at exaggeration `0` costs nothing: 61.0 fps with it
+against 60.7 fps without.
+
 MapLibre's only public terrain API is `setTerrain`, and every call rebuilds the
-terrain plus a pool of thirty render-to-texture framebuffers, so it is used once
-per build. The exaggeration is a plain field the renderer re-reads every frame;
+terrain plus the pool of framebuffers, so it is used once per build. The
+exaggeration is a plain field the renderer re-reads every frame;
 `setTerrainExaggeration()` writes that field directly, behind a cast, so a
 MapLibre release that moves it degrades to the public call rather than breaking.
 

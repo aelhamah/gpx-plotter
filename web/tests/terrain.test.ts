@@ -5,7 +5,9 @@ import {
   TERRAIN_EXAGGERATION,
   TERRAIN_PITCH,
   TERRAIN_TRANSITION_MS,
+  TERRAIN_WARM_TIMEOUT_MS,
   easeInOutCubic,
+  shouldKeepWaiting,
   terrainAt,
   transitionProgress,
 } from '../src/terrain';
@@ -115,5 +117,24 @@ describe('terrainAt', () => {
     expect(resumed.pitch).toBeLessThan(TERRAIN_PITCH);
     expect(resumed.exaggeration).toBeGreaterThan(interrupted.exaggeration);
     expect(resumed.exaggeration).toBeLessThan(TERRAIN_EXAGGERATION);
+  });
+});
+
+describe('shouldKeepWaiting', () => {
+  it('waits while the DEM tiles are still arriving', () => {
+    expect(shouldKeepWaiting(false, 0)).toBe(true);
+    expect(shouldKeepWaiting(false, TERRAIN_WARM_TIMEOUT_MS - 1)).toBe(true);
+  });
+  it('stops as soon as the terrain is ready', () => {
+    expect(shouldKeepWaiting(true, 0)).toBe(false);
+    expect(shouldKeepWaiting(true, TERRAIN_WARM_TIMEOUT_MS)).toBe(false);
+  });
+  it('gives up at the timeout, so a dead terrain service cannot wedge the toggle', () => {
+    expect(shouldKeepWaiting(false, TERRAIN_WARM_TIMEOUT_MS)).toBe(false);
+    expect(shouldKeepWaiting(false, TERRAIN_WARM_TIMEOUT_MS + 5000)).toBe(false);
+  });
+  it('respects a custom timeout', () => {
+    expect(shouldKeepWaiting(false, 500, 1000)).toBe(true);
+    expect(shouldKeepWaiting(false, 1000, 1000)).toBe(false);
   });
 });

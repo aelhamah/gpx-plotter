@@ -27,6 +27,15 @@ export const FLAT_PITCH = 0;
  */
 export const TERRAIN_TRANSITION_MS = 700;
 
+/**
+ * How long a warm-up may hold the toggle before the move starts anyway.
+ *
+ * Waiting for the DEM tiles is worth it — relief that grows in as the data
+ * arrives reads far better than a cut — but a slow or failing terrain service
+ * must not be able to wedge the button.
+ */
+export const TERRAIN_WARM_TIMEOUT_MS = 1500;
+
 /** The camera's pitch and the relief beneath it — the two halves of one frame. */
 export type TerrainView = {
   pitch: number;
@@ -68,4 +77,24 @@ export function terrainAt(from: TerrainView, to: TerrainView, progress: number):
     pitch: from.pitch + (to.pitch - from.pitch) * progress,
     exaggeration: from.exaggeration + (to.exaggeration - from.exaggeration) * progress,
   };
+}
+
+/**
+ * Whether a warm-up should keep waiting for the terrain's DEM tiles.
+ *
+ * Building the terrain costs a few hundred milliseconds of main thread — a pool
+ * of render-to-texture framebuffers and a full DEM tile reload — and MapLibre
+ * only issues that cost when the terrain is enabled. Doing it on the click is
+ * what made the toggle cut rather than move: the transition ran to completion
+ * inside the stall, so the first frame anyone saw was already the end state.
+ * Enabling it ahead of the click, at an exaggeration of zero so it draws
+ * nothing, moves that cost off the click instead.
+ *
+ * The DEM tiles themselves keep arriving afterwards. Waiting for them is worth
+ * it, but only up to a point — past `timeout` the move starts with whatever
+ * relief has landed, because a terrain service that never answers must not be
+ * able to wedge the button.
+ */
+export function shouldKeepWaiting(sourceLoaded: boolean, elapsed: number, timeout = TERRAIN_WARM_TIMEOUT_MS): boolean {
+  return !sourceLoaded && elapsed < timeout;
 }

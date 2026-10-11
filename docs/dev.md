@@ -375,6 +375,9 @@ Because the app is map- and DOM-heavy, some checks are manual:
   after style swaps). For terrain, watch the transition in both directions and on
   a second click part-way through: the relief should rise with the tilt rather
   than snapping to full height first, and should sink before the map flattens.
+  Hover the 3D toggle before clicking it — that is what builds the terrain ahead
+  of the click, and clicking straight away (or on a touch screen, where there is
+  no hover) makes the toggle wait on the unchanged map instead.
 - Press the locate button: the browser should prompt for location permission
   (only on the first press), the blue dot and its accuracy halo should land on
   the map, and the camera should frame the halo. Block the permission in the

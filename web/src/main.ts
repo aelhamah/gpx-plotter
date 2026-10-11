@@ -22,7 +22,7 @@ import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
-import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, terrainAt, transitionProgress, type TerrainView } from './terrain';
+import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, shouldKeepWaiting, terrainAt, transitionProgress, type TerrainView } from './terrain';
 import './style.css';
 
 let routes: Route[] = [];
@@ -38,6 +38,8 @@ let terrainEnabled = false;
 let terrainView: TerrainView = FLAT_VIEW;
 /** Bumped per transition so an interrupted one stops driving the map. */
 let terrainTransition = 0;
+/** Set while the terrain is built ahead of a click; it draws flat until it is not. */
+let terrainWarming = false;
 let reliefEnabled = false;
 let satelliteEnabled = false;
 let slopeEnabled = false;
@@ -196,6 +198,9 @@ map.on('style.load', () => {
   // it recovered is no longer true.
   serviceStatus.resolve('style');
   serviceStatus.resolve('basemap');
+  // A new style dropped whatever terrain was built, so a warm-up in flight
+  // belongs to a style that no longer exists.
+  terrainWarming = false;
   addDataLayers();
   applyGlobe();
   applyTerrain();
@@ -214,34 +219,70 @@ function applyGlobe() {
 }
 
 /**
- * Build the terrain if it is missing, then put it at whatever exaggeration the
- * 3D transition has reached. Called on every `style.load` as well, because
- * swapping basemaps tears the terrain down and it has to be rebuilt at the
- * exaggeration already showing rather than snapping back to full relief.
+ * Build the terrain if it is missing, then put it at whatever exaggeration it
+ * should be showing. Called on every `style.load` as well, because swapping
+ * basemaps tears the terrain down and it has to be rebuilt at the exaggeration
+ * already showing rather than snapping back to full relief.
  */
 function applyTerrain() {
   // Turning the relief off is not "set the terrain to nothing": the transition
   // needs the terrain alive to shrink the relief away, and only the last frame
-  // of that transition tears it down.
-  if (!terrainEnabled && !map.getTerrain()) return;
-  setTerrainExaggeration(terrainView.exaggeration);
+  // of that transition tears it down. A warm-up keeps it alive for the same
+  // reason, so the click that follows does not have to pay to build it.
+  if (!terrainEnabled && !terrainWarming && !map.getTerrain()) return;
+  setTerrainExaggeration(terrainWarming ? FLAT_VIEW.exaggeration : terrainView.exaggeration);
 }
 
 /**
  * `setTerrain` is MapLibre's only public terrain API, and every call rebuilds
  * the terrain along with a pool of thirty render-to-texture framebuffers — far
- * too much to spend once per frame. The exaggeration it was handed, though, is
- * a plain field the renderer re-reads on every frame, which is what lets the
- * relief ramp rather than snap. The field is not in the type definitions, so it
- * is reached through a cast; should a future MapLibre move it, the cast stops
- * matching and every frame falls back to the public call, which is slower but
- * still correct.
+ * too much to spend once per frame, or once per click. The exaggeration it was
+ * handed, though, is a plain field the renderer re-reads on every frame, which
+ * is what lets the relief ramp rather than snap. The field is not in the type
+ * definitions, so it is reached through a cast; should a future MapLibre move
+ * it, the cast stops matching and every frame falls back to the public call,
+ * which is slower but still correct.
  */
 function setTerrainExaggeration(exaggeration: number) {
   const terrain = (map as unknown as { terrain?: { exaggeration: number } }).terrain;
   if (terrain) terrain.exaggeration = exaggeration;
   else map.setTerrain({ source: 'terrain', exaggeration });
   map.triggerRepaint();
+}
+
+/**
+ * Have the terrain ready before anyone asks to see it.
+ *
+ * This is the half of issue #6 that the ramp alone could not fix. Enabling the
+ * terrain is a few hundred milliseconds of solid main thread — thirty
+ * framebuffers, a DEM tile reload, then fetching and rasterising the tiles —
+ * and MapLibre only charges that when the terrain is switched on. Spending it
+ * on the click meant the 700 ms transition ran to completion *inside* the stall:
+ * measured against a live preview, the page painted nothing for the length of
+ * the transition and the first frame anyone saw was already the end state.
+ *
+ * So the terrain is built the moment the pointer reaches the toggle, at an
+ * exaggeration of zero — which draws exactly what no terrain at all draws, so
+ * there is nothing to see. The click then only writes a number per frame.
+ */
+function warmUpTerrain(): Promise<void> {
+  if (map.getTerrain()) return Promise.resolve();
+  // The DEM source arrives with the style; before that there is nothing to warm.
+  if (!map.getSource('terrain')) return Promise.resolve();
+  terrainWarming = true;
+  applyTerrain();
+  const startedAt = performance.now();
+  return new Promise((resolve) => {
+    const poll = () => {
+      if (shouldKeepWaiting(map.isSourceLoaded('terrain'), performance.now() - startedAt)) {
+        requestAnimationFrame(poll);
+        return;
+      }
+      terrainWarming = false;
+      resolve();
+    };
+    requestAnimationFrame(poll);
+  });
 }
 
 /**
@@ -254,16 +295,20 @@ function setTerrainExaggeration(exaggeration: number) {
  * tilt only began afterwards, so the snap was the first thing the eye caught.
  */
 function easeToTerrain(target: TerrainView) {
-  const from = terrainView;
-  // A toggle part-way through restarts from wherever the last one got to, so
-  // the relief carries on from there instead of jumping back to flat. The token
-  // retires the loop still running from that last one.
+  // A toggle part-way through retires the loop still running from the last one.
   const token = ++terrainTransition;
+  // Turning the relief on needs the terrain, and if the pointer has only just
+  // reached the button there may not be one yet. Starting the move before it is
+  // ready would stall through the middle of it, so hold on the unchanged map
+  // for the warm-up instead — capped, so a terrain service that never answers
+  // cannot leave the button dead.
+  const ready = terrainEnabled ? warmUpTerrain() : Promise.resolve();
+  void ready.then(() => { if (token === terrainTransition) startTerrainTransition(target, token); });
+}
+
+function startTerrainTransition(target: TerrainView, token: number) {
+  const from = terrainView;
   const startedAt = performance.now();
-  // Build the terrain at the exaggeration already reached before the camera
-  // starts moving. Starting from flat, that first frame is indistinguishable
-  // from the map the user was just looking at.
-  applyTerrain();
   map.easeTo({ pitch: target.pitch, duration: TERRAIN_TRANSITION_MS });
   const frame = () => {
     if (token !== terrainTransition) return;
@@ -1427,6 +1472,14 @@ function setSnappingEnabled(enabled: boolean) {
 $('snap-toggle').addEventListener('click', () => setSnappingEnabled(!snappingEnabled));
 
 $('terrain-toggle').addEventListener('click', () => setTerrainEnabled(!terrainEnabled));
+
+// The terrain costs a few hundred milliseconds to build and nothing at all to
+// look at while flat, so start that build the moment the user is on their way
+// to the button rather than when they arrive. Hovering and keyboard focus both
+// give a few hundred milliseconds of lead time, which is the difference between
+// the transition being seen and the whole thing collapsing into one frame.
+$('terrain-toggle').addEventListener('pointerenter', () => void warmUpTerrain());
+$('terrain-toggle').addEventListener('focus', () => void warmUpTerrain());
 
 $('relief-toggle').addEventListener('click', () => {
   reliefEnabled = !reliefEnabled;
