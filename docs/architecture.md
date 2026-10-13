@@ -462,8 +462,43 @@ against 60.7 fps without.
 MapLibre's only public terrain API is `setTerrain`, and every call rebuilds the
 terrain plus the pool of framebuffers, so it is used once per build. The
 exaggeration is a plain field the renderer re-reads every frame;
-`setTerrainExaggeration()` writes that field directly, behind a cast, so a
-MapLibre release that moves it degrades to the public call rather than breaking.
+`rampTerrainExaggeration()` writes that field directly so the relief can be
+stepped a frame at a time.
+
+That field is reached through `map.style.terrain`, and *not* `map.terrain` — the
+terrain object belongs to the style, and the map carries no `terrain` field at
+all (`Map.prototype` has only `setTerrain`/`getTerrain`, which delegate to it).
+Reaching for it on the map is the obvious mistake and it fails silently: the
+cast returns `undefined`, the code falls back to the public `setTerrain`, and a
+single 700 ms transition rebuilds the terrain and invalidates its DEM loads
+around forty times — the whole move is then spent tearing terrain down rather
+than showing it, which is how it presented as "the 3D does not render". If a
+MapLibre release moves the field off the style, `rampTerrainExaggeration()`
+reports it cannot ramp and the relief is stepped once at the end of the
+transition instead: slower-looking, but never once per frame.
+
+### Tilting pulls the camera back
+
+Every programmatic camera move compensates its zoom for the tilt already in
+effect (`tiltZoom`), because tilting a perspective camera toward the horizon is a
+trade: the near ground expands to fill the bottom of the frame while the far
+ground compresses into the distance. Holding zoom still across that trade is what
+makes the move read as diving *into* the terrain. On a summit it is worse than a
+close crop — the massif fills the screen, and at the tighter fits a bbox can
+place the camera level with or below the peak it was sent to.
+
+This has to be ours rather than MapLibre's, because the fit is. `fitBounds` and
+`cameraForBounds` both size the zoom as though the camera were looking straight
+down, and neither takes a pitch into the maths even though their options accept
+one; fitted in 3D they leave the target sitting above the middle of the frame.
+So `fitCamera()` fits and then pulls back, and the search path, the fit-route
+button and locate-me all go through it.
+
+Search is how 3D gets looked at in practice — find a summit, switch the relief
+on — so this is what makes that sequence work: the result is framed for the tilt
+it will actually be viewed at, rather than for the flat map it was found on. The
+pull-back follows the tilt being moved *to* rather than being a stored offset, so
+tilting back to flat compensates nothing and leaves the zoom where it found it.
 
 Sources and layers:
 

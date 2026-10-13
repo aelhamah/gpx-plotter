@@ -36,11 +36,47 @@ export const TERRAIN_TRANSITION_MS = 700;
  */
 export const TERRAIN_WARM_TIMEOUT_MS = 1500;
 
+/**
+ * How far the camera pulls back, in zoom levels, at the full tilt.
+ *
+ * Tilting a perspective camera toward the horizon is a trade: the near ground
+ * expands to fill the bottom of the frame while the far ground compresses into
+ * the distance. Holding the zoom still across that trade is what makes the move
+ * read as diving *into* the terrain rather than looking across it. On a summit
+ * it is worse than a close crop — the massif simply fills the screen, and at the
+ * tighter fits (a bbox result capped at `maxZoom`) the camera can end up level
+ * with or below the peak it was sent to.
+ *
+ * 1.5 levels is the compromise: enough that a 4 km summit stays framed with
+ * room around it, little enough that the ground under the marker still reads as
+ * the same place the flat map was showing.
+ */
+export const TERRAIN_ZOOM_OUT = 1.5;
+
 /** The camera's pitch and the relief beneath it — the two halves of one frame. */
 export type TerrainView = {
   pitch: number;
   exaggeration: number;
 };
+
+/**
+ * The zoom that shows a flat map's worth of ground at `pitch`.
+ *
+ * Used by every programmatic camera move, so that the one place the map can be
+ * sent somewhere new is the place that knows the camera is tilted. MapLibre
+ * will not do this for us: `fitBounds` and `cameraForBounds` both fit as though
+ * the camera were looking straight down, and neither accepts a pitch into the
+ * maths, so a fit made in 3D lands its target off the top of the frame.
+ *
+ * Linear in the tilt, so a move part-way through a transition is compensated
+ * part-way too. The pull-back follows the tilt being moved *to* rather than
+ * being a stored offset, so tilting back to flat compensates nothing and leaves
+ * the zoom exactly as it found it — toggling 3D off never drifts further out.
+ */
+export function tiltZoom(zoom: number, pitch: number): number {
+  const pullback = TERRAIN_ZOOM_OUT * (Math.max(pitch, FLAT_PITCH) / TERRAIN_PITCH);
+  return Math.max(zoom - pullback, 0);
+}
 
 /** The flat map. An exaggeration of zero is exactly as flat as no terrain at all. */
 export const FLAT_VIEW: TerrainView = { pitch: FLAT_PITCH, exaggeration: 0 };

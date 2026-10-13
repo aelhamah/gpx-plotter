@@ -6,9 +6,11 @@ import {
   TERRAIN_PITCH,
   TERRAIN_TRANSITION_MS,
   TERRAIN_WARM_TIMEOUT_MS,
+  TERRAIN_ZOOM_OUT,
   easeInOutCubic,
   shouldKeepWaiting,
   terrainAt,
+  tiltZoom,
   transitionProgress,
 } from '../src/terrain';
 
@@ -136,5 +138,37 @@ describe('shouldKeepWaiting', () => {
   it('respects a custom timeout', () => {
     expect(shouldKeepWaiting(false, 500, 1000)).toBe(true);
     expect(shouldKeepWaiting(false, 1000, 1000)).toBe(false);
+  });
+});
+
+describe('tiltZoom', () => {
+  /** `SEARCH_POINT_ZOOM` in `main.ts`: the frame a summit lands in when flat. */
+  const SEARCH_POINT_ZOOM = 13;
+
+  it('leaves a flat camera alone', () => {
+    expect(tiltZoom(13, FLAT_VIEW.pitch)).toBe(13);
+  });
+  it('pulls back a whole step at the full tilt', () => {
+    // The search frame for a summit, which is where "too zoomed in" came from.
+    expect(tiltZoom(SEARCH_POINT_ZOOM, TERRAIN_PITCH)).toBeCloseTo(SEARCH_POINT_ZOOM - TERRAIN_ZOOM_OUT, 10);
+  });
+  it('is halfway pulled back at half the tilt, so a half-finished move is compensated half-way', () => {
+    expect(tiltZoom(13, TERRAIN_PITCH / 2)).toBeCloseTo(13 - TERRAIN_ZOOM_OUT / 2, 10);
+  });
+  it('leaves the zoom alone when tilting back to flat, rather than drifting out on every toggle', () => {
+    // Turning the relief on pulls back; turning it off must not pull back again.
+    const tilted = tiltZoom(SEARCH_POINT_ZOOM, TERRAIN_PITCH);
+    expect(tiltZoom(tilted, FLAT_VIEW.pitch)).toBe(tilted);
+  });
+  it('only ever zooms out, never in — compensation must not crop the ground away', () => {
+    for (const pitch of [0, 10, 27.5, 55, 85]) {
+      expect(tiltZoom(12, pitch)).toBeLessThanOrEqual(12);
+    }
+  });
+  it('stops at the world rather than going negative', () => {
+    expect(tiltZoom(0.5, TERRAIN_PITCH)).toBe(0);
+  });
+  it('pulls back further as the tilt goes past the relief pitch', () => {
+    expect(tiltZoom(13, 85)).toBeLessThan(tiltZoom(13, TERRAIN_PITCH));
   });
 });

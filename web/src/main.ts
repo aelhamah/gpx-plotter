@@ -1,6 +1,6 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
-import maplibregl, { type MapMouseEvent, type Marker } from 'maplibre-gl';
-import type { GeoJSONSource } from 'maplibre-gl';
+import maplibregl, { type CameraOptions, type MapMouseEvent, type Marker } from 'maplibre-gl';
+import type { GeoJSONSource, LngLatBoundsLike } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
 import { blendTerrainElevations, colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, profileNeedsTerrain, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, terrainSamplesNeeded, type UnitSystem } from './geo';
@@ -22,7 +22,7 @@ import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
-import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, shouldKeepWaiting, terrainAt, transitionProgress, type TerrainView } from './terrain';
+import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, shouldKeepWaiting, terrainAt, tiltZoom, transitionProgress, type TerrainView } from './terrain';
 import './style.css';
 
 let routes: Route[] = [];
@@ -234,19 +234,55 @@ function applyTerrain() {
 }
 
 /**
- * `setTerrain` is MapLibre's only public terrain API, and every call rebuilds
- * the terrain along with a pool of thirty render-to-texture framebuffers — far
- * too much to spend once per frame, or once per click. The exaggeration it was
- * handed, though, is a plain field the renderer re-reads on every frame, which
- * is what lets the relief ramp rather than snap. The field is not in the type
- * definitions, so it is reached through a cast; should a future MapLibre move
- * it, the cast stops matching and every frame falls back to the public call,
- * which is slower but still correct.
+ * The live terrain object, or null when the style has none built yet.
+ *
+ * `setTerrain` is MapLibre's only public terrain API, and every call rebuilds the
+ * terrain along with a pool of thirty render-to-texture framebuffers — far too
+ * much to spend once per frame, or once per click. The exaggeration the terrain
+ * was handed, though, is a plain field the renderer re-reads on every frame,
+ * which is what lets the relief ramp rather than snap.
+ *
+ * The object lives on the *style*, not on the map: `map.getTerrain()` reads
+ * `map.style.terrain.options`, and the map itself carries no `terrain` field at
+ * all. Casting `map` and reaching for one is the easy mistake, and it fails
+ * quietly — every frame falls through to the public call, so a single 700 ms
+ * transition rebuilds the terrain and invalidates its DEM loads around forty
+ * times. The relief then never settles inside the transition at all: the whole
+ * move is spent tearing down terrain, which is what it looked like.
+ *
+ * Neither `Style#terrain` nor its `exaggeration` field is in the type
+ * definitions, so both are reached through a cast. Should a future MapLibre move
+ * them the cast stops matching, and the caller falls back to the public API
+ * once per transition rather than once per frame.
+ */
+function terrainObject(): { exaggeration: number } | null {
+  return (map.style as unknown as { terrain?: { exaggeration: number } } | undefined)?.terrain ?? null;
+}
+
+/**
+ * Write the relief's exaggeration straight into the live terrain object, which
+ * the renderer re-reads every frame. This is the only way to *ramp* the relief,
+ * and it is cheap enough to call per frame — but it can only write a terrain
+ * that already exists, so it reports whether it managed it.
+ */
+function rampTerrainExaggeration(exaggeration: number): boolean {
+  const terrain = terrainObject();
+  if (!terrain) return false;
+  terrain.exaggeration = exaggeration;
+  map.triggerRepaint();
+  return true;
+}
+
+/**
+ * The same relief through MapLibre's public API: a single step, never a ramp.
+ * Builds the terrain if there is none, which is what seeds it after a style
+ * swap. Too expensive to call per frame — see `rampTerrainExaggeration`.
  */
 function setTerrainExaggeration(exaggeration: number) {
-  const terrain = (map as unknown as { terrain?: { exaggeration: number } }).terrain;
-  if (terrain) terrain.exaggeration = exaggeration;
-  else map.setTerrain({ source: 'terrain', exaggeration });
+  // `setTerrain` throws on a style that has not finished loading, and there is
+  // nothing to build the terrain from before then anyway.
+  if (!map.isStyleLoaded()) return;
+  map.setTerrain({ source: 'terrain', exaggeration });
   map.triggerRepaint();
 }
 
@@ -309,17 +345,28 @@ function easeToTerrain(target: TerrainView) {
 function startTerrainTransition(target: TerrainView, token: number) {
   const from = terrainView;
   const startedAt = performance.now();
-  map.easeTo({ pitch: target.pitch, duration: TERRAIN_TRANSITION_MS });
+  // Pitch and zoom go into one `easeTo` because they are one move: MapLibre
+  // eases both together on its own curve, and the pull-back (`tiltZoom`) that
+  // keeps the ground in frame arrives with the tilt instead of after it.
+  map.easeTo({ pitch: target.pitch, zoom: tiltZoom(map.getZoom(), target.pitch), duration: TERRAIN_TRANSITION_MS });
+  // Ramping the relief means writing the live terrain object's exaggeration
+  // every frame. If it cannot be reached, the relief is stepped once at the end
+  // rather than forty times during the move — `setTerrain` rebuilds the terrain
+  // and its framebuffers, and a transition spent rebuilding never settles.
+  const ramps = terrainObject() !== null;
   const frame = () => {
     if (token !== terrainTransition) return;
     const progress = transitionProgress(performance.now() - startedAt, TERRAIN_TRANSITION_MS);
     terrainView = terrainAt(from, target, progress);
-    setTerrainExaggeration(terrainView.exaggeration);
+    if (ramps) rampTerrainExaggeration(terrainView.exaggeration);
     if (progress < 1) requestAnimationFrame(frame);
-    // Only now that the ground is flat again is there anything to gain by
-    // tearing the terrain down; doing it earlier flattens it in a single frame
-    // while the camera is still tilted.
-    else if (!terrainEnabled) map.setTerrain(null);
+    else {
+      if (!ramps) setTerrainExaggeration(terrainView.exaggeration);
+      // Only now that the ground is flat again is there anything to gain by
+      // tearing the terrain down; doing it earlier flattens it in a single frame
+      // while the camera is still tilted.
+      if (!terrainEnabled) map.setTerrain(null);
+    }
   };
   requestAnimationFrame(frame);
 }
@@ -1258,7 +1305,7 @@ function onLocated(position: GeolocationPosition) {
   locateButton.classList.remove('busy');
   const fix: LocationFix = { lon: position.coords.longitude, lat: position.coords.latitude, accuracyMeters: position.coords.accuracy, at: position.timestamp };
   setLocationFix(fix);
-  map.easeTo({ center: [fix.lon, fix.lat], zoom: zoomForAccuracy(fix.accuracyMeters, fix.lat), duration: 700 });
+  map.easeTo({ center: [fix.lon, fix.lat], zoom: tiltZoom(zoomForAccuracy(fix.accuracyMeters, fix.lat), map.getPitch()), duration: 700 });
   setLocateStatus('');
 }
 
@@ -1308,6 +1355,22 @@ let searchIndex = 0;
 let searchItems: GeocodeResult[] = [];
 let searchTimer: number | undefined;
 const SEARCH_DEBOUNCE_MS = 250;
+
+/** Long enough to read as travelling to the place, short enough to redo mid-move. */
+const FIT_CAMERA_MS = 700;
+
+/**
+ * The frame a result with no footprint lands in. Wide enough that the ground
+ * around the marker is still a map, rather than the marker filling the screen.
+ */
+const SEARCH_POINT_ZOOM = 13;
+
+/**
+ * Cap on fitting a footprint. Geocoding hands back a degenerate bbox for plenty
+ * of points, and without a cap those fit to the maximum zoom available rather
+ * than to anything worth looking at.
+ */
+const FIT_MAX_ZOOM = 15;
 
 function hideSearchResults() {
   searchResults.classList.add('hidden');
@@ -1396,12 +1459,29 @@ function selectSearchResult(result: GeocodeResult) {
   const element = document.createElement('div');
   element.className = 'search-marker';
   searchMarker = new maplibregl.Marker({ element }).setLngLat([result.center.lon, result.center.lat]).addTo(map);
-  if (result.bbox) {
-    const [west, south, east, north] = result.bbox;
-    map.fitBounds(new maplibregl.LngLatBounds([west, south], [east, north]), { padding: mapFitPadding(), duration: 700, maxZoom: 15 });
-  } else {
-    map.jumpTo({ center: [result.center.lon, result.center.lat], zoom: 13 });
-  }
+  moveTo(searchCamera(result));
+}
+
+/**
+ * Where a search result puts the camera.
+ *
+ * A result with a footprint is fitted to it, so a town or a range arrives as the
+ * whole place. A point — a summit, a trailhead, anything without a bbox — gets a
+ * frame of its own instead, chosen to hold the surrounding ground rather than
+ * the marker: at summit zoom the marker is the only thing in frame and there is
+ * no map left to read it against.
+ *
+ * Search is how 3D gets looked at in practice — find a summit, switch the
+ * relief on — so both frames are pulled back for the tilt already in effect,
+ * which the fit itself knows nothing about.
+ */
+function searchCamera(result: GeocodeResult): CameraOptions {
+  const point: CameraOptions = { center: [result.center.lon, result.center.lat], zoom: tiltZoom(SEARCH_POINT_ZOOM, map.getPitch()) };
+  if (!result.bbox) return point;
+  const [west, south, east, north] = result.bbox;
+  // A fit that cannot be computed falls back to the point frame rather than
+  // silently leaving the map where it was.
+  return fitCamera(new maplibregl.LngLatBounds([west, south], [east, north])) ?? point;
 }
 
 searchInput.addEventListener('input', () => debounceSearch(searchInput.value));
@@ -1662,11 +1742,39 @@ window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !c
 
 mapNameInput.addEventListener('input', () => setDocumentName(mapNameInput.value));
 
+/**
+ * Frame a set of points.
+ *
+ * Goes through the same path as a search result, because the same thing is true
+ * of both: the fit is computed for a camera looking straight down, so with the
+ * relief on it has to be pulled back before it is worth flying to.
+ */
 function fitPoints(points: { lat: number; lon: number }[]) {
   if (!points.length) return;
   const bounds = new maplibregl.LngLatBounds();
   for (const point of points) bounds.extend([point.lon, point.lat]);
-  map.fitBounds(bounds, { padding: mapFitPadding(), duration: 700, maxZoom: 15 });
+  const camera = fitCamera(bounds);
+  if (camera) moveTo(camera);
+}
+
+/** Fly the camera to a framed view. Every programmatic move goes through here. */
+function moveTo(camera: CameraOptions) {
+  map.easeTo(camera, { duration: FIT_CAMERA_MS });
+}
+
+/**
+ * The camera that frames `bounds`, pulled back for the tilt already in effect.
+ *
+ * The pull-back is ours rather than MapLibre's because the fit is: `fitBounds`
+ * and `cameraForBounds` both size the zoom as though the camera were looking
+ * straight down, and neither takes a pitch into the maths even though their
+ * options accept one. Fitted in 3D, they leave the target sitting above the
+ * middle of the frame with the ground filling everything under it.
+ */
+function fitCamera(bounds: LngLatBoundsLike): CameraOptions | null {
+  const fitted = map.cameraForBounds(bounds, { padding: mapFitPadding(), maxZoom: FIT_MAX_ZOOM });
+  if (!fitted) return null;
+  return { ...fitted, zoom: tiltZoom(fitted.zoom ?? map.getZoom(), map.getPitch()) };
 }
 
 /**

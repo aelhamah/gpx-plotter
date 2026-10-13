@@ -11,7 +11,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **3D terrain** toggle using MapTiler Terrain-RGB with a 1.15× exaggeration,
   plus ⌘/Ctrl-drag to tilt and rotate the camera. The relief and the tilt move
   together in one eased move, so the ground rises out of the flat map instead of
-  snapping to full height and then tipping.
+  snapping to full height and then tipping. The camera pulls back as it tilts,
+  and every fly-to (a search result, fit-route, locate-me) is zoomed for the tilt
+  it will be viewed at — so finding a summit and switching the relief on shows
+  the summit in its surroundings rather than the inside of the massif.
 - **Relief hillshade** toggle for a soft shaded-relief overlay.
 - **Slope-angle shading**: the terrain is colorized into avalanche bands
   (`<20°` green, `20–30°` yellow, `30–35°` orange, `35–40°` red, `40–45°`
