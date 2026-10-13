@@ -265,6 +265,7 @@ web/tests/
   simplify.test.ts   downsampling + distance-based budget
   style.test.ts      pointer-events layering in style.css
   fitPadding.test.ts sidebar-aware fitBounds padding
+  terrain.test.ts    the flat ↔ 3D transition: easing, clamping, relief and tilt in step, and the tilt's zoom pull-back
   snapHaloRidge.test.ts  snapping + trail-following measured on a real recorded hike
   sidebar.test.ts    sidebar controls are reachable and render in their default state
 ```
@@ -371,7 +372,20 @@ Because the app is map- and DOM-heavy, some checks are manual:
   confirm the downsample dialog, stats, and profile.
 - Draw a route, drag points, add/move/rename/delete a waypoint, undo/redo.
 - Toggle satellite, terrain, relief, and slope shading (watch for layer loss
-  after style swaps).
+  after style swaps). For terrain, watch the transition in both directions and on
+  a second click part-way through: the relief should rise with the tilt rather
+  than snapping to full height first, and should sink before the map flattens.
+  Hover the 3D toggle before clicking it — that is what builds the terrain ahead
+  of the click, and clicking straight away (or on a touch screen, where there is
+  no hover) makes the toggle wait on the unchanged map instead.
+- Search for a summit (Pikes Peak is the one to use: 4,300 m, and tall enough to
+  expose a framing that is too tight). Then switch the relief on. The camera
+  should pull back as it tilts and the summit should end up in frame with ground
+  around it — not the inside of the massif, and not a black or untextured frame.
+  Do it in both orders (search first, 3D first, and 3D while already tilted) and
+  watch that the zoom never drifts outward across an on/off toggle. Repeat the
+  toggle several times from the same starting zoom: the zoom must return to the
+  same two values every cycle, not step further out each time.
 - Press the locate button: the browser should prompt for location permission
   (only on the first press), the blue dot and its accuracy halo should land on
   the map, and the camera should frame the halo. Block the permission in the
