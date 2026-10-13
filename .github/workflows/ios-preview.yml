@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   changes:
-    if: github.event.pull_request.head.repo.full_name == repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     outputs:
       ios: ${{ steps.filter.outputs.ios }}
@@ -54,7 +54,7 @@ jobs:
     if: >-
       github.event.action != 'closed' &&
       needs.changes.outputs.ios == 'true' &&
-      github.event.pull_request.head.repo.full_name == repository
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -107,11 +107,11 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: capture
+    needs: [changes, capture]
     if: >-
       github.event.action != 'closed' &&
       needs.changes.outputs.ios == 'true' &&
-      github.event.pull_request.head.repo.full_name == repository
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     # Shares the gh-pages group with deploy.yml and preview.yml, for the reason
     # documented there: peaceiris clones with --depth=1, so two overlapping
@@ -174,7 +174,7 @@ jobs:
   cleanup:
     if: >-
       github.event.action == 'closed' &&
-      github.event.pull_request.head.repo.full_name == repository
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     concurrency:
       group: gh-pages
