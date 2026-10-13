@@ -32,8 +32,10 @@ struct PanelExpandChevron: View {
         Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(.tertiary)
-            // Top padding, because the sheet's 20pt corner radius clips whatever
-            // sits flush against the edge and the glyph was being sliced in half.
+            // Breathing room below the sheet's top edge, which also keeps the glyph clear of
+            // the corner arc. (It was originally added to survive a hardcoded
+            // 20pt `presentationCornerRadius`; the radius is the system's now, so
+            // this is just space.)
             .padding(.top, 6)
             .frame(height: PanelMetrics.expandChevronHeight)
             .frame(maxWidth: .infinity)

@@ -114,7 +114,14 @@ struct ViewerScreen: View {
                     .presentationDetents(panelDetents, selection: panelDetentBinding)
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDragIndicator(.hidden)
-                    .presentationCornerRadius(20)
+                    // No `presentationCornerRadius`. A sheet's own corner radius is
+                    // derived from the display's, and there is no public API to read
+                    // the display's — `UIListContentConfiguration.cornerRadius` and
+                    // friends are content-configuration radii, and iOS 26's
+                    // `UICornerRadius.containerConcentric` has no SwiftUI equivalent
+                    // for this modifier yet. Setting it to a number therefore
+                    // overrides a correct value with a guessed one, which is how the
+                    // sheet came out visibly squarer than the phone's own corner.
             }
             .navigationTitle(route.name)
             .navigationBarTitleDisplayMode(.inline)
