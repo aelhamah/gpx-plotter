@@ -540,7 +540,11 @@ struct MapView: UIViewRepresentable {
     /// Recentre on the fix and face the direction of travel, or north when the
     /// locate button is tapped a second time.
     private func applyCamera(to mapView: MLNMapView) {
-        guard let fix = location.fix else { return }
+        // Only when the locate button asked. Re-centring on every fix looks fine
+        // with the one-shot locate, but navigation streams fixes continuously and
+        // this would then drag the camera out from under anyone panning to look at
+        // something else.
+        guard location.consumeRecentreRequest(), let fix = location.fix else { return }
         let camera = mapView.camera.copy() as! MLNMapCamera
         camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
         if location.followsHeading, let heading = location.heading {

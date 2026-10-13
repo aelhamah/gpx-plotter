@@ -4,7 +4,7 @@ A native iPhone/iPad app for viewing and navigating the same GPX routes as the
 web app in [`web/`](../web), with offline satellite imagery you control, Live
 Activity guidance, and off-course alerts.
 
-**Status:** M1 Core is complete and green (RouteKit, 152 XCTest cases, `swift test`
+**Status:** M1 Core is complete and green (RouteKit, 154 XCTest cases, `swift test`
 passing). Offline is implemented on our own tile cache rather than MapLibre's
 pack API, and the corridor download works — see [§9](#9-offline) and the M5 row
 in [§10.1](#101-actual-state). The M0 spike is code-complete and partially
@@ -639,22 +639,54 @@ settle.
 
 #### 10.1 Actual state
 
-**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **152 tests, 0
+**M1 Core — done, gate met.** `swift test` in `ios/RouteKit`: **154 tests, 0
 failures.** The gate is "import a GPX and see real numbers", and that now works
 end to end: import through the document picker, the numbers come from the same
 RouteKit code the web app uses, and they survive a relaunch.
 
 | Gate item | State |
 | --- | --- |
-| `RouteKit` + tests | **Done.** 152 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
+| `RouteKit` + tests | **Done.** 154 tests, 0 failures. The plan said ~120; the port covers the modules this app uses, and 27 of the web tests belong to the dropped editing modules (§3). The tile cache and its key are part of RouteKit for a reason — the offline guarantee is only worth having if something can test it, and `swift test` runs in CI without a simulator. |
 | GPX import | **Done.** `fileImporter` filtered to `.gpx`, security-scoped read, `RouteKit.parseGPX`. Verified with the repo's own demos: *The Enchantments Traverse* (7,153 pts → 18.49 mi, 8,080 ft ascent, 7,838 ft high) and *Afternoon Hike* (13,360 pts → 4.42 mi, 14,079 ft high). Route ids are reassigned on import and colored from the web app's `routeColorForId`. |
 | Stats | **Done.** Distance/ascent/descent/high from `RouteKit`, formatted through `Units`, switching with the unit picker. A GPX with no `<ele>` shows `—` rather than zeros. Low, max slope and point count joined them, all from one `Slope.summary(for:)` pass so the bar cannot disagree with the chart. |
 | Swift Charts profile | **Done.** Elevation against distance along, with the y-domain padded by 8% of the range rather than anchored at zero, matching `profileData` in `web/src/main.ts`. Segments are coloured by the six avalanche slope bands, so the chart and the on-map shading agree about where the ground is steep. |
 
-**Viewer polish.** The route screen was audited against the web app and the
-things that were missing or wrong on a phone rather than a desktop map are now
-done: map-side basemap/relief/slope/3D toggles, a fit button, waypoint names,
-slope legend, seven statistics, and round axis numbers.
+**M3 Navigate — the app side is done and verified on the simulator.** RouteKit
+already had `RouteProgress` and `OffCourseDetector` with 12 tests between them;
+what was missing was everything that feeds them and everything that shows the
+result. Both are now in place, and the gate — "hike a real trail with the phone
+locked" — is **not** met, for a reason no amount of code fixes: it needs a device.
+
+| Gate item | State |
+| --- | --- |
+| `NavigationSession` | **Done.** Owns the `RouteProgress` and the `OffCourseDetector`, and folds each fix in through `ingest(_:speed:)`. Deliberately a plain observable object rather than something that subscribes to `CLLocationManager` — the interesting behaviour is RouteKit's and is tested there, so the wiring stays thin and drivable from a test. |
+| `RouteProgress` reuse | **Done.** New `profile:` parameter lets a caller hand over a profile it already built. The viewer passes the one `RouteAnalysis` filled from terrain, so the nav readout and the profile chart cannot disagree about how steep the hill is — which is the number being read while walking. Covered by two new tests. |
+| Continuous location | **Done.** `LocationController` gained a streaming mode: `activityType = .fitness`, `pausesLocationUpdatesAutomatically = false` (the default stops updates when the system decides the user is stationary, which is exactly when progress should keep being measured), `distanceFilter = 5`, and `allowsBackgroundLocationUpdates`. |
+| Nav UI | **Done.** A `fullScreenCover` — not a sheet, because guidance is read one-handed and a grabber puts the numbers behind a drag. Remaining distance large and central, next waypoint above it, elevation / grade ahead / elapsed below, off-course banner on top. Every number formatted through `Units`. |
+| Off-course | **Done**, and driven by the existing tested detector rather than a second implementation. |
+| **Hike with the phone locked** | **Not verified.** Needs a physical device: `simctl` can synthesize a path, but not a lock screen, and the gate is about the hike continuing in a pocket. The settings that make it work are in place and the background-location indicator was observed running on the simulator. |
+
+Three findings from building it, all of which look like details and are not:
+
+- **The camera must not follow every fix.** `MapView` re-centred the map whenever
+  a fix existed, which was near-harmless with the one-shot locate button and would
+  have dragged the camera out from under anyone panning during navigation, which
+  streams fixes continuously. The request is now one-shot, set by the locate
+  button and spent by the map, matching the web app's `locate.ts`.
+- **A `fullScreenCover` will not present while a `.sheet` from the same hierarchy
+  is up.** The figures sheet is presented by the same view, so the flag flipped and
+  nothing appeared — with no error and no crash to explain it. Navigation now
+  dismisses the panel first, which is what you want anyway.
+- **`LocationFix.timestamp` defaulted to the epoch** and `LocationController`
+  never set it. Harmless while nothing timed off a fix; not harmless once the
+  off-course detector times its 8s window off exactly that, because a batch
+  delivered late would stretch the window. The fix's timestamp and speed now both
+  travel with it.
+
+`docs/dev.md` has the commands to drive a route on the simulator. Note that a
+*static* simulated position will not trigger the off-course banner, and that is
+correct: the detector ignores fixes below a walking pace on purpose, so
+`location start --speed` is needed.
 
 Four findings from that pass are worth keeping, because each looks like a styling
 choice and is not:

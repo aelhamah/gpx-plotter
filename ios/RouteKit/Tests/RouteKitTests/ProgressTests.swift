@@ -142,6 +142,51 @@ final class ProgressTests: XCTestCase {
         XCTAssertEqual(state.fractionComplete, 0)
     }
 
+    func testSuppliedProfileIsUsedVerbatim() {
+        // The viewer's `RouteAnalysis` hands navigation the profile it already
+        // filled from terrain, so the nav readout and the profile chart read the
+        // same elevations. If this parameter were ignored the two would resample
+        // independently and disagree about the grade ahead.
+        let route = sampleRoute()
+        let supplied = Self.flatClimb(lengthMeters: Haversine.routeLength(route.points), riseMeters: 1_000)
+        let progress = RouteProgress(route: route, profile: supplied)
+
+        XCTAssertEqual(progress.profile.points.count, supplied.points.count, "the supplied profile was rebuilt")
+        XCTAssertEqual(progress.profile.points.last?.elevation ?? 0, 1_000, accuracy: 1,
+                       "the climb's full rise should be there")
+
+        // Grade comes from the supplied series — 1,000 m over the whole route —
+        // rather than from the route's own vertices, which do not match it.
+        let grade = progress.state(at: Coordinate(lat: 0, lon: 0.01)).gradeAheadPercent
+        let expected = 1_000 / Haversine.routeLength(route.points) * 100
+        XCTAssertEqual(grade ?? 0, expected, accuracy: 0.2)
+    }
+
+    func testSuppliedProfileWinsOverTheElevationProvider() {
+        // Otherwise a caller passing both would get the provider's answer and no
+        // way to tell which one the session is reading.
+        let route = sampleRoute()
+        let supplied = Self.flatClimb(lengthMeters: Haversine.routeLength(route.points), riseMeters: 1_000)
+        let progress = RouteProgress(route: route, elevationProvider: { _ in 9_999 }, profile: supplied)
+        XCTAssertEqual(progress.profile.points[0].elevation ?? 0, 0, accuracy: 1)
+    }
+
+    /// A straight climb, sampled finely enough that `gradeLookaheadMeters` sees
+    /// more than one sample. Two samples would read as zero grade, because the
+    /// lookahead never leaves the first interval.
+    private static func flatClimb(lengthMeters: Double, riseMeters: Double) -> RouteProfile {
+        let step = 25.0
+        let count = Int(lengthMeters / step)
+        var points: [RoutePoint] = []
+        var distances: [Double] = []
+        for index in 0...count {
+            let distance = Double(index) * step
+            points.append(RoutePoint(lat: 0, lon: distance / 111_319, elevation: distance / lengthMeters * riseMeters))
+            distances.append(distance)
+        }
+        return RouteProfile(points: points, cumulativeDistances: distances, totalDistance: distances.last ?? 0)
+    }
+
     // MARK: - OffCourseDetector
 
     private func startedDetector() -> OffCourseDetector {
