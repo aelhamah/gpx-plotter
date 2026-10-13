@@ -362,18 +362,35 @@ makes the profile-trace interaction (§ below) possible.
 **Decision: a draggable sheet with detents.** The map's figures live in a sheet
 over the map rather than in a `VStack` beside it.
 
-The sheet has two detents: collapsed it is **just the stats row**, expanded it
-carries the stats, the profile, and the offline row. The expanded detent is
-`.height(330)` — the content's own height, not `.large`. A profile is for
-scrubbing, and scrubbing traces the position on the map, so the map has to stay
-visible while the sheet is up; `.large` covered nearly the whole display and left
-a sliver to look at. The content measures 290 pt, and the rest is the home
-indicator's inset.
+The sheet has two detents: collapsed it is **just the figures**, expanded it
+carries the figures, the profile, the slope legend, and the offline row. The
+expanded detent is a `.height(_:)` — the content's own height, not `.large`. A
+profile is for scrubbing, and scrubbing traces the position on the map, so the map
+has to stay visible while the sheet is up; `.large` covered nearly the whole
+display and left a sliver to look at.
 
-The panel knows which layout to draw from the **detent selection** rather than by
-measuring its own height. A sheet's content does not otherwise know which detent
-it is in, and inferring it from the geometry is what clipped the stats row when
-this was first built.
+**The heights are computed, not written down.** `PanelMetrics` holds one number
+per row, each applied as an explicit `.frame(height:)` by the view that draws it,
+and both detents are summed from those plus the display's bottom safe-area inset.
+They were hand-computed in a comment first and were wrong twice. The failure is
+silent: a sheet whose content is taller than its detent does not scroll, it
+**compresses from the top**, so the first row is what vanishes — a chevron once
+measured 22 pt in a layout pass while painting as a 3 pt sliver. Hardcoding the
+safe-area inset is the same class of bug: it is 34 pt on a home-indicator device
+and 0 on one with a home button.
+
+The profile chart is the one row that takes **whatever height is left**, counted
+from the same metrics, so a panel with a MapTiler key — where the key-missing
+warning is absent — shows a chart 24 pt taller rather than leaving the warning's
+share empty at the bottom. Verified by measurement: warning present, chart 176;
+warning stubbed out, chart 200, panel 475 either way.
+
+The panel knows which layout to draw from an **expanded flag** rather than by
+measuring its own height, and that flag is mapped to a detent through a binding
+rather than stored as one, because a `PresentationDetent` cannot be built before
+the display's inset is known. A sheet's content does not otherwise know which
+detent it is in, and inferring it from the geometry is what clipped the stats row
+when this was first built.
 
 Dragging the sheet away entirely leaves the map full-bleed with the stats, which
 is the state the map is really used in. `presentationBackgroundInteraction`

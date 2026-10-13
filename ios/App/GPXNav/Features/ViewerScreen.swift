@@ -29,14 +29,16 @@ struct ViewerScreen: View {
     /// rather than once on appear — which always beat the style and left the
     /// estimate permanently at zero.
     @State private var styleGeneration = 0
-    /// Which detent the sheet is at. Bound rather than fixed so `-expandedPanel`
-    /// can open it, and so the panel knows which of its two layouts to show
-    /// without measuring its own height: `simctl` cannot drag a sheet, and the
-    /// profile chart is only in the expanded one.
-    @State private var panelDetent: PresentationDetent = ProcessInfo.processInfo
+    /// Whether the sheet is showing its tall layout.
+    ///
+    /// A flag rather than a `PresentationDetent`, because the heights are now
+    /// computed from `PanelMetrics` and the display's safe-area inset — neither of
+    /// which is known until the view is on screen. Storing a detent in `@State`
+    /// means freezing a height decided before the device was, which is how the
+    /// figures ended up half-hidden behind the rounded corner on a device that
+    /// did not match the one the height was measured on.
+    @State private var isPanelExpanded: Bool = ProcessInfo.processInfo
         .arguments.contains("-expandedPanel")
-        ? .height(AppConfig.expandedPanelHeight)
-        : .height(AppConfig.statsOnlyPanelHeight)
 
     let route: Route
 
@@ -109,13 +111,17 @@ struct ViewerScreen: View {
             }
             .sheet(isPresented: $isPanelPresented) {
                 panel
-                    .presentationDetents(
-                        [.height(AppConfig.statsOnlyPanelHeight), .height(AppConfig.expandedPanelHeight)],
-                        selection: $panelDetent
-                    )
+                    .presentationDetents(panelDetents, selection: panelDetentBinding)
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDragIndicator(.hidden)
-                    .presentationCornerRadius(20)
+                    // No `presentationCornerRadius`. A sheet's own corner radius is
+                    // derived from the display's, and there is no public API to read
+                    // the display's — `UIListContentConfiguration.cornerRadius` and
+                    // friends are content-configuration radii, and iOS 26's
+                    // `UICornerRadius.containerConcentric` has no SwiftUI equivalent
+                    // for this modifier yet. Setting it to a number therefore
+                    // overrides a correct value with a guessed one, which is how the
+                    // sheet came out visibly squarer than the phone's own corner.
             }
             .navigationTitle(route.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -187,6 +193,7 @@ struct ViewerScreen: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.bottom, 6)
+                    .frame(height: PanelMetrics.keyWarningHeight)
                 }
 
                 RouteProfileChart(
@@ -196,7 +203,15 @@ struct ViewerScreen: View {
                     scrubbedDistance: $scrubbedDistance
                 )
                 .padding(.horizontal)
-                .padding(.bottom, 6)
+                .padding(.bottom, PanelMetrics.chartSpacing)
+                // Sized rather than left to `.frame(maxHeight: .infinity)`: a
+                // sheet's content is proposed its ideal height, not the detent's,
+                // so a flexible frame never actually claims the slack and the
+                // panel kept ~64pt of empty material under the offline row.
+                // Computing it here means the chart takes whatever this layout has
+                // left, so a panel with no key warning — or one whose scrub caption
+                // has gone after the first drag — shows more profile instead.
+                .frame(height: chartRowHeight)
 
                 // The chart is coloured by these bands, so it is explained whether
                 // or not the on-map slope overlay happens to be switched on.
@@ -215,15 +230,55 @@ struct ViewerScreen: View {
         .background(.bar)
     }
 
+    /// The sheet's two heights, derived from `PanelMetrics` and this display's
+    /// bottom inset.
+    private var panelDetents: Set<PresentationDetent> {
+        let safeArea = Screen.safeAreaBottom
+        return [
+            .height(AppConfig.collapsedPanelHeight(safeAreaBottom: safeArea)),
+            .height(AppConfig.expandedPanelHeight(safeAreaBottom: safeArea)),
+        ]
+    }
+
+    /// Maps the sheet's height back to the flag, so a drag updates the flag and
+    /// the panel's own layout follows it.
+    private var panelDetentBinding: Binding<PresentationDetent> {
+        let collapsed = AppConfig.collapsedPanelHeight(safeAreaBottom: Screen.safeAreaBottom)
+        let expanded = AppConfig.expandedPanelHeight(safeAreaBottom: Screen.safeAreaBottom)
+        return Binding(
+            get: { .height(isPanelExpanded ? expanded : collapsed) },
+            // `PresentationDetent.height(_:)` is a static function rather than an
+            // enum case, so a detent cannot be pattern-matched to read its value;
+            // comparing against the two we offered is both simpler and exact.
+            set: { isPanelExpanded = $0 == .height(expanded) }
+        )
+    }
+
     /// Whether the sheet is at its short detent.
-    private var isPanelCompact: Bool {
-        panelDetent == .height(AppConfig.statsOnlyPanelHeight)
+    private var isPanelCompact: Bool { !isPanelExpanded }
+
+    /// Height the profile row takes: whatever the fixed rows do not use.
+    ///
+    /// The warning is counted only when it is actually on screen, so the chart
+    /// grows by exactly the row that disappeared rather than the sheet leaving a
+    /// gap of the same size somewhere else.
+    private var chartRowHeight: CGFloat {
+        let fixed = PanelMetrics.expandChevronHeight
+            + PanelMetrics.statsBlockHeight
+            + PanelMetrics.chartSpacing
+            + PanelMetrics.legendHeight
+            + PanelMetrics.offlineRowHeight
+            + (AppConfig.keyProblemDescription == nil ? 0 : PanelMetrics.keyWarningHeight)
+        let available = panelHeight - Screen.safeAreaBottom - fixed
+        return max(PanelMetrics.chartMinimumHeight, available)
     }
 
     /// How much of the bottom the sheet currently covers, so the map controls can
     /// sit above it rather than under it.
     private var panelHeight: CGFloat {
-        isPanelCompact ? AppConfig.statsOnlyPanelHeight : AppConfig.expandedPanelHeight
+        isPanelExpanded
+            ? AppConfig.expandedPanelHeight(safeAreaBottom: Screen.safeAreaBottom)
+            : AppConfig.collapsedPanelHeight(safeAreaBottom: Screen.safeAreaBottom)
     }
 
     @ViewBuilder
