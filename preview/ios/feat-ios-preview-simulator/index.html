@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iOS preview · GPXNav</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="topbar__title">
+      <span class="dot"></span>
+      <strong>GPXNav</strong>
+      <span class="topbar__sub">iOS preview</span>
+    </div>
+    <div class="topbar__meta" id="meta"></div>
+  </header>
+
+  <div class="body">
+    <aside class="controls">
+      <div id="banner"></div>
+
+      <nav class="rail" aria-label="Captured scenes">
+        <button class="scene scene--video" id="walkthrough" hidden>
+          <span class="scene__label">Walkthrough</span>
+          <span class="scene__hint">continuous pass</span>
+        </button>
+        <div id="groups"></div>
+      </nav>
+
+      <footer class="legend">
+        <kbd>&larr;</kbd><kbd>&rarr;</kbd> step · <kbd>w</kbd> walkthrough
+      </footer>
+    </aside>
+
+    <main class="stage">
+      <figure class="device" id="device">
+        <div class="device__screen">
+          <img id="still" alt="" hidden>
+          <video id="video" playsinline loop muted controls hidden></video>
+          <div class="island"></div>
+        </div>
+        <figcaption class="device__caption">
+          <span id="caption">Loading…</span>
+          <code id="args"></code>
+        </figcaption>
+      </figure>
+    </main>
+  </div>
+</div>
+<script src="scenes.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
