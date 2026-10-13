@@ -12,6 +12,7 @@ import {
   terrainAt,
   tiltZoom,
   transitionProgress,
+  untiltedZoom,
 } from '../src/terrain';
 
 /** Every frame a transition puts on screen, at roughly 60fps. */
@@ -155,11 +156,6 @@ describe('tiltZoom', () => {
   it('is halfway pulled back at half the tilt, so a half-finished move is compensated half-way', () => {
     expect(tiltZoom(13, TERRAIN_PITCH / 2)).toBeCloseTo(13 - TERRAIN_ZOOM_OUT / 2, 10);
   });
-  it('leaves the zoom alone when tilting back to flat, rather than drifting out on every toggle', () => {
-    // Turning the relief on pulls back; turning it off must not pull back again.
-    const tilted = tiltZoom(SEARCH_POINT_ZOOM, TERRAIN_PITCH);
-    expect(tiltZoom(tilted, FLAT_VIEW.pitch)).toBe(tilted);
-  });
   it('only ever zooms out, never in — compensation must not crop the ground away', () => {
     for (const pitch of [0, 10, 27.5, 55, 85]) {
       expect(tiltZoom(12, pitch)).toBeLessThanOrEqual(12);
@@ -170,5 +166,44 @@ describe('tiltZoom', () => {
   });
   it('pulls back further as the tilt goes past the relief pitch', () => {
     expect(tiltZoom(13, 85)).toBeLessThan(tiltZoom(13, TERRAIN_PITCH));
+  });
+
+  describe('anchored on the flat zoom', () => {
+    // The ratchet: compensating the live zoom charges a fresh pull-back every
+    // time 3D is switched on, and flattening compensates nothing, so the ground
+    // never comes back. Measuring from one anchor makes it a fixed point.
+    it('returns to where it started when the tilt goes back to flat', () => {
+      const anchor = 13;
+      const tilted = tiltZoom(anchor, TERRAIN_PITCH);
+      expect(untiltedZoom(tilted, TERRAIN_PITCH)).toBeCloseTo(anchor, 10);
+      expect(tiltZoom(untiltedZoom(tilted, TERRAIN_PITCH), FLAT_VIEW.pitch)).toBeCloseTo(anchor, 10);
+    });
+    it('holds its zoom across any number of on/off cycles', () => {
+      let zoom = 13;
+      for (let cycle = 0; cycle < 25; cycle++) {
+        zoom = tiltZoom(untiltedZoom(zoom, FLAT_VIEW.pitch), TERRAIN_PITCH);
+        zoom = tiltZoom(untiltedZoom(zoom, TERRAIN_PITCH), FLAT_VIEW.pitch);
+      }
+      expect(zoom).toBeCloseTo(13, 10);
+    });
+    it('keeps a pinch made in 3D, instead of losing it when the map flattens', () => {
+      // Pinching while tilted changes the scale the flat view is measured in.
+      const pinched = tiltZoom(13, TERRAIN_PITCH) + 0.8;
+      expect(tiltZoom(untiltedZoom(pinched, TERRAIN_PITCH), FLAT_VIEW.pitch)).toBeCloseTo(13.8, 10);
+    });
+  });
+});
+
+describe('untiltedZoom', () => {
+  it('is the inverse of tiltZoom at every tilt, not just the relief pitch', () => {
+    for (const pitch of [0, 7.5, 30, 55, 85]) {
+      expect(untiltedZoom(tiltZoom(12, pitch), pitch)).toBeCloseTo(12, 10);
+    }
+  });
+  it('reads a flat camera as itself, so anchoring never moves a flat map', () => {
+    expect(untiltedZoom(12, FLAT_VIEW.pitch)).toBe(12);
+  });
+  it('never falls below zero, unlike the clamped direction', () => {
+    expect(untiltedZoom(0, TERRAIN_PITCH)).toBe(TERRAIN_ZOOM_OUT);
   });
 });

@@ -496,9 +496,30 @@ button and locate-me all go through it.
 
 Search is how 3D gets looked at in practice — find a summit, switch the relief
 on — so this is what makes that sequence work: the result is framed for the tilt
-it will actually be viewed at, rather than for the flat map it was found on. The
-pull-back follows the tilt being moved *to* rather than being a stored offset, so
-tilting back to flat compensates nothing and leaves the zoom where it found it.
+it will actually be viewed at, rather than for the flat map it was found on.
+
+### The pull-back is anchored, or it is a ratchet
+
+Compensating the *live* zoom does not work, and fails in a way that looks like
+a different bug. Every move into a tilt charges a fresh pull-back, and flattening
+the tilt compensates nothing, so the map never gives the ground back: starting
+from zoom 13, four 3D on/off cycles walk it out to 11.5, 10, 8.5, 7 — one full
+step per cycle, until the whole map is a continent.
+
+So the pull-back is measured from `flatZoom`, the zoom the camera *would* have
+if it were flat. `moveend` re-derives it with `untiltedZoom(zoom, pitch)` on
+every settled position, which makes it a fixed point instead of a running
+total: a move landing on `tiltZoom(flatZoom, pitch)` reads back as the anchor it
+started from, and the toggle cycles at 13 → 11.5 → 13 indefinitely.
+
+Deriving it rather than tracking it by hand is what keeps a pinch made in 3D:
+that is a real change of scale, and because it is read off the camera it shifts
+the flat view's scale with it instead of being discarded when the map flattens.
+
+Moves that *choose* a new scale — a search result, the fit-route button,
+locate-me's accuracy zoom — are not tilts, so they take their own computed zoom
+as the base and pull back from that. `moveend` re-anchors off them afterwards
+anyway.
 
 Sources and layers:
 

@@ -22,7 +22,7 @@ import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
 import { fitPadding } from './fitPadding';
-import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, shouldKeepWaiting, terrainAt, tiltZoom, transitionProgress, type TerrainView } from './terrain';
+import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, shouldKeepWaiting, terrainAt, tiltZoom, transitionProgress, untiltedZoom, type TerrainView } from './terrain';
 import './style.css';
 
 let routes: Route[] = [];
@@ -125,6 +125,18 @@ const map = new maplibregl.Map({
 /** Breathing room `fitBounds` leaves on every edge, before the sidebar is added. */
 const FIT_MARGIN = 80;
 
+/**
+ * The zoom the camera would have if it were flat — the anchor every tilt is
+ * measured from (`tiltZoom`), re-read off the camera in `moveend`.
+ *
+ * It has to be a fixed point rather than the live zoom. Compensating the live
+ * zoom charges a fresh pull-back on every move into a tilt, and flattening the
+ * tilt compensates nothing, so switching 3D on and off walks the map out to the
+ * horizon a step at a time. Anchored, the same ground stays on screen at every
+ * tilt and flattening returns to the view that was there before.
+ */
+let flatZoom = map.getZoom();
+
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.AttributionControl(), 'bottom-right');
 
@@ -172,6 +184,12 @@ map.on('load', () => {
 });
 
 map.on('moveend', () => {
+  // Re-anchor in flat terms. Derived rather than tracked, so it survives its own
+  // programmatic moves: a move that lands on `tiltZoom(flatZoom, pitch)` reads
+  // back as the same anchor it started from, and a pinch made in 3D shifts the
+  // scale the flat view is measured in instead of being lost when the map
+  // flattens.
+  flatZoom = untiltedZoom(map.getZoom(), map.getPitch());
   mapView = currentView();
   persistWorkspace();
 });
@@ -348,7 +366,7 @@ function startTerrainTransition(target: TerrainView, token: number) {
   // Pitch and zoom go into one `easeTo` because they are one move: MapLibre
   // eases both together on its own curve, and the pull-back (`tiltZoom`) that
   // keeps the ground in frame arrives with the tilt instead of after it.
-  map.easeTo({ pitch: target.pitch, zoom: tiltZoom(map.getZoom(), target.pitch), duration: TERRAIN_TRANSITION_MS });
+  map.easeTo({ pitch: target.pitch, zoom: tiltZoom(flatZoom, target.pitch), duration: TERRAIN_TRANSITION_MS });
   // Ramping the relief means writing the live terrain object's exaggeration
   // every frame. If it cannot be reached, the relief is stepped once at the end
   // rather than forty times during the move — `setTerrain` rebuilds the terrain
@@ -1305,6 +1323,9 @@ function onLocated(position: GeolocationPosition) {
   locateButton.classList.remove('busy');
   const fix: LocationFix = { lon: position.coords.longitude, lat: position.coords.latitude, accuracyMeters: position.coords.accuracy, at: position.timestamp };
   setLocationFix(fix);
+  // Locate picks its own scale from the accuracy reading, so the pull-back
+  // applies to *that* rather than to the anchor: a deliberate jump to a
+  // different zoom is not a tilt. `moveend` re-anchors off it afterwards.
   map.easeTo({ center: [fix.lon, fix.lat], zoom: tiltZoom(zoomForAccuracy(fix.accuracyMeters, fix.lat), map.getPitch()), duration: 700 });
   setLocateStatus('');
 }

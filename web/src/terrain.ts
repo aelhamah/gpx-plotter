@@ -60,6 +60,14 @@ export type TerrainView = {
 };
 
 /**
+ * How many zoom levels `pitch` costs the camera. Zero when flat, the whole
+ * pull-back at the full relief tilt, proportional in between.
+ */
+function pullback(pitch: number): number {
+  return TERRAIN_ZOOM_OUT * (Math.max(pitch, FLAT_PITCH) / TERRAIN_PITCH);
+}
+
+/**
  * The zoom that shows a flat map's worth of ground at `pitch`.
  *
  * Used by every programmatic camera move, so that the one place the map can be
@@ -69,13 +77,28 @@ export type TerrainView = {
  * maths, so a fit made in 3D lands its target off the top of the frame.
  *
  * Linear in the tilt, so a move part-way through a transition is compensated
- * part-way too. The pull-back follows the tilt being moved *to* rather than
- * being a stored offset, so tilting back to flat compensates nothing and leaves
- * the zoom exactly as it found it — toggling 3D off never drifts further out.
+ * part-way too.
+ *
+ * Always pass the same anchor — `untiltedZoom` of wherever the camera last
+ * settled — and never the live zoom. Measuring from the live zoom compounds:
+ * each move costs a fresh pull-back, and because flattening the tilt
+ * compensates nothing, the ground never comes back. Repeatedly switching 3D on
+ * and off walks the whole map out to the horizon.
  */
 export function tiltZoom(zoom: number, pitch: number): number {
-  const pullback = TERRAIN_ZOOM_OUT * (Math.max(pitch, FLAT_PITCH) / TERRAIN_PITCH);
-  return Math.max(zoom - pullback, 0);
+  return Math.max(zoom - pullback(pitch), 0);
+}
+
+/**
+ * The inverse of `tiltZoom`: the zoom a tilted camera would have at flat pitch.
+ *
+ * Read off the camera once it settles, this is the anchor every later tilt is
+ * measured from, which is what makes the pull-back a fixed point rather than a
+ * ratchet — and it keeps a pinch made in 3D, since that changes the scale the
+ * flat view is measured in, without any of it having to be tracked by hand.
+ */
+export function untiltedZoom(zoom: number, pitch: number): number {
+  return zoom + pullback(pitch);
 }
 
 /** The flat map. An exaggeration of zero is exactly as flat as no terrain at all. */

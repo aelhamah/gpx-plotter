@@ -383,7 +383,9 @@ Because the app is map- and DOM-heavy, some checks are manual:
   should pull back as it tilts and the summit should end up in frame with ground
   around it — not the inside of the massif, and not a black or untextured frame.
   Do it in both orders (search first, 3D first, and 3D while already tilted) and
-  watch that the zoom never drifts outward across an on/off toggle.
+  watch that the zoom never drifts outward across an on/off toggle. Repeat the
+  toggle several times from the same starting zoom: the zoom must return to the
+  same two values every cycle, not step further out each time.
 - Press the locate button: the browser should prompt for location permission
   (only on the first press), the blue dot and its accuracy halo should land on
   the map, and the camera should frame the halo. Block the permission in the
