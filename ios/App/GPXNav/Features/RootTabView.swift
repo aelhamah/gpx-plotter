@@ -11,8 +11,30 @@ struct RootTabView: View {
 
     /// `-openFirstRoute` deep-links into a route, so it has to start on the tab
     /// that owns the list rather than the default one.
-    @State private var selection: Tab = ProcessInfo.processInfo
-        .arguments.contains("-openFirstRoute") ? .navigate : .create
+    @State private var selection: Tab = RootTabView.initialTab
+
+    /// The tab to open on, read from the launch arguments.
+    ///
+    /// `simctl` cannot tap, so the Settings screen — which is the only place the
+    /// basemap picker, the relief and slope toggles and the units picker live —
+    /// was unreachable from a script. `-tab settings` is how the CI preview in
+    /// `ios/ci/capture.sh` gets a frame of it. See `docs/dev.md`.
+    ///
+    /// An unknown or missing value falls back to Create rather than trapping:
+    /// a typo in a flag should not change which tab the app opens on for a
+    /// person who did not pass it deliberately.
+    static var initialTab: Tab {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-openFirstRoute") { return .navigate }
+        guard let index = arguments.firstIndex(of: "-tab"),
+              arguments.count > index + 1 else { return .create }
+        switch arguments[index + 1].lowercased() {
+        case "create": return .create
+        case "navigate", "maps": return .navigate
+        case "settings": return .settings
+        default: return .create
+        }
+    }
 
     var body: some View {
         TabView(selection: $selection) {

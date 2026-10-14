@@ -122,12 +122,19 @@ GitHub Actions workflows:
   on push to `main`.
 - `.github/workflows/preview.yml` — publish a `web/`-only change to
   `preview/<branch>/` and comment the link on the PR.
+- `.github/workflows/ios-preview.yml` — for an `ios/` change, build the native
+  app, drive it through a set of states in a simulator, and publish the captured
+  frames to `preview/ios/<branch>/`, so an iOS change can be reviewed as screens.
+  Captured locally with `ios/ci/capture.sh`.
 
 Set **`gate`** as the required status check in branch protection — the per-platform
 jobs are conditional and report as *skipped* when they don't apply.
 
 Enable **Settings → Pages → Source: GitHub Actions**, and allow-list your Pages
-origin on the MapTiler key.
+origin on your MapTiler key. The iOS preview reads a `MAPTILER_API_KEY` secret
+too, but that is the *native* key model, which needs a User-Agent allow-list
+instead of an origin one; without it the capture falls back to MapLibre's
+keyless demo basemap and the page says so.
 
 ## The iOS app
 

@@ -679,13 +679,25 @@ placeholder.
 - PR previews (`.github/workflows/preview.yml`) publish each PR commit to
   `preview/<branch>/` on the same `gh-pages` branch (so main and previews coexist
   on one Pages site) and comment the URL on the PR. Only `web/` changes produce
-  a preview, since a native build has nothing to publish.
-- Deployment and previews therefore have two writers for one branch, and the
-  publishing action clones it shallowly, so overlapping pushes are rejected with
-  no retry. Both workflows serialise on a shared `gh-pages` concurrency group,
-  with `cancel-in-progress` off so a preview cannot interrupt a live publish.
-  Merging a PR triggers both at once, so without that group every merge is a
-  chance to leave the site on the previous commit.
+  a preview, since the browser app is the only thing that has something to
+  publish.
+- The native app's PR preview (`.github/workflows/ios-preview.yml`) is a second,
+  independent preview at `preview/ios/<branch>/`. A macOS runner builds GPXNav,
+  and `ios/ci/capture.sh` launches it in a throwaway simulator once per
+  [launch argument](dev.md#launch-arguments) and screenshots each state into a
+  static page — scenes on the left, the captured frame on the right — so an
+  `ios/` change can be reviewed as screens rather than as a diff over Swift.
+  `simctl` cannot tap, so the page is a gallery of captured states, not a live
+  device, and anything the launch arguments cannot reach is not in it.
+- Deployment and the previews therefore have three writers for one branch, and
+  the publishing action clones it shallowly, so overlapping pushes are rejected
+  with no retry. All three serialise their *publishing* jobs on a shared
+  `gh-pages` concurrency group, with `cancel-in-progress` off so a preview
+  cannot interrupt a live publish. Merging a PR triggers two of them at once, so
+  without that group every merge is a chance to leave the site on the previous
+  commit. The iOS preview keeps its own capture job off that group, keyed on the
+  PR number instead, so that superseding a capture can cancel a wasted macOS
+  build without serialising every preview behind every other preview's compile.
 
 ## 14. Known limitations
 

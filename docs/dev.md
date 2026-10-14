@@ -142,16 +142,49 @@ xcrun simctl launch booted com.example.GPXNav
 
 | Argument | Effect |
 | --- | --- |
+| `-tab <name>` | Opens on `create`, `navigate` or `settings`. An unknown name falls back to Create. |
 | `-openFirstRoute` | Pushes the last-opened route (or the first) so the map opens directly. |
 | `-demoTiles` | Uses MapLibre's keyless public demo basemap instead of MapTiler. |
 | `-satellite` | Starts on the satellite basemap instead of outdoor. |
 | `-showRelief` | Turns on the MapTiler hillshade layer at launch. |
 | `-showSlope` | Turns on the loopback slope raster at launch. |
+| `-terrain3D` | Turns on MapLibre 3D terrain at launch. |
 | `-downloadOffline` | Starts the corridor tile download at launch. |
 | `-expandedPanel` | Opens the bottom sheet at the large detent, where the profile chart and the offline row live. |
 | `-scrub <fraction>` | Seeds the profile scrub at a fraction of the route's distance. |
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
+
+These are what makes the whole UI reachable from a script. `simctl` cannot tap,
+and System Events needs Accessibility permission a CI runner does not have, so a
+launch argument is the only lever — anything not covered here cannot be captured
+or tested automatically, and the capture below is the reminder of that.
+
+### One flag in that table does not work
+
+`-openSearch` is documented above and has, as far as this could be established,
+never opened anything. `ViewerScreen` presents the figures sheet for the whole
+time it is on screen, and a presentation attempted while another is already up
+from the same host is dropped rather than queued, so the search sheet loses.
+This was pinned down on the simulator rather than assumed:
+
+- the arguments arrive — `ProcessInfo.processInfo.arguments` contains
+  `-openSearch`;
+- `isSearching` is genuinely set true;
+- the sheet content is never evaluated, so nothing was presented and immediately
+  dismissed;
+- moving the sheet onto a different view in the hierarchy does not help — the
+  presentation still resolves to the same host;
+- `.fullScreenCover` instead of `.sheet` does not help;
+- deferring the request by half a second, five seconds, or thirty-five seconds
+  does not help, so it is not a matter of the map still loading.
+
+The search button on the map screen is presumably broken the same way, which
+would mean the sheet has never worked for anyone rather than only under `simctl`.
+Fixing it means giving the search a presentation host that is not already busy —
+most likely by making the figures panel an overlay in the view instead of a
+sheet, or by presenting search from `RootTabView`. Until then the capture leaves
+the scene out rather than publish a frame identical to the plain route screen.
 
 `GPXNAV_STYLE_URL` (environment variable) overrides the style URL, which is how
 you point the app at a local server to inspect the headers iOS sends.
@@ -212,6 +245,51 @@ File names are `{source}_{z}_{x}_{y}.{format}`, and the source is part of the
 name on purpose — see [`ios-plan.md`](ios-plan.md) §9. Writing a sentinel into a
 cached file and then `curl`-ing the loopback for that tile is the quickest way to
 confirm a hit is being answered from disk rather than the network.
+
+### The iOS preview
+
+`ios/ci/capture.sh` builds the app, launches it in a throwaway simulator once
+per [launch argument](#launch-arguments), and screenshots each result into a
+static page: a scene list on the left, the captured frame on the right. It is
+what `.github/workflows/ios-preview.yml` runs so a PR that changes `ios/` can be
+reviewed as the screens it produced.
+
+```bash
+MAPTILER_API_KEY=... ios/ci/capture.sh     # from the repository root
+```
+
+It writes to `ios/App/build/ios-preview/site`, which opens straight from the
+filesystem — no server, because the scene list is `scenes.js` rather than JSON
+fetched over HTTP. Useful knobs:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `MAPTILER_API_KEY` | unset | A native key. Without one the capture falls back to the keyless demo basemap, and the page says so. |
+| `IOS_DEVICE` | `iPhone` | Device name filter; picks the newest, largest match. |
+| `IOS_RUNTIME` | the Xcode simulator SDK | Preferred iOS version, falling back to the newest installed. |
+| `MIN_SETTLE` | `30` | Floor, in seconds, before a scene may be captured. |
+| `MAX_SETTLE` | `90` | Ceiling on a scene that never settles. |
+| `POLL_SECONDS` | `4` | How often the screen is sampled while settling. |
+| `SKIP_VIDEO` | unset | Set to `1` to skip the walkthrough recording. |
+| `SKIP_BUILD` | unset | Set to `1` to reuse an existing DerivedData build. |
+
+There is deliberately no "how long to wait" knob, because that number does not
+exist: the app's first frame waits on MapLibre fetching the style, and the same
+scene has measured anywhere from twelve seconds to well over thirty on the same
+machine. A fixed sleep produces either wasted minutes or a blank white
+screenshot that reads as a bug. Instead each scene is sampled until two
+consecutive frames come back byte-identical — a settled scene repeats, a loading
+one does not — with `MIN_SETTLE` as a floor and `MAX_SETTLE` as a backstop.
+
+Adding a screen to the preview means adding a row to the `SCENES` table at the
+top of the script, and adding a launch argument for it if one does not exist
+yet. It does not mean writing a new automation path, because there is no way to
+tap: whatever the preview shows has to be reachable from the command line.
+
+The capture device is created and deleted around the run rather than reused, so
+it cannot disturb a simulator already booted on the machine. A screenshot that
+times out is retried rather than failed, since that is a `simctl` flake on the
+iOS 26 runtimes and not a statement about the app.
 
 ## Scripts
 
@@ -434,9 +512,20 @@ Allow-list the Pages origin on your MapTiler key.
   skipped for forks (no secrets) and for PRs that only touch `ios/` — there is
   nothing to publish for a native build. The removal step still runs on close
   regardless, since it only deletes files.
-- **Both of those push to the same `gh-pages` branch, so they share one
-  `concurrency` group named `gh-pages`.** This is not tidiness — it is the only
-  thing standing between them and a failed publish:
+- iOS Preview (`.github/workflows/ios-preview.yml`) does the same for `ios/`
+  changes, at `preview/ios/<branch>/`, by capturing the app in a simulator —
+  see [The iOS preview](#the-ios-preview). It is the workflow that also builds
+  the app target, which CI otherwise never does. Set a `MAPTILER_API_KEY`
+  repository secret for it: that is the *native* key model, which needs a
+  User-Agent allow-list rather than an origin one (see
+  [`ios-plan.md`](ios-plan.md) §5.1). It is optional — without it the capture
+  falls back to the keyless demo basemap and the page says so — but the terrain
+  scenes are worth very little without one. It is not a required check and is
+  not wired into the `gate` job, because it is slow and its failures are
+  `simctl` flakes rather than signal about the change.
+- **All three push to the same `gh-pages` branch, so all three publishing jobs
+  share one `concurrency` group named `gh-pages`.** This is not tidiness — it is
+  the only thing standing between them and a failed publish:
 
   - `peaceiris/actions-gh-pages` clones with `--depth=1 --single-branch`, so it
     cannot fast-forward. Any push that overlaps another writer's is rejected as
@@ -452,10 +541,18 @@ Allow-list the Pages origin on your MapTiler key.
 
   If you add a third thing that writes to `gh-pages`, it needs the same group.
 
+  The iOS preview's *capture* job is deliberately kept off that group. It is a
+  multi-minute macOS build, and putting it behind a branch-wide group would
+  serialise every preview in the repository behind every other preview's
+  compile. It gets its own group keyed on the PR number with
+  `cancel-in-progress` on, which is safe precisely because only its publish and
+  cleanup jobs touch `gh-pages`.
+
 | Build | URL |
 | --- | --- |
 | Main | `https://<owner>.github.io/<repo>/` |
-| Preview | `https://<owner>.github.io/<repo>/preview/<branch>/` |
+| Web preview | `https://<owner>.github.io/<repo>/preview/<branch>/` |
+| iOS preview | `https://<owner>.github.io/<repo>/preview/ios/<branch>/` |
 
 - `web/vite.config.ts` sets `base: './'` so the same bundle works at the root and
   in a preview subdirectory.
