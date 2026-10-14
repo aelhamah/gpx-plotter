@@ -116,6 +116,11 @@ trap 'cleanup; exit 130' INT TERM
 # button on the map has therefore never worked. Until that is fixed, capturing
 # the flag would only put a copy of the plain route frame on the page. See
 # docs/dev.md.
+#
+# `nav` is the one scene that gets a moving position rather than the single
+# `LOCATION` above, but only because that single fix is enough: the readout needs
+# a position to project onto the route, not a track record. It will read as
+# sitting at the route start with the whole distance still to walk.
 # --------------------------------------------------------------------------
 
 SCENES=$(cat <<'EOF'
@@ -129,6 +134,7 @@ route-relief|Overlays|Relief shading|-tab navigate -openFirstRoute -showRelief
 route-slope|Overlays|Slope bands|-tab navigate -openFirstRoute -showSlope
 route-terrain|Overlays|3D terrain|-tab navigate -openFirstRoute -terrain3D
 route-satellite|Overlays|Satellite basemap|-tab navigate -openFirstRoute -satellite
+nav|Navigation|Live guidance|-tab navigate -openFirstRoute -navigate
 EOF
 )
 
