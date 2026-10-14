@@ -16,7 +16,10 @@
     return;
   }
 
-  var VIDEO = { id: "__walkthrough", group: "Walkthrough", label: "Walkthrough", file: null };
+  // "walkthrough" rather than a mangled id so that #walkthrough is a real
+  // deep link: show() writes that hash and indexOf reads it back, and no scene
+  // id collides with it.
+  var VIDEO = { id: "walkthrough", group: "Walkthrough", label: "Walkthrough", file: null };
   var order = (data.video ? [VIDEO] : []).concat(data.scenes);
   var current = -1;
 
