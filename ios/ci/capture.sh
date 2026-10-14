@@ -549,6 +549,11 @@ fi
 log "Writing the page"
 cp "$SITE_SRC/index.html" "$SITE_SRC/style.css" "$SITE_SRC/app.js" "$OUT_DIR/"
 
+# Actions checks out a pull request as a detached HEAD, so
+# `rev-parse --abbrev-ref` answers "HEAD" and the page header says so. The
+# workflow's own branch name is the one worth showing.
+BRANCH_NAME="${GITHUB_HEAD_REF:-$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+
 # Built as JSON first and validated, then wrapped into the assignment the page
 # reads. Writing the JS by hand meant one broken substitution — a signalled
 # `xcodebuild` under `pipefail`, say — could emit a file that parses as far as
@@ -564,7 +569,7 @@ XCODE_LINE="${XCODE_LINE%%$'\n'*}"
 {
   printf '{\n'
   printf '  "commit": "%s",\n'    "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  printf '  "branch": "%s",\n'    "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  printf '  "branch": "%s",\n'    "$BRANCH_NAME"
   printf '  "device": "%s",\n'    "$DEVICE_NAME"
   printf '  "runtime": "%s",\n'   "$RUNTIME_NAME"
   printf '  "xcode": "%s",\n'     "$XCODE_LINE"
