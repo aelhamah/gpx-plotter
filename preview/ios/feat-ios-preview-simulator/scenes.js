@@ -1,10 +1,10 @@
 window.GPXNAV_PREVIEW = {
-  "commit": "76a5026",
-  "branch": "HEAD",
+  "commit": "61be179",
+  "branch": "feat/ios-preview-simulator",
   "device": "iPhone 17 Pro Max",
   "runtime": "iOS 26.2",
   "xcode": "Xcode 26.2",
-  "capturedAt": "2026-10-13T21:09:16Z",
+  "capturedAt": "2026-10-14T02:17:33Z",
   "demoTiles": true,
   "width": 828,
   "height": 1800,
