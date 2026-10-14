@@ -57,6 +57,11 @@ struct NavigationScreen: View {
         .onAppear {
             session.start()
             location.startStreaming()
+            // A fix that arrived before this screen did still counts. Without
+            // this the readout is empty -- no distance, no elevation, no dot's
+            // distance along the route -- until the *next* fix, which on a
+            // stationary simulator can be a long time coming.
+            ingest(location.fix)
         }
         .onDisappear {
             // Navigation owns the stream: leaving the screen must stop it, or the
@@ -64,10 +69,7 @@ struct NavigationScreen: View {
             location.stopStreaming()
         }
         .onChange(of: location.fix) { _, fix in
-            guard let fix else { return }
-            session.ingest(fix, speed: location.speed)
-            session.runsInBackground = location.runsInBackground
-            coveredDistance = session.readout?.covered
+            ingest(fix)
         }
         .task {
             // The clock cannot be a `Timer.publish` stored on the view. This body
@@ -83,6 +85,17 @@ struct NavigationScreen: View {
         .onChange(of: session.hasArrived) { _, arrived in
             if arrived { location.stopStreaming() }
         }
+    }
+
+    /// Fold a fix into the session and mirror it onto the map. The covered
+    /// distance is a separate `@State` because `MapView` binds it rather than
+    /// reading the session, and reading it from the session would mean either a
+    /// second source of truth or reworking the viewer's binding.
+    private func ingest(_ fix: LocationFix?) {
+        guard let fix else { return }
+        session.ingest(fix, speed: location.speed)
+        session.runsInBackground = location.runsInBackground
+        coveredDistance = session.readout?.covered
     }
 
     // MARK: - Off course
