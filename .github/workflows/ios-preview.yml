@@ -1,0 +1,212 @@
+name: iOS Preview
+
+# The web preview's counterpart for the native app: build GPXNav, drive it
+# through a fixed set of launch-argument-driven states in a real iOS Simulator,
+# and publish the frames as a static page at /preview/ios/<branch>/.
+#
+# The page exists so a PR that changes ios/ can be reviewed as the screens it
+# produced. `simctl` cannot tap, so this is a gallery of captured states, not a
+# live device — every scene is a launch argument, and the full list lives in
+# ios/ci/capture.sh.
+#
+# Scoped to pull requests on purpose. The site root is deploy.yml's, and this
+# never writes outside preview/ios/.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Deliberately not the gh-pages group. That group is for the jobs that push to
+# gh-pages, and putting a whole macOS build behind it would serialise every
+# preview in the repository behind every other preview's compile. Superseded
+# runs of this one PR are cancelled instead, because a re-push supersedes the
+# frames the old run would have published; the publish job is never cancelled
+# out from under a push it has already made.
+concurrency:
+  group: ios-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ios:
+              - 'ios/**'
+              - '.github/workflows/ios-preview.yml'
+      # ios/** alone, not .github/workflows/** as pr.yml and label-platforms.yml
+      # use. Those jobs are cheap enough that an over-broad filter costs
+      # nothing; this one compiles MapLibre, so an edit to an unrelated workflow
+      # should not trigger it. The preview's own file is listed explicitly so
+      # that changing the page or the scene table re-captures it.
+
+  capture:
+    needs: changes
+    if: >-
+      github.event.action != 'closed' &&
+      needs.changes.outputs.ios == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # The app needs Xcode 26; the runner's default is not guaranteed to be
+      # the one project.yml was written against.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # capture.sh reads the key from the environment and writes it into the
+      # gitignored Secrets.local.xcconfig itself, so the value never lands in a
+      # file this job later publishes. An unset key is not fatal — the capture
+      # falls back to the keyless demo basemap and the page says so — but a
+      # native key is what makes the terrain scenes worth looking at.
+      - name: Capture
+        working-directory: ios
+        env:
+          MAPTILER_API_KEY: ${{ secrets.MAPTILER_API_KEY }}
+          IOS_DEVICE: iPhone
+          MIN_SETTLE: '30'
+          MAX_SETTLE: '90'
+        run: |
+          set -o pipefail
+          ./ci/capture.sh 2>&1 | tee "$RUNNER_TEMP/capture.log"
+
+      # A capture that fails is usually a flake in simctl rather than in the
+      # app, so the log is uploaded before the step is allowed to fail the run.
+      - name: Upload capture log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-preview-log
+          path: ${{ runner.temp }}/capture.log
+          retention-days: 7
+
+      - name: Upload the page
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-preview-site
+          path: ios/App/build/ios-preview/site
+          retention-days: 7
+
+  publish:
+    needs: [changes, capture]
+    if: >-
+      github.event.action != 'closed' &&
+      needs.changes.outputs.ios == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Shares the gh-pages group with deploy.yml and preview.yml, for the reason
+    # documented there: peaceiris clones with --depth=1, so two overlapping
+    # writers lose the second push to a non-fast-forward with no retry.
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    steps:
+      - name: Download the page
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-preview-site
+          path: site
+
+      - name: Compute preview path
+        id: meta
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          branch=$(printf '%s' "$HEAD_REF" | sed 's#[^A-Za-z0-9._-]#-#g')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      # A sibling of preview/<branch>, not a subdirectory of it: preview.yml
+      # publishes the web build there and `keep_files` alone would not save it
+      # from a later iOS-only run and vice versa.
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          destination_dir: preview/ios/${{ steps.meta.outputs.branch }}
+          keep_files: true
+          commit_message: "Deploy iOS preview for ${{ steps.meta.outputs.branch }}"
+
+      - name: Comment the preview link on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
+          PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/preview/ios/${{ steps.meta.outputs.branch }}/
+        run: |
+          marker="<!-- gpx-plotter-ios-preview -->"
+          body="$marker
+          ### iOS preview updated
+
+          \`$BRANCH\` → <a href=\"$PREVIEW_URL\" target=\"_blank\" rel=\"noopener noreferrer\">iOS preview</a>
+
+          Captured from a real iOS Simulator on this branch. These are captured
+          frames, not a live device — each one is the app launched with the
+          arguments shown under it."
+          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | contains("gpx-plotter-ios-preview")) | .id' | tail -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+          fi
+
+  cleanup:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute preview path
+        id: meta
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          branch=$(printf '%s' "$HEAD_REF" | sed 's#[^A-Za-z0-9._-]#-#g')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Remove the preview from gh-pages
+        env:
+          BRANCH: ${{ steps.meta.outputs.branch }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
+            echo "gh-pages branch does not exist yet; nothing to clean up."
+            exit 0
+          fi
+          git fetch origin gh-pages
+          git checkout gh-pages
+          git rm -r --ignore-unmatch "preview/ios/$BRANCH"
+          if git diff --cached --quiet; then
+            echo "No iOS preview for $BRANCH to remove."
+            exit 0
+          fi
+          git commit -m "Remove iOS preview for $BRANCH"
+          git push origin gh-pages

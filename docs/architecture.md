@@ -55,6 +55,7 @@ web/                  The browser app — a self-contained Vite project
   src/segments.ts     Pure: per-segment bearing + midpoint, screen-space thinning
   src/arrows.ts       Direction-arrow icon, GeoJSON builder, and symbol layer spec
   src/fitPadding.ts   Pure: how much of the map the sidebar covers, per edge
+  src/terrain.ts      Pure: the flat ↔ 3D transition (pitch + relief exaggeration)
   src/geocode.ts      MapTiler geocoding search (peaks, towns, trails, trailheads)
   src/serviceStatus.ts  Names the service behind a failure and renders the banner
   src/locate.ts       Pure geolocation math: accuracy halo, camera zoom, permission copy
@@ -401,7 +402,10 @@ All mutable state is module-scoped in `main.ts`:
 - `routes: Route[]`, `waypoints: Waypoint[]`
 - `selectedRouteId`, `selectedIndex` (selected route point), `selectedWaypointIndex`
 - `drawing`, `waypointMode`
-- `terrainEnabled`, `reliefEnabled`, `satelliteEnabled`, `slopeEnabled`
+- `terrainEnabled`, `terrainView` (pitch + exaggeration the 3D transition has
+  reached), `terrainTransition` (token that cancels a transition in flight),
+  `terrainWarming` (terrain built ahead of a click, drawing flat),
+  `reliefEnabled`, `satelliteEnabled`, `slopeEnabled`
 - `locationFix: LocationFix | null` (last device position; memory only, never persisted)
 - `unitSystem`
 - `history: AppState[]`, `future: AppState[]` (bounded to 50 snapshots)
@@ -418,6 +422,104 @@ The map is created with the Outdoor style. On `load` and on every `style.load`
 (the latter fires after style swaps such as switching to satellite), the app
 calls `addDataLayers()` and `applyTerrain()` so custom sources/layers and 3D
 terrain are re-applied — MapLibre drops them when the style is replaced.
+
+### The move into 3D
+
+The 3D toggle changes two things at once — the camera's pitch, and how far the
+ground is lifted — and has to change them *together*. Setting the terrain first
+and easing the camera afterwards jolts: the ground snaps to full relief in a
+single frame, which also snaps the camera's height above the map centre
+(MapLibre re-derives it from the terrain every frame), and only then does the
+tilt begin.
+
+So `easeToTerrain()` starts the terrain at exaggeration `0` — pixel-identical
+to having no terrain — and drives it up on a `requestAnimationFrame` loop while
+`map.easeTo()` drives the pitch. Both use `terrain.ts`'s easing and duration, so
+the two halves of the move stay in step. Coming back down, the terrain is torn
+down only once the relief has reached zero, instead of vanishing in one frame
+while the camera is still tilted. Re-toggling mid-flight restarts from whatever
+the previous transition had reached.
+
+### Why the terrain is built on hover
+
+Ramping the relief is not enough on its own. Enabling MapLibre's terrain costs
+a few hundred milliseconds of solid main thread — a pool of thirty
+render-to-texture framebuffers, a DEM tile reload, then the tiles themselves —
+and MapLibre only charges it when the terrain is switched on. Build it on the
+click and the 700 ms transition runs to completion *inside* that stall: measured
+against a live preview on a retina canvas, the page painted nothing for the
+length of the transition and the first frame the user saw was already the end
+state.
+
+`warmUpTerrain()` therefore runs on `pointerenter` and `focus` of the toggle,
+at exaggeration `0`, where it draws exactly what no terrain draws. The click
+then only writes a number per frame. A click that outruns the warm-up waits on
+the unchanged map rather than cutting, capped by `TERRAIN_WARM_TIMEOUT_MS` so a
+terrain service that never answers cannot leave the button dead. Measured at
+idle, a terrain sitting at exaggeration `0` costs nothing: 61.0 fps with it
+against 60.7 fps without.
+
+MapLibre's only public terrain API is `setTerrain`, and every call rebuilds the
+terrain plus the pool of framebuffers, so it is used once per build. The
+exaggeration is a plain field the renderer re-reads every frame;
+`rampTerrainExaggeration()` writes that field directly so the relief can be
+stepped a frame at a time.
+
+That field is reached through `map.style.terrain`, and *not* `map.terrain` — the
+terrain object belongs to the style, and the map carries no `terrain` field at
+all (`Map.prototype` has only `setTerrain`/`getTerrain`, which delegate to it).
+Reaching for it on the map is the obvious mistake and it fails silently: the
+cast returns `undefined`, the code falls back to the public `setTerrain`, and a
+single 700 ms transition rebuilds the terrain and invalidates its DEM loads
+around forty times — the whole move is then spent tearing terrain down rather
+than showing it, which is how it presented as "the 3D does not render". If a
+MapLibre release moves the field off the style, `rampTerrainExaggeration()`
+reports it cannot ramp and the relief is stepped once at the end of the
+transition instead: slower-looking, but never once per frame.
+
+### Tilting pulls the camera back
+
+Every programmatic camera move compensates its zoom for the tilt already in
+effect (`tiltZoom`), because tilting a perspective camera toward the horizon is a
+trade: the near ground expands to fill the bottom of the frame while the far
+ground compresses into the distance. Holding zoom still across that trade is what
+makes the move read as diving *into* the terrain. On a summit it is worse than a
+close crop — the massif fills the screen, and at the tighter fits a bbox can
+place the camera level with or below the peak it was sent to.
+
+This has to be ours rather than MapLibre's, because the fit is. `fitBounds` and
+`cameraForBounds` both size the zoom as though the camera were looking straight
+down, and neither takes a pitch into the maths even though their options accept
+one; fitted in 3D they leave the target sitting above the middle of the frame.
+So `fitCamera()` fits and then pulls back, and the search path, the fit-route
+button and locate-me all go through it.
+
+Search is how 3D gets looked at in practice — find a summit, switch the relief
+on — so this is what makes that sequence work: the result is framed for the tilt
+it will actually be viewed at, rather than for the flat map it was found on.
+
+### The pull-back is anchored, or it is a ratchet
+
+Compensating the *live* zoom does not work, and fails in a way that looks like
+a different bug. Every move into a tilt charges a fresh pull-back, and flattening
+the tilt compensates nothing, so the map never gives the ground back: starting
+from zoom 13, four 3D on/off cycles walk it out to 11.5, 10, 8.5, 7 — one full
+step per cycle, until the whole map is a continent.
+
+So the pull-back is measured from `flatZoom`, the zoom the camera *would* have
+if it were flat. `moveend` re-derives it with `untiltedZoom(zoom, pitch)` on
+every settled position, which makes it a fixed point instead of a running
+total: a move landing on `tiltZoom(flatZoom, pitch)` reads back as the anchor it
+started from, and the toggle cycles at 13 → 11.5 → 13 indefinitely.
+
+Deriving it rather than tracking it by hand is what keeps a pinch made in 3D:
+that is a real change of scale, and because it is read off the camera it shifts
+the flat view's scale with it instead of being discarded when the map flattens.
+
+Moves that *choose* a new scale — a search result, the fit-route button,
+locate-me's accuracy zoom — are not tilts, so they take their own computed zoom
+as the base and pull back from that. `moveend` re-anchors off them afterwards
+anyway.
 
 Sources and layers:
 
@@ -577,13 +679,25 @@ placeholder.
 - PR previews (`.github/workflows/preview.yml`) publish each PR commit to
   `preview/<branch>/` on the same `gh-pages` branch (so main and previews coexist
   on one Pages site) and comment the URL on the PR. Only `web/` changes produce
-  a preview, since a native build has nothing to publish.
-- Deployment and previews therefore have two writers for one branch, and the
-  publishing action clones it shallowly, so overlapping pushes are rejected with
-  no retry. Both workflows serialise on a shared `gh-pages` concurrency group,
-  with `cancel-in-progress` off so a preview cannot interrupt a live publish.
-  Merging a PR triggers both at once, so without that group every merge is a
-  chance to leave the site on the previous commit.
+  a preview, since the browser app is the only thing that has something to
+  publish.
+- The native app's PR preview (`.github/workflows/ios-preview.yml`) is a second,
+  independent preview at `preview/ios/<branch>/`. A macOS runner builds GPXNav,
+  and `ios/ci/capture.sh` launches it in a throwaway simulator once per
+  [launch argument](dev.md#launch-arguments) and screenshots each state into a
+  static page — scenes on the left, the captured frame on the right — so an
+  `ios/` change can be reviewed as screens rather than as a diff over Swift.
+  `simctl` cannot tap, so the page is a gallery of captured states, not a live
+  device, and anything the launch arguments cannot reach is not in it.
+- Deployment and the previews therefore have three writers for one branch, and
+  the publishing action clones it shallowly, so overlapping pushes are rejected
+  with no retry. All three serialise their *publishing* jobs on a shared
+  `gh-pages` concurrency group, with `cancel-in-progress` off so a preview
+  cannot interrupt a live publish. Merging a PR triggers two of them at once, so
+  without that group every merge is a chance to leave the site on the previous
+  commit. The iOS preview keeps its own capture job off that group, keyed on the
+  PR number instead, so that superseding a capture can cancel a wasted macOS
+  build without serialising every preview behind every other preview's compile.
 
 ## 14. Known limitations
 
