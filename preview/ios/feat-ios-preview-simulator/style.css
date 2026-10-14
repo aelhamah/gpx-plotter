@@ -29,6 +29,13 @@
 
 * { box-sizing: border-box; }
 
+/* The still and the walkthrough share one frame and only one is ever shown.
+   Setting `display` on them below would otherwise win against the user-agent's
+   `[hidden] { display: none }` — author styles beat the UA sheet regardless of
+   specificity — so the hidden video rendered as a grey box under the phone and
+   pushed the caption off the bottom of the page. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -211,27 +218,18 @@ kbd {
     0 30px 60px -20px rgb(0 0 0 / 55%);
 }
 
+/* Both the stills and the walkthrough sit in the same bezel: `simctl` records
+   the device screen, not the simulator window, so the video is the same portrait
+   aspect as the screenshots and does not need framing of its own. */
 .device__screen img,
 .device__screen video {
   display: block;
-  height: min(72vh, 46rem);
+  height: min(70vh, 44rem);
   width: auto;
   max-width: 100%;
   border-radius: 2.5rem;
   background: #000;
   object-fit: contain;
-}
-
-.island {
-  position: absolute;
-  top: 24px;
-  left: 50%;
-  width: 30%;
-  height: 26px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: #0a0b0d;
-  pointer-events: none;
 }
 
 .device__caption {
