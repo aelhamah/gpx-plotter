@@ -117,10 +117,13 @@ trap 'cleanup; exit 130' INT TERM
 # the flag would only put a copy of the plain route frame on the page. See
 # docs/dev.md.
 #
-# `nav` is the one scene that gets a moving position rather than the single
-# `LOCATION` above, but only because that single fix is enough: the readout needs
-# a position to project onto the route, not a track record. It will read as
-# sitting at the route start with the whole distance still to walk.
+# `nav` needs the `LOCATION` fix above more than any other scene does: the
+# readout projects the position onto the route, and the map draws it, so without
+# a fix there is no dot, no distance left, and no elevation to print. One static
+# fix is enough for that -- it is a track record the screen does not have -- so
+# `nav` reads as sitting at the route start with the whole distance still to
+# walk. `location start --speed` would be needed for the off-course banner,
+# which a still capture should not be showing anyway.
 # --------------------------------------------------------------------------
 
 SCENES=$(cat <<'EOF'
@@ -345,12 +348,19 @@ xcrun simctl status_bar "$UDID" override \
 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
 
 # The location permission dialog would sit on top of the map in every frame,
-# and no scene is about that dialog.
-xcrun simctl privacy "$UDID" grant location "$BUNDLE_ID" >/dev/null 2>&1 || true
+# and no scene is about that dialog. The grants have to come *after* the install
+# below: `simctl privacy` on a bundle id that is not installed yet fails, and
+# with the failure swallowed the nav frame came back with the dialog over it and
+# a readout of zeros, which read as an app fault rather than a capture one.
 xcrun simctl location "$UDID" set "$LOCATION" >/dev/null 2>&1 || true
 
 log "Installing"
 xcrun simctl install "$UDID" "$APP_PATH"
+# `location-always` as well as `location`, so the nav screen's background
+# tracking reads as on rather than opening with the warning about the lock
+# screen. Nothing else in the app looks at authorisation.
+xcrun simctl privacy "$UDID" grant location "$BUNDLE_ID" >/dev/null 2>&1 || true
+xcrun simctl privacy "$UDID" grant location-always "$BUNDLE_ID" >/dev/null 2>&1 || true
 
 # --------------------------------------------------------------------------
 # Capture
