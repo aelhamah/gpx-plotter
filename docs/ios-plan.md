@@ -662,7 +662,7 @@ locked" — is **not** met, for a reason no amount of code fixes: it needs a dev
 | `NavigationSession` | **Done.** Owns the `RouteProgress` and the `OffCourseDetector`, and folds each fix in through `ingest(_:speed:)`. Deliberately a plain observable object rather than something that subscribes to `CLLocationManager` — the interesting behaviour is RouteKit's and is tested there, so the wiring stays thin and drivable from a test. |
 | `RouteProgress` reuse | **Done.** New `profile:` parameter lets a caller hand over a profile it already built. The viewer passes the one `RouteAnalysis` filled from terrain, so the nav readout and the profile chart cannot disagree about how steep the hill is — which is the number being read while walking. Covered by two new tests. |
 | Continuous location | **Done.** `LocationController` gained a streaming mode: `activityType = .fitness`, `pausesLocationUpdatesAutomatically = false` (the default stops updates when the system decides the user is stationary, which is exactly when progress should keep being measured), `distanceFilter = 5`, and `allowsBackgroundLocationUpdates`. |
-| Nav UI | **Done.** A `fullScreenCover` — not a sheet, because guidance is read one-handed and a grabber puts the numbers behind a drag. Remaining distance large and central, next waypoint above it, elevation / grade ahead / elapsed below, off-course banner on top. Every number formatted through `Units`. |
+| Nav UI | **Done.** A `fullScreenCover` — not a sheet, because guidance is read one-handed and a grabber puts the numbers behind a drag. It is the map itself, with a compact HUD over the bottom: next waypoint and remaining distance on the left, then progress, elevation, grade ahead, elapsed, and an End button. The walked part of the route is drawn as a trace over it, reusing the viewer's `scrubbedDistance`, so the map answers "where am I on this route" without a second mechanism. Off-course banner above the HUD. Every number formatted through `Units`. |
 | Off-course | **Done**, and driven by the existing tested detector rather than a second implementation. |
 | **Hike with the phone locked** | **Not verified.** Needs a physical device: `simctl` can synthesize a path, but not a lock screen, and the gate is about the hike continuing in a pocket. The settings that make it work are in place and the background-location indicator was observed running on the simulator. |
 
@@ -672,7 +672,23 @@ Three findings from building it, all of which look like details and are not:
   a fix existed, which was near-harmless with the one-shot locate button and would
   have dragged the camera out from under anyone panning during navigation, which
   streams fixes continuously. The request is now one-shot, set by the locate
-  button and spent by the map, matching the web app's `locate.ts`.
+  button and spent by the map, matching the web app's `locate.ts`. Navigation
+  passes `followsUserLocation` instead, which re-centres on each *changed* fix and
+  is switched off by the HUD's Following / Pan freely button.
+- **Following also has to own the zoom, once.** Re-centring copies the camera and
+  sets the centre, which leaves the zoom alone — so navigation opened on whatever
+  the viewer left behind, and a map that had never been moved is at the style's
+  world view: the route and the dot were on screen, but on a continent. The first
+  fix now asks for `AccuracyHalo.zoom(forAccuracyMeters:latitude:)` (the same
+  zoom the locate button uses, one level closer) and lets MapLibre convert it to
+  an altitude. After that the user's own zoom is left alone.
+- **A `Timer.publish` stored on a view is rebuilt with the view.** The nav screen
+  ticks once a second to show elapsed time, and every fix re-evaluates that body,
+  which built a fresh publisher and resubscribed. With one-second fixes against a
+  one-second timer the subscription was always cancelled just before it fired, so
+  the clock won exactly one race at startup and then sat at `0:00` forever. It is
+  a `.task` loop now, which survives re-renders. The clock was also dropping the
+  seconds (`%d:%02d` of hours and minutes), so it read `0:00` for the first hour.
 - **A `fullScreenCover` will not present while a `.sheet` from the same hierarchy
   is up.** The figures sheet is presented by the same view, so the flag flipped and
   nothing appeared — with no error and no crash to explain it. Navigation now

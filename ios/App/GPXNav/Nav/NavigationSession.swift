@@ -73,7 +73,14 @@ final class NavigationSession: ObservableObject {
         arrivalThreshold = max(30, min(60, resolved.totalDistance * 0.01))
     }
 
+    /// Begin timing and arm the off-course detector.
+    ///
+    /// Idempotent: the screen's `onAppear` can run twice when the map's
+    /// representable re-attaches, and a second `start` would wipe a partly
+    /// accumulated off-course window. A fresh session is made per presentation,
+    /// so nothing needs to restart one that has already begun.
     func start(at date: Date = Date()) {
+        guard startedAt == nil else { return }
         detector.start(at: date)
         startedAt = date
         isOffCourse = false
