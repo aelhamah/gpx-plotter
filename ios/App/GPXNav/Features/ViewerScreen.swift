@@ -22,6 +22,8 @@ struct ViewerScreen: View {
     @State private var fitToken = 0
     /// Waypoint names projected into map coordinates, redrawn as the camera moves.
     @State private var waypointLabels: [ProjectedWaypoint] = []
+    /// Whether live guidance is presented over the viewer.
+    @State private var isNavigating = false
     /// Bumped each time the map finishes loading a style.
     ///
     /// The corridor estimate can only be worked out once `StyleBuilder` knows
@@ -127,11 +129,40 @@ struct ViewerScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Navigate", systemImage: "location.fill") {
+                        beginNavigation()
+                    }
+                    // A route with fewer than two points has no line to follow, so
+                    // there is nothing to navigate. Greyed with the reason in the
+                    // tooltip rather than hidden, so the feature is discoverable.
+                    .disabled(route.points.count < 2)
+                    .help(route.points.count < 2 ? "This route has no line to follow." : "Start live guidance")
+                }
+            }
+            .fullScreenCover(isPresented: $isNavigating) {
+                NavigationScreen(
+                    route: route,
+                    waypoints: workspace.waypoints,
+                    // The viewer's own terrain-filled profile, so the nav readout
+                    // and the chart above it cannot disagree about the climb.
+                    profile: analysis.profile
+                )
+                .environmentObject(workspace)
+                .environmentObject(location)
+            }
             .onChange(of: styleGeneration) {
                 Task { await packs.estimate(for: route) }
             }
             .task {
                 workspace.selectedRouteId = route.id
+                // `simctl launch` cannot tap, so `-navigate` opens live guidance
+                // straight away. Pair it with `xcrun simctl location <device> set
+                // <lat>,<lon>` to walk the route without leaving the desk.
+                if ProcessInfo.processInfo.arguments.contains("-navigate") {
+                    beginNavigation()
+                }
                 await packs.estimate(for: route)
                 await packs.refreshCacheFigures()
                 analysis.fillMissingElevations()
@@ -252,6 +283,23 @@ struct ViewerScreen: View {
             // comparing against the two we offered is both simpler and exact.
             set: { isPanelExpanded = $0 == .height(expanded) }
         )
+    }
+
+    /// Open live guidance, taking the figures sheet down first.
+    ///
+    /// The order matters: both presentations hang off this same view, and SwiftUI
+    /// will not present a `fullScreenCover` while a `.sheet` from the same
+    /// hierarchy is still up — the flag flips and nothing appears. Dropping the
+    /// panel first also means the readout is not competing with the stats for the
+    /// screen.
+    private func beginNavigation() {
+        isPanelPresented = false
+        // One runloop later, so the sheet's dismissal has been committed before
+        // the cover is asked for. Setting both in the same transaction is what
+        // loses one of them.
+        Task { @MainActor in
+            isNavigating = true
+        }
     }
 
     /// Whether the sheet is at its short detent.

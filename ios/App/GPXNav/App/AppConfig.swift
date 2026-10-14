@@ -116,6 +116,14 @@ enum AppConfig {
     /// Camera pitch with 3D terrain on, matching the web app's `easeTo`.
     static let terrainPitch: CGFloat = 55
 
+    /// Upper bound on the zoom the navigation follow picks for itself, when it
+    /// frames the accuracy halo from a fix that claims to be very good.
+    ///
+    /// The halo framing is what the locate button uses; navigation allows one
+    /// level closer, because a hiker wants to see the trail under their feet
+    /// rather than a 60px circle around it.
+    static let navigationFollowMaxZoom = 16.0
+
     /// Height of the sheet's short detent: the expand affordance and the figures.
     ///
     /// Computed from `PanelMetrics` and the display's bottom inset rather than

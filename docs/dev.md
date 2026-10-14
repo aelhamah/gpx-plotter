@@ -47,7 +47,7 @@ The native app has two pieces, described in full in [`ios-plan.md`](ios-plan.md)
 ```bash
 cd ios/RouteKit
 swift build       # builds the library
-swift test        # runs 152 XCTest cases
+swift test        # runs 154 XCTest cases
 ```
 
 Targets iOS 17 / macOS 14, Swift 6 language mode. CI runs both commands in
@@ -154,6 +154,43 @@ xcrun simctl launch booted com.example.GPXNav
 | `-scrub <fraction>` | Seeds the profile scrub at a fraction of the route's distance. |
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
+| `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
+
+### Walking a route on the simulator
+
+Navigation needs a moving position, and a static one is not enough: the off-course
+detector deliberately ignores fixes below a walking pace, because standing still
+makes GPS wander sideways and wander is what a naive off-course check reads as a
+wrong turn. So drive it with a path:
+
+```bash
+D=<device-udid>
+xcrun simctl privacy $D grant location com.example.GPXNav
+xcrun simctl privacy $D grant location-always com.example.GPXNav
+xcrun simctl launch $D com.example.GPXNav -openFirstRoute -navigate
+
+# Start a few hundred metres off the route line and walk away from it: the
+# banner appears once the deviation has been sustained past the detector's 8s.
+xcrun simctl location $D start --speed=12 --interval=1 \
+  39.1010,-106.9440 39.1045,-106.9440 39.1060,-106.9500 39.1060,-106.9600
+```
+
+`--speed` is metres per second and decides the reported ground speed, which the
+off-course rules gate on; `--interval` is how often fixes are issued.
+`xcrun simctl location $D clear` stops it.
+
+Both grants, in that order, and neither of them optional. `grant location-always`
+on its own leaves the app at *when in use*, which the nav screen reports honestly
+by asking to upgrade the moment navigation starts — i.e. the Always prompt lands
+on top of the screen you were trying to photograph. And the grants have to come
+after `simctl install`, because `simctl privacy` on a bundle id that is not
+installed yet fails. `ios/ci/capture.sh` does both, in that order, for that
+reason.
+
+To see the prompt itself, grant only `location`: navigation then asks for Always,
+because that is the only authorisation that keeps the readout running with the
+phone in a pocket, and the nav screen offers a **Turn on** button afterwards for
+anyone who dismissed it.
 
 These are what makes the whole UI reachable from a script. `simctl` cannot tap,
 and System Events needs Accessibility permission a CI runner does not have, so a

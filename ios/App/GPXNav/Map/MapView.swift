@@ -46,6 +46,14 @@ struct MapView: UIViewRepresentable {
     /// with `MLNMapView.convert(_:toPointTo:)`, which goes through the camera, so
     /// they still sit on their waypoint under pitch and 3D terrain.
     @Binding var waypointLabels: [ProjectedWaypoint]
+    /// Whether the camera should stay on the user.
+    ///
+    /// Navigation sets this and the viewer does not. It is a standing follow
+    /// rather than the locate button's one-shot request, because a hiker walking
+    /// needs the dot under the crosshair — but it means panning is immediately
+    /// undone by the next fix. A recentre affordance that suspends following is
+    /// the obvious next step and is not here.
+    @Binding var followsUserLocation: Bool
     /// Incremented to ask the map to frame the route again. `ViewerScreen` has no
     /// handle on the `MLNMapView`, so the fit button raises this instead. Only
     /// read here, so a binding is enough.
@@ -66,6 +74,7 @@ struct MapView: UIViewRepresentable {
     /// The `fitToken` the representable last acted on, so `updateUIView` only
     /// refits when the button was actually tapped.
     private let fitState = FitState()
+    private let followState = FollowState()
 
     init(
         route: Route,
@@ -73,6 +82,7 @@ struct MapView: UIViewRepresentable {
         loadError: Binding<String?> = .constant(nil),
         onStyleLoaded: (() -> Void)? = nil,
         waypointLabels: Binding<[ProjectedWaypoint]> = .constant([]),
+        followsUserLocation: Binding<Bool> = .constant(false),
         fitToken: Binding<Int> = .constant(0)
     ) {
         self.route = route
@@ -80,6 +90,7 @@ struct MapView: UIViewRepresentable {
         self._loadError = loadError
         self.onStyleLoaded = onStyleLoaded
         self._waypointLabels = waypointLabels
+        self._followsUserLocation = followsUserLocation
         self._fitToken = fitToken
         // Seeded, so the first `updateUIView` does not read as a fit request and
         // animate the camera over the fit the coordinator has already done.
@@ -112,6 +123,7 @@ struct MapView: UIViewRepresentable {
         }
         applyEverything(to: mapView)
         refreshWaypointLabels(for: mapView)
+        applyFollowIfNeeded(to: mapView)
         if fitState.token != fitToken {
             fitState.token = fitToken
             fitMapToRoute(mapView, route: route, animated: true)
@@ -539,14 +551,54 @@ struct MapView: UIViewRepresentable {
 
     /// Recentre on the fix and face the direction of travel, or north when the
     /// locate button is tapped a second time.
-    private func applyCamera(to mapView: MLNMapView) {
-        guard let fix = location.fix else { return }
+    /// - Parameter force: move without a pending locate-button request, for the
+    ///   navigation follow. The request is left unspent when forced, so a locate
+    ///   tap during navigation still recentres.
+    private func applyCamera(to mapView: MLNMapView, force: Bool = false) {
+        // Only when the locate button asked. Re-centring on every fix looks fine
+        // with the one-shot locate, but navigation streams fixes continuously and
+        // this would then drag the camera out from under anyone panning to look at
+        // something else.
+        guard force || location.consumeRecentreRequest(), let fix = location.fix else { return }
         let camera = mapView.camera.copy() as! MLNMapCamera
         camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
         if location.followsHeading, let heading = location.heading {
             camera.heading = heading
         }
         mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
+    }
+
+    /// Keep the user under the crosshair while navigating.
+    ///
+    /// Driven by a *changed fix* rather than by every state update: `updateUIView`
+    /// runs for the unit toggle and the offline estimate too, and easing the
+    /// camera on each of those would make the map twitch constantly.
+    private func applyFollowIfNeeded(to mapView: MLNMapView) {
+        let wasFollowing = followState.isFollowing
+        followState.isFollowing = followsUserLocation
+        // Turning Following back on is a request to come back to the user even
+        // when the fix has not moved since, which is otherwise the one case that
+        // never re-centres: a pause on a trail, or a screenshot of a simulator
+        // parked at one location.
+        let resumed = followsUserLocation && !wasFollowing
+        guard followsUserLocation, let fix = location.fix, resumed || followState.lastFix != fix else { return }
+        let firstFollow = followState.lastFix == nil
+        followState.lastFix = fix
+        // The first fix only re-centres, which leaves the camera at whatever zoom
+        // the viewer left it at -- and a map that has never been moved is at the
+        // style's world view, so navigation would open on a continent. RouteKit
+        // already works out the zoom that frames an accuracy halo, so set that
+        // and let MapLibre convert it to an altitude; afterwards the user's own
+        // zoom is theirs to keep.
+        if firstFollow {
+            let zoom = AccuracyHalo.zoom(
+                forAccuracyMeters: fix.accuracyMeters,
+                latitude: fix.lat,
+                maxZoom: AppConfig.navigationFollowMaxZoom
+            )
+            mapView.setZoomLevel(zoom, animated: false)
+        }
+        applyCamera(to: mapView, force: true)
     }
 
     /// Reference-typed memo for resampled profiles.
@@ -573,6 +625,14 @@ struct MapView: UIViewRepresentable {
     /// remember whether this update was caused by the fit button.
     private final class FitState {
         var token: Int?
+    }
+
+    /// The fix the camera last followed, so a state change that did not move the
+    /// user does not re-animate the map. Without it every unrelated SwiftUI
+    /// update would ease the camera to the same place again.
+    private final class FollowState {
+        var lastFix: LocationFix?
+        var isFollowing = false
     }
 
     /// Re-project the waypoint labels after the camera moves.

@@ -140,21 +140,32 @@ public struct RouteProgress: Sendable {
     /// - Parameters:
     ///   - route: the route being followed.
     ///   - waypoints: markers to report as "next".
-    ///   - stepMeters: resample spacing for the elevation profile.
+    ///   - stepMeters: resample spacing for the elevation profile. Ignored when
+    ///     `profile` is supplied.
     ///   - elevationProvider: fills in the samples that `Profile.routeSamples`
     ///     leaves without elevation. The plan has the caller supply DEM
     ///     elevations here; without it, grade is simply unavailable.
+    ///   - profile: an already-built profile to use instead of resampling.
+    ///
+    ///   The `profile` parameter exists so a caller that *already* holds a resampled,
+    ///   terrain-filled profile — the viewer's `RouteAnalysis` has one — can hand
+    ///   it over rather than paying to rebuild and re-fill it. Without it,
+    ///   navigation and the profile chart read elevation from two different
+    ///   sources and can disagree about how steep the hill is, which is precisely
+    ///   the number a hiker is watching while walking.
     public init(
         route: Route,
         waypoints: [Waypoint] = [],
         stepMeters: Double = 30,
-        elevationProvider: ((Coordinate) -> Double?)? = nil
+        elevationProvider: ((Coordinate) -> Double?)? = nil,
+        profile: RouteProfile? = nil
     ) {
-        var profile = RouteProfile.make(from: route.points, stepMeters: stepMeters)
-        if let elevationProvider {
-            profile = profile.fillingElevations(with: elevationProvider)
-        }
-        self.profile = profile
+        let resolved = profile ?? {
+            let resampled = RouteProfile.make(from: route.points, stepMeters: stepMeters)
+            guard let elevationProvider else { return resampled }
+            return resampled.fillingElevations(with: elevationProvider)
+        }()
+        self.profile = resolved
         self.waypoints = waypoints
         self.routeCoordinates = route.points.map(\.coordinate)
 
