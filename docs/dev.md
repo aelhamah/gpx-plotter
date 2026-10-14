@@ -165,6 +165,7 @@ wrong turn. So drive it with a path:
 
 ```bash
 D=<device-udid>
+xcrun simctl privacy $D grant location com.example.GPXNav
 xcrun simctl privacy $D grant location-always com.example.GPXNav
 xcrun simctl launch $D com.example.GPXNav -openFirstRoute -navigate
 
@@ -177,6 +178,19 @@ xcrun simctl location $D start --speed=12 --interval=1 \
 `--speed` is metres per second and decides the reported ground speed, which the
 off-course rules gate on; `--interval` is how often fixes are issued.
 `xcrun simctl location $D clear` stops it.
+
+Both grants, in that order, and neither of them optional. `grant location-always`
+on its own leaves the app at *when in use*, which the nav screen reports honestly
+by asking to upgrade the moment navigation starts — i.e. the Always prompt lands
+on top of the screen you were trying to photograph. And the grants have to come
+after `simctl install`, because `simctl privacy` on a bundle id that is not
+installed yet fails. `ios/ci/capture.sh` does both, in that order, for that
+reason.
+
+To see the prompt itself, grant only `location`: navigation then asks for Always,
+because that is the only authorisation that keeps the readout running with the
+phone in a pocket, and the nav screen offers a **Turn on** button afterwards for
+anyone who dismissed it.
 
 These are what makes the whole UI reachable from a script. `simctl` cannot tap,
 and System Events needs Accessibility permission a CI runner does not have, so a

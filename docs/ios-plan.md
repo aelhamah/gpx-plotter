@@ -661,7 +661,7 @@ locked" — is **not** met, for a reason no amount of code fixes: it needs a dev
 | --- | --- |
 | `NavigationSession` | **Done.** Owns the `RouteProgress` and the `OffCourseDetector`, and folds each fix in through `ingest(_:speed:)`. Deliberately a plain observable object rather than something that subscribes to `CLLocationManager` — the interesting behaviour is RouteKit's and is tested there, so the wiring stays thin and drivable from a test. |
 | `RouteProgress` reuse | **Done.** New `profile:` parameter lets a caller hand over a profile it already built. The viewer passes the one `RouteAnalysis` filled from terrain, so the nav readout and the profile chart cannot disagree about how steep the hill is — which is the number being read while walking. Covered by two new tests. |
-| Continuous location | **Done.** `LocationController` gained a streaming mode: `activityType = .fitness`, `pausesLocationUpdatesAutomatically = false` (the default stops updates when the system decides the user is stationary, which is exactly when progress should keep being measured), `distanceFilter = 5`, and `allowsBackgroundLocationUpdates`. |
+| Continuous location | **Done.** `LocationController` gained a streaming mode: `activityType = .fitness`, `pausesLocationUpdatesAutomatically = false` (the default stops updates when the system decides the user is stationary, which is exactly when progress should keep being measured), `distanceFilter = 5`, and `allowsBackgroundLocationUpdates`. The nav screen also asks for "Always" when navigation starts, which is the only authorisation that survives a locked screen. |
 | Nav UI | **Done.** A `fullScreenCover` — not a sheet, because guidance is read one-handed and a grabber puts the numbers behind a drag. It is the map itself, with a compact HUD over the bottom: next waypoint and remaining distance on the left, then progress, elevation, grade ahead, elapsed, and an End button. The walked part of the route is drawn as a trace over it, reusing the viewer's `scrubbedDistance`, so the map answers "where am I on this route" without a second mechanism. Off-course banner above the HUD. Every number formatted through `Units`. |
 | Off-course | **Done**, and driven by the existing tested detector rather than a second implementation. |
 | **Hike with the phone locked** | **Not verified.** Needs a physical device: `simctl` can synthesize a path, but not a lock screen, and the gate is about the hike continuing in a pocket. The settings that make it work are in place and the background-location indicator was observed running on the simulator. |
@@ -698,6 +698,22 @@ Three findings from building it, all of which look like details and are not:
   off-course detector times its 8s window off exactly that, because a batch
   delivered late would stretch the window. The fix's timestamp and speed now both
   travel with it.
+
+- **Declaring background location is not asking for it.** The plist had both usage
+  descriptions and `UIBackgroundModes: location` from the start, so the app looked
+  capable of a hike with the phone locked — but nothing ever called
+  `requestAlwaysAuthorization()`, which had been written and then never wired up.
+  The symptom was a nav screen whose warning about the lock screen could never be
+  turned off: a capability that is declared, documented, and unreachable. It now
+  asks when navigation starts, and offers a **Turn on** button for anyone who
+  dismissed the prompt, gated on `canRequestBackground` so the button disappears
+  once iOS stops showing it.
+- **`simctl privacy grant location-always` alone leaves the app at when-in-use.**
+  Only after `grant location` has been issued does the upgrade stick, so a
+  screenshot pass that grants one and not the other gets the Always prompt
+  landing on the frame. The nav screen is now honest enough to expose the
+  difference: with when-in-use it asks to upgrade; with Always it shows neither
+  prompt nor warning. See docs/dev.md.
 
 `docs/dev.md` has the commands to drive a route on the simulator. Note that a
 *static* simulated position will not trigger the off-course banner, and that is

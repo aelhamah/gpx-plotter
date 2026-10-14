@@ -38,6 +38,14 @@ final class LocationController: NSObject, ObservableObject {
     /// pretending the hike is still being tracked.
     @Published private(set) var runsInBackground = false
 
+    /// Whether iOS would still show the "Always" prompt if asked.
+    ///
+    /// True only under when-in-use authorisation. Once Always is granted the
+    /// prompt can never appear again, and after the user has refused it iOS
+    /// stops offering it, so this goes false rather than leaving the nav screen
+    /// advertising a button that would do nothing.
+    @Published private(set) var canRequestBackground = false
+
     /// Whether the map is currently following the direction of travel. Tapping
     /// locate again snaps back to north, the way a compass button behaves.
     @Published var followsHeading = false
@@ -127,7 +135,7 @@ final class LocationController: NSObject, ObservableObject {
             manager.startUpdatingHeading()
         }
         isStreaming = true
-        runsInBackground = manager.authorizationStatus == .authorizedAlways
+        refreshBackgroundAuthorization()
         if status == .idle { status = .locating }
     }
 
@@ -149,11 +157,23 @@ final class LocationController: NSObject, ObservableObject {
     /// Ask for "Always" so a hike keeps being tracked with the screen locked.
     ///
     /// Separate from `startStreaming` because iOS will only show that prompt
-    /// after when-in-use has been granted, and asking for it on first navigation
-    /// is a request the user has no context for.
+    /// after when-in-use has been granted, and asking for it on first launch is a
+    /// request the user has no context for. The nav screen calls this when
+    /// navigation starts, and again from the warning it shows while background
+    /// tracking is still off.
     func requestBackgroundAuthorization() {
         guard manager.authorizationStatus == .authorizedWhenInUse else { return }
         manager.requestAlwaysAuthorization()
+    }
+
+    /// Re-read both facts about authorisation that the UI branches on: whether
+    /// fixes survive a locked screen, and whether the "Always" prompt is still
+    /// available. Called wherever authorisation could have changed, so neither
+    /// is a guess carried over from when navigation started.
+    private func refreshBackgroundAuthorization() {
+        let status = manager.authorizationStatus
+        runsInBackground = status == .authorizedAlways
+        canRequestBackground = status == .authorizedWhenInUse
     }
 
     /// Cycle the map between facing the direction of travel and facing north.
@@ -191,6 +211,7 @@ extension LocationController: CLLocationManagerDelegate {
         // CLLocationManager into the actor.
         let status = manager.authorizationStatus
         Task { @MainActor in
+            self.refreshBackgroundAuthorization()
             switch status {
             case .authorizedWhenInUse, .authorizedAlways:
                 self.status = .locating

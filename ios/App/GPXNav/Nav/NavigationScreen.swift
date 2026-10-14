@@ -57,6 +57,12 @@ struct NavigationScreen: View {
         .onAppear {
             session.start()
             location.startStreaming()
+            // Navigation is the one moment the "Always" prompt has context: the
+            // user has just chosen to walk a route, and it is the only
+            // authorisation that keeps the readout running with the phone in a
+            // pocket. Declared in the plist and never asked for, the capability
+            // is unreachable, and the warning below would be permanent.
+            location.requestBackgroundAuthorization()
             // A fix that arrived before this screen did still counts. Without
             // this the readout is empty -- no distance, no elevation, no dot's
             // distance along the route -- until the *next* fix, which on a
@@ -147,7 +153,7 @@ struct NavigationScreen: View {
             .padding(.horizontal)
             .padding(.vertical, 12)
 
-            if footerMessage != nil || hasArrived {
+            if footerMessage != nil || hasArrived || canRequestBackground {
                 Divider()
                 HStack(spacing: 8) {
                     if hasArrived {
@@ -156,6 +162,14 @@ struct NavigationScreen: View {
                     }
                     if let footerMessage {
                         Text(footerMessage).foregroundStyle(.secondary)
+                    }
+                    // The prompt on entering navigation is easy to miss, and
+                    // nothing else in the UI would ever ask again.
+                    if canRequestBackground {
+                        Button("Turn on") { location.requestBackgroundAuthorization() }
+                            .font(.caption.weight(.semibold))
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
                     }
                 }
                 .font(.caption)
@@ -186,6 +200,12 @@ struct NavigationScreen: View {
         }
         return nil
     }
+
+    /// Whether the "Always" prompt is still on the table, i.e. when-in-use is
+    /// granted and the app has not already asked. Read from the controller
+    /// rather than derived here so it stops being offered the moment iOS stops
+    /// showing it.
+    private var canRequestBackground: Bool { location.canRequestBackground }
 
     private func statColumn(_ label: String, _ value: String) -> some View {
         VStack(spacing: 2) {
