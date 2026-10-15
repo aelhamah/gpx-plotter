@@ -17,6 +17,11 @@ targets:
     platform: iOS
     sources:
       - GPXNav
+      # The activity attributes and the command bus, which the widget extension
+      # needs too. Two files, or they could not be shared: an app-extension
+      # target cannot link the app, and a package for this would be a package
+      # with two types in it.
+      - Shared
     resources:
       - GPXNav/Resources
     dependencies:
@@ -24,6 +29,10 @@ targets:
         product: MapLibre
       - package: RouteKit
         product: RouteKit
+      # Embeds the Live Activity. Without this the extension builds and ships
+      # nothing, and `Activity.request` finds no widget to show.
+      - target: GPXNavWidgets
+        embed: true
     configFiles:
       Debug: Secrets.xcconfig
       Release: Secrets.xcconfig
@@ -81,18 +90,45 @@ targets:
     type: app-extension
     platform: iOS
     productName: GPXNavWidgets
-    bundleId: com.example.GPXNav.GPXNavWidgets
     sources:
       - GPXNavWidgets
+      - Shared
+    # RouteKit for `Units` and `UnitSystem`, so the lock screen prints distances
+    # through the same formatter as the app. Deliberately *not* a dependency on
+    # GPXNav: an app-extension target cannot link the app, and xcodegen is happy
+    # to write the dependency out for you — a build that fails at link time is a
+    # worse way to learn that.
     dependencies:
-      - target: GPXNav
+      - package: RouteKit
+        product: RouteKit
+    # An explicit plist, for the same reason as the app's: `NSExtension` is a
+    # dictionary, and a generated plist wants it spelled as a pile of
+    # INFOPLIST_KEY_ overrides. This key is what makes the bundle a widget
+    # extension at all.
+    info:
+      path: GPXNavWidgets/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        NSSupportsLiveActivities: true
     settings:
       base:
         SWIFT_VERSION: 6.0
         SWIFT_STRICT_CONCURRENCY: complete
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        GENERATE_INFOPLIST_FILE: true
+        # The id docs/ios-plan.md §12 settles on. It has to be the app's id with a
+        # suffix, or the install fails with "Mismatched bundle IDs" — and xcodegen
+        # will not do this for you: left alone it builds `bundleIdPrefix` + target
+        # name, which here is the un-prefixed `com.example.GPXNavWidgets`.
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.GPXNav.GPXNavWidgets
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""
+        # No asset catalogue and no accent colour here on purpose: the widget's
+        # colours are explicit (the map's trace cyan and the off-course orange),
+        # so an accent slot would only be something to keep in sync.
     scheme:
       testTargets: []

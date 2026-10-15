@@ -24,6 +24,10 @@ struct NavigationScreen: View {
     /// trace over the route. Bound because the map is a separate view.
     @State private var coveredDistance: Double?
     @State private var followsUser = true
+    /// Paused from the lock screen or the Dynamic Island. Tracking is stopped and
+    /// the last fix stays on the map, so the screen has to say so rather than
+    /// look frozen.
+    @State private var isPaused = false
 
     init(route: Route, waypoints: [Waypoint], profile: RouteProfile) {
         _session = StateObject(wrappedValue: NavigationSession(
@@ -68,14 +72,29 @@ struct NavigationScreen: View {
             // distance along the route -- until the *next* fix, which on a
             // stationary simulator can be a long time coming.
             ingest(location.fix)
+            startActivity()
+            NavigationCommandBus.shared.setObserved(true)
         }
         .onDisappear {
             // Navigation owns the stream: leaving the screen must stop it, or the
             // blue background indicator stays on with nothing to show for it.
             location.stopStreaming()
+            NavigationCommandBus.shared.setObserved(false)
+            // Deliberately *not* ending the activity here. `onDisappear` is not a
+            // signal that the hike ended: this view is torn down and rebuilt when
+            // MapLibre re-attaches, which is why `onAppear` already runs twice
+            // here, and ending on that would take the activity down mid-hike.
+            // A hike ends when the hiker ends it, when it arrives, or when iOS
+            // reclaims the app -- and the last of those should leave the activity
+            // up, the way a run does when your phone dies.
         }
         .onChange(of: location.fix) { _, fix in
             ingest(fix)
+        }
+        .onReceive(NavigationCommandBus.shared.$pending) { command in
+            guard let command else { return }
+            handle(command)
+            NavigationCommandBus.shared.clear()
         }
         .task {
             // The clock cannot be a `Timer.publish` stored on the view. This body
@@ -89,7 +108,92 @@ struct NavigationScreen: View {
             }
         }
         .onChange(of: session.hasArrived) { _, arrived in
-            if arrived { location.stopStreaming() }
+            guard arrived else { return }
+            location.stopStreaming()
+            // Lingers briefly rather than vanishing: the arrival is the one thing
+            // worth seeing on the lock screen after the hike.
+            // The readout may in principle be absent if the session was ended
+            // without ever taking a fix; the activity's own last state is then the
+            // honest thing to end on.
+            let finalState = session.readout.map { state($0, isPaused: false) }
+            Task {
+                if let finalState {
+                    await LiveActivityController.shared.finish(
+                        finalState,
+                        dismissal: .after(.now.addingTimeInterval(30))
+                    )
+                } else {
+                    await LiveActivityController.shared.end(dismissal: .after(.now.addingTimeInterval(30)))
+                }
+            }
+        }
+    }
+
+    // MARK: - Live Activity
+
+    /// Put the lock-screen activity up for this hike.
+    ///
+    /// Needs the route's own length rather than the remaining distance, because
+    /// the progress bar has to know how far along the whole route this is.
+    private func startActivity() {
+        // Idempotent, because `onAppear` runs more than once: without this the
+        // second run ends the activity the first one just requested and asks
+        // iOS for another, which flickers the lock screen on every map re-attach.
+        guard !LiveActivityController.shared.isRunning else { return }
+        Task {
+            await LiveActivityController.shared.start(
+                routeName: session.route.name,
+                totalDistance: session.totalDistance,
+                startedAt: session.startedAt ?? Date(),
+                unitSystem: workspace.unitSystem
+            )
+            // Start with whatever is already known, so the activity does not sit
+            // on a row of dashes until the second fix arrives.
+            if let readout = session.readout { await updateActivity(readout, isPaused: false) }
+        }
+    }
+
+    private func updateActivity(_ readout: NavigationSession.Readout, isPaused: Bool) async {
+        await LiveActivityController.shared.update(state(readout, isPaused: isPaused))
+    }
+
+    /// The activity's state for a readout. The lock screen's numbers are the nav
+    /// screen's numbers, read in a different process — which only works if there
+    /// is exactly one translation between them.
+    private func state(_ readout: NavigationSession.Readout, isPaused: Bool) -> HikeActivityAttributes.ContentState {
+        HikeActivityAttributes.ContentState(
+            distanceAlong: readout.covered,
+            remaining: readout.remaining,
+            currentElevation: readout.elevation,
+            gradeAheadPercent: readout.gradeAhead,
+            nextWaypointName: readout.nextWaypoint,
+            isOffCourse: session.isOffCourse,
+            offCourseMeters: readout.offRoute,
+            isPaused: isPaused,
+            hasArrived: session.hasArrived
+        )
+    }
+
+    /// A press on the lock screen or in the Dynamic Island.
+    ///
+    /// The intents run in this process, which is the only reason this arrives at
+    /// all — see `NavigationCommandBus`. A resume with no session behind it means
+    /// the app was relaunched to run the intent, so there is nothing to resume and
+    /// the activity goes down instead of lying about a hike that is not running.
+    private func handle(_ command: NavigationCommand) {
+        switch command {
+        case .pause:
+            location.stopStreaming()
+            isPaused = true
+            Task { if let readout = session.readout { await updateActivity(readout, isPaused: true) } }
+        case .resume:
+            location.startStreaming()
+            isPaused = false
+            Task { if let readout = session.readout { await updateActivity(readout, isPaused: false) } }
+        case .end:
+            location.stopStreaming()
+            Task { await LiveActivityController.shared.end(dismissal: .immediate) }
+            dismiss()
         }
     }
 
@@ -102,6 +206,10 @@ struct NavigationScreen: View {
         session.ingest(fix, speed: location.speed)
         session.runsInBackground = location.runsInBackground
         coveredDistance = session.readout?.covered
+        if let readout = session.readout {
+            let paused = isPaused
+            Task { await updateActivity(readout, isPaused: paused) }
+        }
     }
 
     // MARK: - Off course
@@ -191,6 +299,11 @@ struct NavigationScreen: View {
     private var footerMessage: String? {
         if location.status == .denied {
             return "Location is off, so progress cannot be tracked. Enable it in Settings."
+        }
+        if isPaused {
+            // The lock screen says this too. One truth about why the numbers have
+            // stopped matters more than brevity.
+            return "Paused — tracking is stopped until you resume."
         }
         if !session.runsInBackground && location.status != .denied {
             // Saying this plainly matters: without "Always", iOS stops delivering
