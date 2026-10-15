@@ -126,6 +126,45 @@ public actor TileCache {
         return (try? fileManager.contentsOfDirectory(atPath: directory.path).count) ?? 0
     }
 
+    /// Bytes on disk for a specific set of keys, and how many of them are there.
+    ///
+    /// Per key rather than the whole directory, because the storage screen has to
+    /// attribute the cache to routes while also admitting the tiles that belong
+    /// to no route. Reading the file size per key is a few hundred stat calls for
+    /// a corridor, which is nothing next to the download that put them there.
+    public func measure(_ keys: [TileCacheKey]) -> (tiles: Int, bytes: Int) {
+        guard let directory else { return (0, 0) }
+        var tiles = 0
+        var bytes = 0
+        for key in keys {
+            let url = directory.appendingPathComponent(key.fileName)
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { continue }
+            tiles += 1
+            bytes += size
+        }
+        return (tiles, bytes)
+    }
+
+    /// Delete specific tiles, so one corridor can go without wiping the cache the
+    /// rest of the map is reading from.
+    ///
+    /// A tile another pack also covers survives: it is counted as deleted either
+    /// way, because the caller asked to forget those keys and cannot know what
+    /// else is pointing at them. The alternative — reference counting across packs
+    /// — is bookkeeping for a list that is a handful of rows long.
+    @discardableResult
+    public func remove(_ keys: [TileCacheKey]) -> Int {
+        guard let directory else { return 0 }
+        var removed = 0
+        for key in keys {
+            let url = directory.appendingPathComponent(key.fileName)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            if (try? fileManager.removeItem(at: url)) != nil { removed += 1 }
+            forget(key)
+        }
+        return removed
+    }
+
     /// Wipe the cache. LRU eviction is not implemented; the disk figure is shown
     /// in the UI so it is at least visible, and this is the escape hatch.
     public func clear() {
@@ -151,5 +190,15 @@ public actor TileCache {
             memory.removeAll()
             memoryBytes = 0
         }
+    }
+
+    /// Drop one entry from the in-memory corpus.
+    ///
+    /// Needed because a deleted tile must not keep being served from memory: the
+    /// map would go on drawing a corridor that the storage screen says is gone.
+    private func forget(_ key: TileCacheKey) {
+        guard let data = memory.removeValue(forKey: key) else { return }
+        memoryBytes -= data.count
+        if memoryBytes < 0 { memoryBytes = 0 }
     }
 }
