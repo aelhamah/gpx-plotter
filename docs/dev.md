@@ -156,6 +156,23 @@ xcrun simctl launch booted com.example.GPXNav
 | `-openSearch` | Opens the search sheet on the route screen. |
 | `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
 
+### The offline storage screen
+
+`-openStorage` opens it directly from Settings, which is how the preview
+photographs it — the capture script cannot tap, so a screen nothing can reach
+would be a screen nobody sees:
+
+```bash
+xcrun simctl launch $D com.example.GPXNav -tab settings -openStorage
+```
+
+The list comes from `Application Support/offline-packs.json`, which is written by
+each download and is the only record of which corridor asked for which tiles. It
+is plain JSON and hand-editable, which is useful for trying the screen with
+figures a download would take a key and a network to produce. Note the zoom range
+is stored as `zoomLowerBound` / `zoomUpperBound`: a `ClosedRange` encodes as a
+two-element array, which reads back as a manifest with no packs in it.
+
 ### Walking a route on the simulator
 
 Navigation needs a moving position, and a static one is not enough: the off-course

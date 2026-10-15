@@ -1,7 +1,11 @@
 import Foundation
 
 /// The encoding of a tile, as a TileJSON `format` declares it.
-public enum TileFormat: String, Sendable, CaseIterable {
+///
+/// `Codable` because the offline pack manifest has to remember which format each
+/// downloaded source used: it is half of a tile's identity, so a manifest that
+/// dropped it could not list a pack's tiles for deletion.
+public enum TileFormat: String, Codable, Sendable, CaseIterable {
     /// Mapbox vector tiles.
     case pbf
     case jpg

@@ -21,7 +21,13 @@ struct GPXNavApp: App {
                 .environmentObject(workspace)
                 .environmentObject(location)
                 .environmentObject(services)
-                .task { services.start() }
+                .task {
+                    // The offline manager needs the library to turn a pack's record
+                    // back into the tiles it covers when one is deleted. Both are
+                    // owned here, so this is where the two meet.
+                    services.offline.workspace = workspace
+                    services.start()
+                }
         }
     }
 }

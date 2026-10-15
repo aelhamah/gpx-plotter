@@ -260,6 +260,15 @@ enum AppConfig {
     /// style serves; asking for z15–16 would only ever produce empty tiles.
     static let offlineZoomRange = 12...14
 
+    /// How much deliberately downloaded map data to keep before the storage screen
+    /// offers to free some up.
+    ///
+    /// A budget rather than a hard cap: nothing is deleted without being asked
+    /// for, because a corridor the hiker downloaded last week is not the app's to
+    /// throw away on its own judgement. 200 MB is roughly forty demo-length
+    /// corridors, or one long trail with several basemap sources.
+    static let offlineByteBudget = 200_000_000
+
     /// Whether a corridor can be downloaded.
     ///
     /// Needs a key: the download is a prefetch through the loopback cache, and

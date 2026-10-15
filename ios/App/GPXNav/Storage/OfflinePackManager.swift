@@ -14,8 +14,12 @@ import RouteKit
 /// third. The list is read from the loaded style, so switching basemaps changes
 /// what a download covers instead of quietly leaving the satellite imagery out.
 ///
-/// LRU eviction is not implemented. The byte figure is reported so the cost is
-/// at least visible, and `clear()` exists for when it grows.
+/// What the user deliberately downloaded is recorded in an `OfflinePackManifest`,
+/// because the cache itself cannot answer that: it warms as the map is panned, so
+/// most of what is on disk belongs to no route at all. The manifest says which
+/// tiles were asked for; the storage screen attributes the rest as browsing, and
+/// eviction is now possible but never automatic — silently deleting a download the
+/// hiker made last week is not a decision to take for them.
 @MainActor
 final class OfflinePackManager: ObservableObject {
     enum PackState: Equatable {
@@ -46,12 +50,36 @@ final class OfflinePackManager: ObservableObject {
     /// offline row.
     @Published private(set) var cachedTileCount: Int = 0
     @Published private(set) var cachedBytes: Int = 0
+    /// What was deliberately downloaded, newest first. The storage screen's list.
+    @Published private(set) var packs: [OfflinePack] = []
+    /// Tiles on disk that no pack accounts for: the map was panned somewhere, or a
+    /// pack was deleted and the cache kept whatever it had picked up around it.
+    ///
+    /// Reported rather than hidden, because "4.4 MB of offline maps" next to a
+    /// list that adds up to 4.1 MB is the kind of discrepancy that makes a storage
+    /// screen untrustworthy.
+    @Published private(set) var unattributedTileCount: Int = 0
+    @Published private(set) var unattributedBytes: Int = 0
+    /// True while a delete or eviction is running, so the buttons can say so rather
+    /// than appearing to do nothing.
+    @Published private(set) var isPruning = false
     /// True once an estimate has been asked for while the style's sources were
     /// still unresolved. Drives the "still working" wording in the offline row.
     @Published private var isAwaitingSources = false
 
     private let cache: TileCache
     private let styleBuilder: StyleBuilder
+    /// The library, so a pack's tiles can be rebuilt from its record when they
+    /// have to be deleted.
+    ///
+    /// Weak, and set by the app rather than in `init`: this manager is created by
+    /// `AppServices` and the workspace by the app, and a snapshot of the routes
+    /// taken at launch would not see an import or a deletion. The two live in the
+    /// same process for the app's lifetime, so this is a convenience rather than
+    /// a lifetime hazard — but weak says so.
+    weak var workspace: WorkspaceStore?
+    private let manifestStore: OfflinePackManifestStore
+    private var manifest: OfflinePackManifest
     private var prefetchTask: Task<Void, Never>?
 
     /// How many tile requests may be in flight. Sequential is the safest thing
@@ -59,9 +87,16 @@ final class OfflinePackManager: ObservableObject {
     /// handful at a time rather than a flood.
     private static let maxConcurrentFetches = 4
 
-    init(cache: TileCache, styleBuilder: StyleBuilder) {
+    init(
+        cache: TileCache,
+        styleBuilder: StyleBuilder,
+        manifestStore: OfflinePackManifestStore = OfflinePackManifestStore()
+    ) {
         self.cache = cache
         self.styleBuilder = styleBuilder
+        self.manifestStore = manifestStore
+        manifest = manifestStore.load()
+        packs = manifest.packs
     }
 
     // MARK: - Tile list
@@ -76,7 +111,7 @@ final class OfflinePackManager: ObservableObject {
     /// clamps.
     private func tileKeys(
         for route: Route,
-        sources: [BasemapSource],
+        sources: [TileSourceRef],
         bufferMeters: Double,
         zoomRange: ClosedRange<Int>
     ) -> [TileCacheKey] {
@@ -115,7 +150,7 @@ final class OfflinePackManager: ObservableObject {
         isAwaitingSources = false
         applyEstimate(for: tileKeys(
             for: route,
-            sources: sources,
+            sources: sources.map(TileSourceRef.init),
             bufferMeters: bufferMeters,
             zoomRange: zoomRange
         ))
@@ -156,7 +191,9 @@ final class OfflinePackManager: ObservableObject {
         Self.describe(bytes: cachedBytes)
     }
 
-    private static func describe(bytes: Int) -> String {
+    /// Bytes as "4.4 MB". Shared with the storage screen so the two cannot
+    /// disagree about the same figure.
+    static func describe(bytes: Int) -> String {
         let megabytes = Double(bytes) / 1_000_000
         if megabytes >= 1000 {
             return String(format: "%.1f GB", megabytes / 1000)
@@ -211,7 +248,7 @@ final class OfflinePackManager: ObservableObject {
 
             let keys = self.tileKeys(
                 for: route,
-                sources: sources,
+                sources: sources.map(TileSourceRef.init),
                 bufferMeters: bufferMeters,
                 zoomRange: zoomRange
             )
@@ -239,11 +276,28 @@ final class OfflinePackManager: ObservableObject {
             let (stored, skipped) = await self.prefetch(pending)
             if Task.isCancelled { return }
 
-            await self.refreshCacheFigures()
             self.skippedTileCount = skipped
-            self.state = stored == 0
-                ? .failed("MapTiler returned no tiles. Check that the key allows native requests.")
-                : .complete
+            if stored == 0 {
+                self.state = .failed("MapTiler returned no tiles. Check that the key allows native requests.")
+            } else {
+                // Recorded only on success, and from what is actually on disk
+                // rather than from the estimate: a partial corridor is still a
+                // corridor, and the storage screen must not claim coverage the
+                // download did not get.
+                let measured = await cache.measure(keys)
+                self.record(OfflinePack(
+                    id: String(route.id),
+                    name: route.name,
+                    tileCount: measured.tiles,
+                    byteCount: measured.bytes,
+                    downloadedAt: Date(),
+                    bufferMeters: bufferMeters,
+                    zoomRange: zoomRange,
+                    sources: sources.map { OfflinePackSource(name: $0.name, format: $0.format) }
+                ))
+                self.state = .complete
+            }
+            await self.refreshCacheFigures()
         }
     }
 
@@ -290,18 +344,207 @@ final class OfflinePackManager: ObservableObject {
         return (stored, skipped)
     }
 
-    // MARK: - Removal
+    // MARK: - Storage
 
-    /// Wipe the whole cache. Packs are not tracked individually any more, since
-    /// the cache is shared and warms as you browse.
-    func removeCurrentPack() {
-        prefetchTask?.cancel()
-        prefetchTask = nil
-        Task {
-            await cache.clear()
-            await refreshCacheFigures()
-            state = .none
+    /// Work out which tiles each pack is responsible for, and what is left over.
+    ///
+    /// Measured rather than read back from the records, because tiles are shared
+    /// between overlapping corridors and warm up from browsing: a pack's recorded
+    /// byte count is what it asked for, and the honest current figure is what its
+    /// keys are worth now.
+    func refreshAttribution() async {
+        var attributedTiles = 0
+        var attributedBytes = 0
+
+        for pack in manifest.packs {
+            let keys = await keys(for: pack)
+            let measured = await cache.measure(keys)
+            attributedTiles += measured.tiles
+            attributedBytes += measured.bytes
         }
+
+        let allTiles = await cache.tileCount()
+        let allBytes = await cache.byteCount()
+        unattributedTileCount = max(0, allTiles - attributedTiles)
+        unattributedBytes = max(0, allBytes - attributedBytes)
+    }
+
+    /// Delete one corridor's tiles and forget it.
+    ///
+    /// The keys come back from the route, which is why the manifest keeps a route
+    /// id: a pack whose route has since been deleted from the library still lists
+    /// its tiles, and falls back to wiping the cache rather than leaving a record
+    /// it cannot honour.
+    func deletePack(_ pack: OfflinePack, route: Route?) {
+        isPruning = true
+        Task {
+            let keysToDelete: [TileCacheKey]
+            if let route {
+                keysToDelete = await keys(for: pack, route: route)
+            } else {
+                // The route behind this pack is gone, so its tiles cannot be listed.
+                // Wiping the cache is blunt, but the alternative is a record that
+                // says "downloaded" with nothing behind it.
+                await cache.clear()
+                keysToDelete = []
+            }
+            if !keysToDelete.isEmpty { await cache.remove(keysToDelete) }
+            manifest.remove(id: pack.id)
+            persist()
+            state = .none
+            await refreshCacheFigures()
+            await refreshAttribution()
+            isPruning = false
+        }
+    }
+
+    /// Drop the oldest corridors until the recorded total is within `limit`.
+    ///
+    /// Offered rather than automatic. A budget that silently deletes last week's
+    /// download is worse than a storage screen that says the cache is large.
+    func freeSpace(to limit: Int = AppConfig.offlineByteBudget) {
+        isPruning = true
+        Task {
+            for pack in manifest.evict(over: limit) {
+                if let route = workspace?.routes.first(where: { $0.id == Int(pack.id) }) {
+                    await cache.remove(await keys(for: pack, route: route))
+                } else {
+                    // The route behind this pack is gone, so its tiles cannot be
+                    // listed. Dropping the whole cache is blunt but honest, and it
+                    // is the one case where the user has already lost the route.
+                    await cache.clear()
+                }
+            }
+            persist()
+            await refreshCacheFigures()
+            await refreshAttribution()
+            isPruning = false
+        }
+    }
+
+    /// The record for a route, if its corridor has been downloaded.
+    ///
+    /// This is what makes the offline bar honest across launches: `state` only
+    /// describes the current session, so without it a route downloaded yesterday
+    /// reads as "Not downloaded" today, next to a Download button that would
+    /// fetch what is already on disk.
+    func pack(for route: Route) -> OfflinePack? {
+        manifest.pack(id: String(route.id))
+    }
+
+    /// Stage a sample download, for the preview capture and for looking at the
+    /// storage screen without a MapTiler key.
+    ///
+    /// The tiles are written from the route's *real* corridor keys and their sizes
+    /// are measured from the bytes actually written, so the frame adds up the way a
+    /// genuine download would. Staging a hand-written manifest instead — which is
+    /// what a fixture file would do — produces a screen claiming two corridors and
+    /// an empty cache, because the names would not match the tiles.
+    ///
+    /// The payloads are a byte pattern, not map tiles: nothing decodes them in this
+    /// state, and a real download is the only thing that should put real tiles on a
+    /// device.
+    func seedSampleStorage(for route: Route) async {
+        let sources: [TileSourceRef] = [TileSourceRef(name: "outdoor", format: .pbf)]
+        let keys = tileKeys(
+            for: route,
+            sources: sources,
+            bufferMeters: Corridor.defaultBufferMeters,
+            zoomRange: AppConfig.offlineZoomRange
+        )
+        guard !keys.isEmpty else { return }
+        // Every tile, at roughly the size a vector tile is, so the frame reads as a
+        // corridor rather than as a download that got almost nothing: six tiles and
+        // 0.0 MB looks like a failure, which is the one impression a staged screen
+        // must not give.
+        for (index, key) in keys.enumerated() {
+            await cache.store(Data(repeating: UInt8(index % 251), count: 60_000), for: key)
+        }
+        let sample = keys
+
+        let measured = await cache.measure(sample)
+        record(OfflinePack(
+            id: String(route.id),
+            name: route.name,
+            tileCount: measured.tiles,
+            byteCount: measured.bytes,
+            downloadedAt: Date(),
+            bufferMeters: Corridor.defaultBufferMeters,
+            zoomRange: AppConfig.offlineZoomRange,
+            sources: sources.map { OfflinePackSource(name: $0.name, format: $0.format) }
+        ))
+        await refreshCacheFigures()
+        await refreshAttribution()
+    }
+
+    /// Whether a free-space run would have anything to do.
+    var canFreeSpace: Bool { manifest.totalBytes > AppConfig.offlineByteBudget }
+
+    /// Wipe every tile and every record.
+    func removeAllTiles() {
+        isPruning = true
+        Task {
+            prefetchTask?.cancel()
+            prefetchTask = nil
+            await cache.clear()
+            manifest = OfflinePackManifest()
+            manifestStore.clear()
+            packs = []
+            state = .none
+            await refreshCacheFigures()
+            await refreshAttribution()
+            isPruning = false
+        }
+    }
+
+    /// Note a download so the storage screen can list it.
+    private func record(_ pack: OfflinePack) {
+        manifest.record(pack)
+        persist()
+    }
+
+    private func persist() {
+        manifestStore.save(manifest)
+        packs = manifest.packs
+    }
+
+    /// Every tile a pack covers, rebuilt from the route it was downloaded for.
+    private func keys(for pack: OfflinePack, route: Route? = nil) async -> [TileCacheKey] {
+        let resolved = route ?? workspace?.routes.first { $0.id == Int(pack.id) }
+        guard let resolved else { return [] }
+        return tileKeys(
+            for: resolved,
+            sources: pack.sources.map(TileSourceRef.init),
+            bufferMeters: pack.bufferMeters,
+            zoomRange: pack.zoomRange
+        )
+    }
+}
+
+/// The part of a basemap source that a tile's identity needs.
+///
+/// Deliberately not `BasemapSource`: that carries the upstream template, which
+/// belongs to the style and goes stale when the basemap changes, whereas a pack
+/// record has to survive exactly that change to be able to list its tiles again.
+struct TileSourceRef: Hashable {
+    let name: String
+    let format: TileFormat
+    /// Elevation rather than map imagery, so it is asked for over the narrower
+    /// range. Derived from the name for the same reason `BasemapSource.isElevation`
+    /// is: the style's DEM source id is fixed.
+    var isElevation: Bool { name == AppConfig.demSource }
+
+    init(name: String, format: TileFormat) {
+        self.name = name
+        self.format = format
+    }
+
+    init(_ source: BasemapSource) {
+        self.init(name: source.name, format: source.format)
+    }
+
+    init(_ source: OfflinePackSource) {
+        self.init(name: source.name, format: source.format)
     }
 }
 

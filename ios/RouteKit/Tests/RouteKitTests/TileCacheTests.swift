@@ -163,6 +163,80 @@ final class TileCacheTests: XCTestCase {
         let tiles = await broken.tileCount()
         XCTAssertEqual(tiles, 0)
     }
+    // MARK: - Removing one pack's tiles
+
+    /// Deleting a corridor must delete its tiles, and leave the rest of the cache
+    /// readable: the cache is shared with the map the user is still looking at.
+    func testRemovingKeysDeletesThoseTilesAndLeavesOthers() async {
+        let a = key("outdoor", 12, 1, 1)
+        let b = key("outdoor", 12, 2, 2)
+        await cache.store(Data(repeating: 1, count: 100), for: a)
+        await cache.store(Data(repeating: 2, count: 200), for: b)
+
+        let removed = await cache.remove([a])
+        XCTAssertEqual(removed, 1)
+        let droppedHit = await cache.cached(a)
+        XCTAssertNil(droppedHit)
+        let survivor = await cache.cached(b)
+        XCTAssertEqual(survivor?.count, 200)
+    }
+
+    func testRemovingAKeyThatIsNotThereIsNotAnError() async {
+        let removed = await cache.remove([key("outdoor", 12, 9, 9)])
+        XCTAssertEqual(removed, 0)
+    }
+
+    /// The failure this guards is a storage screen that says a corridor is gone
+    /// while the map goes on drawing it out of the in-memory corpus.
+    func testRemovedTilesStopBeingServedFromMemory() async {
+        let key = key("outdoor", 12, 3, 3)
+        await cache.store(Data(repeating: 7, count: 50), for: key)
+        let hit = await cache.cached(key)
+        XCTAssertEqual(hit?.count, 50, "stored, so it is in memory too")
+
+        await cache.remove([key])
+        let goneHit = await cache.cached(key)
+        XCTAssertNil(goneHit)
+    }
+
+    /// Removing one source's tile must not remove another source's tile at the
+    /// same coordinates -- the collision that `TileCacheKey` exists to prevent.
+    func testRemovingOneSourceLeavesAnotherSourcesTileAtTheSameCoordinates() async {
+        let contours = key("contours", 12, 4, 4)
+        let outdoor = key("outdoor", 12, 4, 4)
+        await cache.store(Data(repeating: 3, count: 10), for: contours)
+        await cache.store(Data(repeating: 4, count: 10), for: outdoor)
+
+        await cache.remove([contours])
+        let gone = await cache.cached(contours)
+        XCTAssertNil(gone)
+        let survivor = await cache.cached(outdoor)
+        XCTAssertEqual(survivor?.count, 10)
+    }
+
+    // MARK: - Measuring
+
+    /// The storage screen attributes the cache to routes and reports the rest as
+    /// unattributed, which only balances if a pack measures as its own bytes.
+    func testMeasureReportsOnlyTheGivenKeys() async {
+        let inside = key("outdoor", 12, 5, 5)
+        let outside = key("outdoor", 12, 6, 6)
+        let absent = key("outdoor", 12, 7, 7)
+        await cache.store(Data(repeating: 9, count: 120), for: inside)
+        await cache.store(Data(repeating: 9, count: 300), for: outside)
+
+        let measured = await cache.measure([inside, absent])
+        XCTAssertEqual(measured.tiles, 1, "a key with no file is not counted")
+        XCTAssertEqual(measured.bytes, 120)
+    }
+
+    func testMeasureOfNothingIsZero() async {
+        let none = await cache.measure([])
+        XCTAssertEqual(none.tiles, 0)
+        XCTAssertEqual(none.bytes, 0)
+        let absent = await cache.measure([key()])
+        XCTAssertEqual(absent.bytes, 0)
+    }
 }
 
 /// Minimal actor counter, so a test can assert how many fetches happened.

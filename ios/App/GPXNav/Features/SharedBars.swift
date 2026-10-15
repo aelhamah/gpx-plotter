@@ -28,7 +28,7 @@ struct OfflinePackBar: View {
     }
 
     private var subtitle: String {
-        switch packs.state {
+        switch effectiveState {
         case .complete:
             var text = "Ready for airplane mode"
             if packs.skippedTileCount > 0 {
@@ -50,7 +50,7 @@ struct OfflinePackBar: View {
     }
 
     private var iconName: String {
-        switch packs.state {
+        switch effectiveState {
         case .complete: return "checkmark.circle.fill"
         case .failed: return "exclamationmark.triangle.fill"
         case .downloading: return "arrow.down.circle"
@@ -58,8 +58,18 @@ struct OfflinePackBar: View {
         }
     }
 
+    /// This route's pack record, from the manifest rather than the session.
+    private var packRecord: OfflinePack? { packs.pack(for: route) }
+
+    /// The bar's view of state, which is the session's state unless the manifest
+    /// knows better.
+    private var effectiveState: OfflinePackManager.PackState {
+        if case .none = packs.state, packs.pack(for: route) != nil { return .complete }
+        return packs.state
+    }
+
     private var tint: Color {
-        switch packs.state {
+        switch effectiveState {
         case .complete: return .green
         case .failed: return .red
         default: return .accentColor
@@ -68,10 +78,19 @@ struct OfflinePackBar: View {
 
     @ViewBuilder
     private var action: some View {
-        switch packs.state {
+        switch effectiveState {
         case .complete:
-            Button("Clear") { packs.removeCurrentPack() }
-                .buttonStyle(.bordered)
+            // Per route, which is what this row is about. It used to wipe the
+            // whole cache — including corridors downloaded for other routes —
+            // because nothing recorded which tiles belonged to which one.
+            // Only offered when there is a record to delete against. Reaching
+            // `.complete` always implies one -- a download writes the record as
+            // it completes -- so the nil case is not a state to design for, and a
+            // button that deletes the wrong tiles is worse than no button.
+            if let packRecord {
+                Button("Clear") { packs.deletePack(packRecord, route: route) }
+                    .buttonStyle(.bordered)
+            }
         case .none, .failed:
             Button("Download") {
                 packs.download(for: route)
@@ -139,6 +158,17 @@ struct RouteStatsBar: View {
 struct SettingsView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var services: AppServices
+    /// `-openStorage` goes straight to the storage screen, and
+    /// `-seedStorageSample` stages a download first.
+    ///
+    /// The capture script has no way to tap, and a screen nothing can photograph
+    /// is a screen nobody looks at — which is how the storage screen would have
+    /// shipped without anyone seeing it. The sample is needed because a real
+    /// download needs a MapTiler key, which the capture does not have: without it
+    /// every published frame of this screen is the empty state, which is the one
+    /// part of it that needs no proof.
+    @State private var isShowingStorage = ProcessInfo.processInfo.arguments.contains("-openStorage")
+    private var seedsSample = ProcessInfo.processInfo.arguments.contains("-seedStorageSample")
 
     private var packs: OfflinePackManager { services.offline }
 
@@ -190,25 +220,48 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LabeledContent("Offline tiles") {
-                        Text("\(packs.cachedTileCount) · \(packs.cachedSizeDescription)")
-                            .foregroundStyle(.secondary)
-                    }
-                    Button("Clear All Routes", role: .destructive) {
-                        workspace.clearAll()
-                    }
-                    if packs.cachedTileCount > 0 {
-                        Button("Clear Offline Maps", role: .destructive) {
-                            packs.removeCurrentPack()
+                    NavigationLink {
+                        OfflineStorageScreen(packs: packs)
+                    } label: {
+                        LabeledContent("Offline maps") {
+                            Text("\(packs.packs.count) · \(packs.cachedSizeDescription)")
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        isShowingStorage = true
+                    })
                 } header: {
                     Text("Data")
                 } footer: {
-                    Text("Tiles are cached as you look at the map, and a corridor download fetches the rest for a route. The cache grows until it is cleared here.")
+                    Text("Tiles are cached as you look at the map, and a corridor download fetches the rest for a route. The cache grows until it is cleared from here.")
+                }
+
+                Section {
+                    Button("Delete All Routes", role: .destructive) {
+                        workspace.clearAll()
+                    }
+                } header: {
+                    Text("Library")
+                } footer: {
+                    // This one used to sit under "Offline tiles" as
+                    // "Clear All Routes", which read as though it cleared the
+                    // cache and did the opposite: it deletes every route and the
+                    // imported file, and leaves every tile on disk.
+                    Text("Removes every route from the library and deletes the imported file. Cached map tiles are kept.")
                 }
             }
             .navigationTitle("Settings")
+            // Pushed rather than presented, so the back-swipe still works and the
+            // capture shows a normal push rather than a modal.
+            .navigationDestination(isPresented: $isShowingStorage) {
+                OfflineStorageScreen(packs: packs)
+            }
+            .task {
+                if seedsSample, let route = workspace.routes.first {
+                    await packs.seedSampleStorage(for: route)
+                }
+            }
             .task { await packs.refreshCacheFigures() }
         }
     }

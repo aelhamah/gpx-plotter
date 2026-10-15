@@ -931,7 +931,10 @@ and compile; none has been run. The capture script cannot help either — it has
 way to lock the simulator, so the preview's `nav` scene still shows the in-app
 HUD rather than the activity.
 
-**M5 Offline — the mechanism works; the gate is a device.**
+**M5 Offline — the mechanism works; the gate is a device.** The storage
+screen was the one piece of the scope (§10) that had no code behind it: the plan
+lists "Corridor prefetch, download manager, storage screen", and the first two
+were done while the third was represented by two aggregate numbers in Settings.
 
 | Gate item | State |
 | --- | --- |
@@ -942,7 +945,32 @@ HUD rather than the activity.
 | Elevation offline | **Done.** The DEM is cached as `raster-dem` source `terrain` across z12–z14 — not just z14, because MapLibre asks for a DEM tile at the camera's zoom — and the slope generator decodes the cached bytes rather than re-fetching. |
 | Size estimate | **Measured, per source.** `TileSourceSize` replaces a flat per-format table that was 5× high for satellite rasters and 5× low for the DEM. See §9. |
 | Progress and honesty | **Done.** Per-tile progress; a partial download reports how many tiles it could not fetch rather than claiming clean coverage, and Settings shows the cache's size with a way to clear it. |
+| Storage screen | **Done, verified on the simulator.** Settings → Offline maps lists each corridor with its tile count, size and download date, deletes one, and clears everything. The cache figure is reported separately from the list, with the difference shown as "From browsing". The offline bar's **Clear** is now per route: it used to wipe the whole cache, including corridors belonging to other routes. |
+| What was downloaded | **Done.** `OfflinePackManifest` records the corridor each route asked for — route id, buffer, zoom range and source formats — which is what makes a pack's tiles listable for deletion. Without it the cache could only be wiped wholesale, because it warms as the map is panned and cannot say which tiles came from which route. |
+| LRU eviction | **Possible now, and manual.** The manifest's ordering makes oldest-first eviction a two-line operation, and the storage screen offers "Free Up Space" once the recorded total passes a 200 MB budget. Deliberately not automatic: a corridor downloaded last week is not the app's to delete on its own judgement. |
 | Full hike in airplane mode | **Not yet run.** The disk-hit path is verified two ways — a unit test that a stored tile is answered without the upstream closure ever being called, and a live check that a sentinel written into a cache file comes back byte-for-byte over the loopback — but the end-to-end gate still wants a physical device, since `simctl` has no connectivity toggle. |
+
+Four findings from the storage screen, all of which look like bookkeeping:
+
+- **A `ClosedRange` in a `Codable` struct encodes as a two-element array.** The
+  manifest stored the zoom range that way; the app wrote the file and read it back
+  without complaint, and the storage screen said "No offline maps" against a file
+  that plainly said otherwise. The round-trip test passed — encoder and decoder
+  agreed — so the fix was two named integers and a test that decodes JSON written
+  by hand. A corrupt manifest now also logs why, rather than reading as empty in
+  silence.
+- **Eviction took the newest pack.** The manifest is sorted newest-first, and
+  `evict(over:)` dropped `packs.first`. The tests caught it; the sort order is the
+  thing that was wrong, not the loop.
+- **The cache cannot be told apart from the downloads.** Every tile the map asks
+  for is cached, so most of what is on disk belongs to no route. The screen says
+  so — "From browsing" — rather than presenting the total as if the list added up
+  to it.
+- **Two destructive buttons in Settings did not do what they said.** "Clear All
+  Routes" sat under an "Offline tiles" heading and deleted the library and the
+  imported file while leaving every tile on disk; "Clear Offline Maps" cleared the
+  whole cache from a row about one route. The first is now "Delete All Routes" in
+  its own section, and the second is per route.
 
 ## 11. Risks
 
