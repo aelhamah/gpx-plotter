@@ -48,6 +48,12 @@ final class NavigationSession: ObservableObject {
     let route: Route
     /// Progress as 0...1, for the Live Activity bar in M4.
     var fractionComplete: Double { readout?.fraction ?? 0 }
+    /// The route's full length in metres, from the same profile the readout uses.
+    ///
+    /// The activity's progress bar needs the whole length as well as the distance
+    /// covered, and "remaining" cannot give it: at the start of a hike the two are
+    /// indistinguishable, and one is not the other.
+    let totalDistance: Double
 
     private var progress: RouteProgress
     private var detector = OffCourseDetector()
@@ -61,6 +67,7 @@ final class NavigationSession: ObservableObject {
         // cannot disagree about how high the route is. Without it, resample the
         // route's own vertices, which is exact but only as good as the GPX.
         let resolved = profile ?? RouteProfile.make(from: route.points)
+        totalDistance = resolved.totalDistance
         progress = RouteProgress(
             route: route,
             waypoints: waypoints,

@@ -497,6 +497,13 @@ Dynamic Island compact / minimal / expanded, with Pause and End via
 `Button(intent:)` and a `LiveActivityIntent`. Updates at roughly 1 Hz, hence
 `NSSupportsLiveActivitiesFrequentUpdates`.
 
+**Built, with three additions and one deliberate omission — see §10.1.** The
+attributes gained `unitSystem` and `hasArrived`, the content state gained
+`isPaused`, and `totalDistance` is what the progress bar divides by. The omission:
+`CLBackgroundActivitySession` is not used, because the app already declares
+`UIBackgroundModes: location` with `allowsBackgroundLocationUpdates` and the
+background stream is what keeps fixes arriving in the first place.
+
 Background location via `CLBackgroundActivitySession` (iOS 17+),
 `allowsBackgroundLocationUpdates`, and `UIBackgroundModes: [location]`.
 
@@ -875,6 +882,54 @@ and the gap is not a rounding error: the estimate table is sized for vector and
 Terrain-RGB tiles, while that figure appears to assume satellite rasters, which
 are much larger at high zoom. The in-app estimate is therefore reported as
 computed rather than tuned to hit the plan's number.
+
+**M4 Live Activity — working on the simulator; the lock screen is unverified.**
+
+The widget extension existed as a placeholder with no sources. It now has the
+activity, and the gate — "glanceable from the lock screen" — is **partly** met:
+the Dynamic Island presentation is verified, the lock screen is not, for a reason
+no amount of code fixes (§ "what could not be verified" below).
+
+| Gate item | State |
+| --- | --- |
+| Widget extension | **Done.** `ios/App/GPXNavWidgets` with `HikeLiveActivity`, embedded in the app by `project.yml`. `HikeActivityAttributes` and the command bus live in `ios/App/Shared`, compiled into both targets: an app-extension target cannot link the app, and two types are not worth a package. |
+| Lock screen | **Done, unverified.** Waypoint and remaining distance, progress bar, elevation, grade chip, elapsed clock, off-course banner, and Pause / Resume / End. |
+| Dynamic Island | **Done, verified.** Compact leading/minimal glyph, compact trailing distance, expanded regions, and a keyline that carries the state: cyan walking, orange off course, green arrived. |
+| Update path | **Done.** One activity per hike, requested when navigation starts, updated from each fix behind a 1s throttle with off-course changes exempt, and ended with a known final state on arrival. |
+| Buttons | **Done, untestable here.** `LiveActivityIntent` runs in the *app's* process, which is the only reason a press on the lock screen can reach the navigation session at all; a plain `AppIntent` would run in the extension, where there is no session. |
+| **Glanceable from the lock screen** | **Not verified.** The simulator cannot be locked from `simctl` and `osascript` cannot send keystrokes here, so the lock screen presentation has never been rendered. Needs a device. |
+
+Three things the plan's sketch had to change, and why:
+
+- **`unitSystem` and `hasArrived` were added to the attributes.** The widget is a
+  separate process with no App Group, so it cannot read the app's unit
+  preference: "3.42" is meaningless without knowing whether that is miles or
+  kilometres. `hasArrived` is the app's call — the arrival threshold is 30-60 m —
+  and "0.03 mi left" on a hike that has finished reads as a rounding error rather
+  than as an arrival.
+- **`isPaused` was added to the content state.** Without it a paused hike is
+  indistinguishable from a broken one: the numbers stop and the stale timer greys
+  them, and there is no way to tell which happened.
+- **The activity cannot end when the nav view disappears.** `onDisappear` is not a
+  signal that a hike ended — this view is torn down and rebuilt when MapLibre
+  re-attaches, which is why `onAppear` already runs twice — and ending there took
+  the activity down mid-hike, about 15 s into a walk, with the app backgrounded.
+  A hike ends when the hiker ends it or when it arrives; an app iOS kills leaves
+  the activity up, the way a run does when your phone dies.
+
+One thing worth knowing about the orphan case, since the plan does not mention it:
+iOS keeps a Live Activity alive when the app is terminated, so a hike killed by a
+memory reclaim leaves an activity on the lock screen counting down a walk that
+stopped minutes ago — and its buttons post commands to a nav screen that is not
+there. The intents check whether anything is listening and take the activity down
+themselves when nothing is, so the buttons cannot become inert.
+
+**Not verified, all of it the same reason:** the lock screen presentation, the
+expanded island (a long press, which the simulator cannot do), and the Pause /
+Resume / End buttons (a tap, which the simulator cannot do). All three are wired
+and compile; none has been run. The capture script cannot help either — it has no
+way to lock the simulator, so the preview's `nav` scene still shows the in-app
+HUD rather than the activity.
 
 **M5 Offline — the mechanism works; the gate is a device.**
 
