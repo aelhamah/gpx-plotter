@@ -139,6 +139,7 @@ route-terrain|Overlays|3D terrain|-tab navigate -openFirstRoute -terrain3D
 route-satellite|Overlays|Satellite basemap|-tab navigate -openFirstRoute -satellite
 nav|Navigation|Live guidance|-tab navigate -openFirstRoute -navigate
 storage|Offline|Offline storage screen|-tab settings -openStorage
+storage-sample|Offline|Offline storage screen, sample download|-tab settings -openStorage -seedStorageSample
 EOF
 )
 

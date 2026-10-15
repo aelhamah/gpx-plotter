@@ -432,6 +432,51 @@ final class OfflinePackManager: ObservableObject {
         manifest.pack(id: String(route.id))
     }
 
+    /// Stage a sample download, for the preview capture and for looking at the
+    /// storage screen without a MapTiler key.
+    ///
+    /// The tiles are written from the route's *real* corridor keys and their sizes
+    /// are measured from the bytes actually written, so the frame adds up the way a
+    /// genuine download would. Staging a hand-written manifest instead — which is
+    /// what a fixture file would do — produces a screen claiming two corridors and
+    /// an empty cache, because the names would not match the tiles.
+    ///
+    /// The payloads are a byte pattern, not map tiles: nothing decodes them in this
+    /// state, and a real download is the only thing that should put real tiles on a
+    /// device.
+    func seedSampleStorage(for route: Route) async {
+        let sources: [TileSourceRef] = [TileSourceRef(name: "outdoor", format: .pbf)]
+        let keys = tileKeys(
+            for: route,
+            sources: sources,
+            bufferMeters: Corridor.defaultBufferMeters,
+            zoomRange: AppConfig.offlineZoomRange
+        )
+        guard !keys.isEmpty else { return }
+        // Every tile, at roughly the size a vector tile is, so the frame reads as a
+        // corridor rather than as a download that got almost nothing: six tiles and
+        // 0.0 MB looks like a failure, which is the one impression a staged screen
+        // must not give.
+        for (index, key) in keys.enumerated() {
+            await cache.store(Data(repeating: UInt8(index % 251), count: 60_000), for: key)
+        }
+        let sample = keys
+
+        let measured = await cache.measure(sample)
+        record(OfflinePack(
+            id: String(route.id),
+            name: route.name,
+            tileCount: measured.tiles,
+            byteCount: measured.bytes,
+            downloadedAt: Date(),
+            bufferMeters: Corridor.defaultBufferMeters,
+            zoomRange: AppConfig.offlineZoomRange,
+            sources: sources.map { OfflinePackSource(name: $0.name, format: $0.format) }
+        ))
+        await refreshCacheFigures()
+        await refreshAttribution()
+    }
+
     /// Whether a free-space run would have anything to do.
     var canFreeSpace: Bool { manifest.totalBytes > AppConfig.offlineByteBudget }
 

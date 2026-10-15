@@ -158,12 +158,17 @@ struct RouteStatsBar: View {
 struct SettingsView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var services: AppServices
-    /// `-openStorage` goes straight to the storage screen.
+    /// `-openStorage` goes straight to the storage screen, and
+    /// `-seedStorageSample` stages a download first.
     ///
     /// The capture script has no way to tap, and a screen nothing can photograph
     /// is a screen nobody looks at — which is how the storage screen would have
-    /// shipped without anyone seeing it.
+    /// shipped without anyone seeing it. The sample is needed because a real
+    /// download needs a MapTiler key, which the capture does not have: without it
+    /// every published frame of this screen is the empty state, which is the one
+    /// part of it that needs no proof.
     @State private var isShowingStorage = ProcessInfo.processInfo.arguments.contains("-openStorage")
+    private var seedsSample = ProcessInfo.processInfo.arguments.contains("-seedStorageSample")
 
     private var packs: OfflinePackManager { services.offline }
 
@@ -251,6 +256,11 @@ struct SettingsView: View {
             // capture shows a normal push rather than a modal.
             .navigationDestination(isPresented: $isShowingStorage) {
                 OfflineStorageScreen(packs: packs)
+            }
+            .task {
+                if seedsSample, let route = workspace.routes.first {
+                    await packs.seedSampleStorage(for: route)
+                }
             }
             .task { await packs.refreshCacheFigures() }
         }
