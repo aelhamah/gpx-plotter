@@ -1012,7 +1012,14 @@ Four findings from the storage screen, all of which look like bookkeeping:
 3. **MapTiler terms on offline caching** in a distributed app. **Unresolved, and
    now urgent** — the app caches MapTiler tiles on the user's device and serves
    them back with no network. A licensing question, not an engineering one, and it
-   can invalidate §9 entirely.
+   can invalidate §9 entirely. **Narrowed, not solved:** [`proxy/`](../proxy/README.md)
+   moves the key out of the app bundle and puts an allowlist and a daily cap in
+   front of it, and deliberately **does not cache tile bodies** — edge caching is
+   bulk downloading, which is the clause in question, so a pass-through proxy is
+   useful today under the terms as they stand. That fixes the open-ended bill and
+   the extractable key. It does not make §9 legal, and no version of it can: the
+   offline decision is still one of asking MapTiler for a written exception,
+   buying On-Prem, or self-hosting.
 4. **Swift 6 concurrency** against an unaudited Obj-C framework. **Confirmed
    real:** `MLNOfflinePack` is non-`Sendable` and cannot be retained, sent across
    an isolation boundary, or even captured in a completion handler. The offline
