@@ -1,6 +1,6 @@
 name: GPXNav
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.aelhamah
   deploymentTarget:
     iOS: "17.0"
   minimumXcodeGenVersion: 2.46.0
@@ -15,6 +15,10 @@ targets:
   GPXNav:
     type: application
     platform: iOS
+    # Spelled out rather than left to `bundleIdPrefix`, because this identifier is
+    # now on Apple's allowlist and on a MapTiler key's allowlist: `com.example`
+    # could not be registered at all, so it was a placeholder that had to go.
+    PRODUCT_BUNDLE_IDENTIFIER: com.aelhamah.GPXNav
     sources:
       - GPXNav
       # The activity attributes and the command bus, which the widget extension
@@ -51,6 +55,12 @@ targets:
         # Without a launch screen iOS letterboxes the app into a legacy
         # compatibility window instead of using the full display.
         UILaunchScreen: {}
+        # The app imports GPX through a document picker but could not show the
+        # user what it already had: an app's Documents folder is invisible in
+        # Files unless it opts in, so a file copied in — over AirDrop, or by hand
+        # during testing — was unreachable even to the app's own picker.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -113,6 +123,13 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
         NSSupportsLiveActivities: true
+    # The same config file as the app, so `$(DEVELOPMENT_TEAM)` resolves here too.
+    # Without it the extension's team is empty, the extension does not sign, and
+    # the build fails on the *widget* — which reads as a widget problem rather than
+    # as a missing xcconfig.
+    configFiles:
+      Debug: Secrets.xcconfig
+      Release: Secrets.xcconfig
     settings:
       base:
         SWIFT_VERSION: 6.0
@@ -121,12 +138,14 @@ targets:
         # The id docs/ios-plan.md §12 settles on. It has to be the app's id with a
         # suffix, or the install fails with "Mismatched bundle IDs" — and xcodegen
         # will not do this for you: left alone it builds `bundleIdPrefix` + target
-        # name, which here is the un-prefixed `com.example.GPXNavWidgets`.
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.GPXNav.GPXNavWidgets
+        # name.
+        PRODUCT_BUNDLE_IDENTIFIER: com.aelhamah.GPXNav.GPXNavWidgets
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
+        # Inherited rather than empty: an extension that does not sign will not be
+        # embedded, and `Activity.request` finds no widget to show on the device.
+        DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
         # No asset catalogue and no accent colour here on purpose: the widget's
         # colours are explicit (the map's trace cyan and the off-course orange),
         # so an accent slot would only be something to keep in sync.
