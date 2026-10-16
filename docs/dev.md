@@ -156,6 +156,28 @@ xcrun simctl launch booted com.example.GPXNav
 | `-openSearch` | Opens the search sheet on the route screen. |
 | `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
 
+### Search
+
+Both entry points take `-openSearch`: the map's floating button and the Create
+tab's "Search for a place".
+
+```bash
+xcrun simctl launch $D com.example.GPXNav -tab create -openSearch
+xcrun simctl launch $D com.example.GPXNav -tab navigate -openFirstRoute -openSearch
+```
+
+Without a MapTiler key both show **Search is unavailable**, which is the point:
+`geocodingClient` is nil, every search returned an empty list, and an empty list
+looks exactly like a search that found nothing. That is what #69 was — a working
+search with nothing to search, reported as a search that did not work. The viewer's
+button had a second problem on top: its figures sheet is presented for the whole
+life of the screen, and a sheet presented while another is up from the same host
+is dropped, so the button did nothing at all. Both are fixed and both are captured.
+
+The search sheet's `NavigationStack` puts its field at the *bottom* of the sheet
+on iOS 26 rather than in the navigation bar. That is how the system draws it, not
+something the app chose.
+
 ### The offline storage screen
 
 `-openStorage` opens it directly from Settings, which is how the preview

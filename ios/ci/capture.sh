@@ -104,18 +104,24 @@ trap 'cleanup; exit 130' INT TERM
 # `route` is the base: the Maps tab with the seeded demo route pushed. Every
 # route scene appends to it, so an overlay scene is that line plus a flag.
 #
-# `-openSearch` is missing from this table on purpose, and it is a real gap in
+# `search` was missing from this table for a long time, and it was a real gap in
 # the app rather than an oversight here. ViewerScreen keeps the figures sheet
 # presented for as long as the screen is up, and a presentation made while
 # another is already up from the same host is dropped rather than queued, so the
-# search sheet never appears. It was worth pinning down: the arguments do reach
-# the app, `isSearching` really is set, and the sheet content is never even
+# search sheet never appeared. It was worth pinning down: the arguments did reach
+# the app, `isSearching` really was set, and the sheet content was never even
 # evaluated — but neither moving it to a different view in the hierarchy nor
-# switching it to a fullScreenCover changes that, and neither does deferring the
-# request by anything from half a second to thirty-five seconds. The search
-# button on the map has therefore never worked. Until that is fixed, capturing
-# the flag would only put a copy of the plain route frame on the page. See
-# docs/dev.md.
+# switching it to a fullScreenCover changed that, and neither did deferring the
+# request by anything from half a second to thirty-five seconds.
+#
+# The fix is the one navigation already used: dismiss the figures sheet, then ask
+# for the search on a later turn, and put the figures back when it closes. Both
+# search entry points are captured now.
+#
+# What these frames show is the *no key* state — "Search is unavailable" — because
+# the capture has no MapTiler key, and `geocodingClient` is nil without one. That
+# is the honest frame: before, the same situation showed an empty result list,
+# which is indistinguishable from a search that found nothing.
 #
 # `nav` needs the `LOCATION` fix above more than any other scene does: the
 # readout projects the position onto the route, and the map draws it, so without
@@ -138,6 +144,8 @@ route-slope|Overlays|Slope bands|-tab navigate -openFirstRoute -showSlope
 route-terrain|Overlays|3D terrain|-tab navigate -openFirstRoute -terrain3D
 route-satellite|Overlays|Satellite basemap|-tab navigate -openFirstRoute -satellite
 nav|Navigation|Live guidance|-tab navigate -openFirstRoute -navigate
+search|Search|Place search, from the map|-tab navigate -openFirstRoute -openSearch
+search-create|Search|Place search, from Create|-tab create -openSearch
 storage|Offline|Offline storage screen|-tab settings -openStorage
 storage-sample|Offline|Offline storage screen, sample download|-tab settings -openStorage -seedStorageSample
 EOF
