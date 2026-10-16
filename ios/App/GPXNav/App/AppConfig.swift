@@ -190,8 +190,17 @@ enum AppConfig {
     }
 
     /// Shared geocoding client, or `nil` without a key.
+    ///
+    /// Carries the same identity as the map's tile requests, so a key restricted
+    /// to an allowed user-agent answers search as well as tiles. It used to send
+    /// nothing identifying, which fails exactly the key this project recommends
+    /// -- the map would load and search would silently return no results, with
+    /// nothing on screen to say why.
     static let geocodingClient: GeocodingClient? = hasMapTilerKey
-        ? GeocodingClient(apiKey: maptilerAPIKey)
+        ? GeocodingClient(
+            httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
+            apiKey: maptilerAPIKey
+        )
         : nil
 
     /// Why search is unavailable, or nil when it works.

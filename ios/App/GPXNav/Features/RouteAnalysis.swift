@@ -31,7 +31,14 @@ final class RouteAnalysis: ObservableObject {
 
     init(route: Route, store: TerrainTileStore? = nil) {
         self.profile = RouteProfile.make(from: route.points, stepMeters: Self.stepMeters)
-        self.store = store ?? TerrainTileStore(config: AppConfig.terrainConfig)
+        // Same identity as the map's tiles. These DEM samples are fetched over
+        // plain `URLSession` rather than through MapLibre, so without this the
+        // elevation profile is the one thing on the screen a user-agent-restricted
+        // key silently refuses to answer.
+        self.store = store ?? TerrainTileStore(
+            httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
+            config: AppConfig.terrainConfig
+        )
     }
 
     deinit {

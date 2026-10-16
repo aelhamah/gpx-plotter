@@ -1021,7 +1021,16 @@ Four findings from the storage screen, all of which look like bookkeeping:
 5. **MapTiler key restrictions do not transfer to native** (§5.1). Not a
    MapTiler bug, but it invalidates the plan's original key guidance: the key
    needs both an origin allowlist and a user-agent allowlist, and the iOS
-   half of that is easy to leave out.
+   half of that is easy to leave out. **Partly closed:** the app pins one
+   `User-Agent` (`MapNetworkIdentity.allowlistToken`) and applies it to
+   MapLibre's session, so tiles, the DEM tileset and offline prefetch all
+   send it. What was still missing was everything that is *not* a map tile —
+   geocoding and the DEM samples behind the elevation profile are plain
+   `URLSession` requests and were sending `CFNetwork/… Darwin/…`, which no
+   allowlist can match. Both now send the same token, and
+   `HTTPIdentityOnTheWireTests` proves it against a real socket rather than
+   asserting a dictionary contains a key. The rest of the risk stands: the
+   key itself, and whether a 100-user app wants a public-bundle key at all.
 6. **No cache eviction.** `TileCache` drops its whole in-memory corpus at 32 MB
    and has no LRU on disk, so the cache only shrinks when the user clears it from
    Settings. Fine while a download is one corridor; worth revisiting before
