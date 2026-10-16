@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import UIKit
 import RouteKit
 
 /// Location for the map's blue dot, wrapped so SwiftUI can observe it.
@@ -61,6 +62,14 @@ final class LocationController: NSObject, ObservableObject {
     private var recentreRequested = false
 
     private let manager = CLLocationManager()
+    /// Token for the orientation observer, so `deinit` can remove it: an
+    /// un-removed observer outlives the closure's `self`, and the token leaks once
+    /// per controller.
+    ///
+    /// `nonisolated(unsafe)` because `deinit` is not isolated to the main actor
+    /// and the token is not `Sendable`. It is only written from `init` on the main
+    /// actor, and only read and removed from `deinit`.
+    private nonisolated(unsafe) var orientationObserver: (any NSObjectProtocol)?
 
     override init() {
         super.init()
@@ -70,6 +79,41 @@ final class LocationController: NSObject, ObservableObject {
         // calls back, so `heading` stays nil and the button falls back to north.
         if CLLocationManager.headingAvailable() {
             manager.headingFilter = 5
+            applyHeadingOrientation()
+            // Without this the heading is reported relative to the *portrait*
+            // orientation of the device, so a phone held sideways reports a
+            // bearing 90 degrees out -- which on a heading-up map is the map
+            // pointing the wrong way while claiming to be right.
+            orientationObserver = NotificationCenter.default.addObserver(
+                forName: UIDevice.orientationDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyHeadingOrientation() }
+            }
+        }
+    }
+
+    deinit {
+        if let orientationObserver {
+            NotificationCenter.default.removeObserver(orientationObserver)
+        }
+    }
+
+    /// Tell the location manager which way "up" is for this device right now.
+    private func applyHeadingOrientation() {
+        switch UIDevice.current.orientation {
+        case .landscapeLeft:
+            manager.headingOrientation = .landscapeLeft
+        case .landscapeRight:
+            manager.headingOrientation = .landscapeRight
+        case .portraitUpsideDown:
+            manager.headingOrientation = .portraitUpsideDown
+        default:
+            // `.faceUp`, `.faceDown` and `.unknown` all mean "the last known
+            // portrait-ish orientation", and `.portrait` is what the camera wants
+            // while the phone is being held to look at.
+            manager.headingOrientation = .portrait
         }
     }
 
@@ -149,9 +193,14 @@ final class LocationController: NSObject, ObservableObject {
         runsInBackground = false
     }
 
-    /// Stop updating, e.g. when the map is torn down.
-    func stop() {
-        stopStreaming()
+    /// Stop the heading stream only.
+    ///
+    /// The viewer starts heading on its own in `locate()`, outside streaming, and
+    /// nothing stopped it afterwards -- `stop()` had no call sites at all, so one
+    /// compass tap left the magnetometer running for the life of the process. The
+    /// locate button stops it when it goes away, which is where it was started.
+    func stopHeading() {
+        manager.stopUpdatingHeading()
     }
 
     /// Ask for "Always" so a hike keeps being tracked with the screen locked.
@@ -180,8 +229,13 @@ final class LocationController: NSObject, ObservableObject {
     ///
     /// Also a recentre request: switching between north and the direction of
     /// travel only makes sense relative to where the user is standing.
+    /// No guard on `heading`. It used to return early when none had arrived, so
+    /// on hardware that never reports one -- a simulator, or anything without a
+    /// magnetometer -- the tap did nothing at all: no toggle, no recentre, no
+    /// change in the icon, and nothing to say why. Toggling anyway means the mode
+    /// the user asked for is the mode they get; the map simply stays north-up
+    /// until a heading turns up, which is the honest outcome.
     func toggleHeading() {
-        guard heading != nil else { return }
         followsHeading.toggle()
         recentreRequested = true
     }
@@ -253,12 +307,27 @@ extension LocationController: CLLocationManagerDelegate {
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
-        // `trueHeading` is invalid until location permission is granted, so fall
-        // back to the magnetic value rather than snapping the map to 0.
+        // `trueHeading` is invalid until location permission is granted and until
+        // the system has a fix on it, so magnetic is the fallback rather than
+        // snapping the map to 0.
+        //
+        // That fallback is *uncorrected for declination*, which in California is
+        // about 13 degrees west of true north -- enough that "facing the way I am
+        // going" becomes "facing somewhere over there". `CLHeading` in this SDK
+        // exposes no declination to correct it with (checked, rather than assumed),
+        // so the honest options were to correct it approximately from a hardcoded
+        // table or to leave it. Left, with this noted: `trueHeading` is the normal
+        // path the moment location permission is granted, and a hardcoded
+        // declination would be wrong by up to 30 degrees across the continent and
+        // silently so.
         let value = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         guard value >= 0 else { return }
+        // CoreLocation reports 0...360, but normalising costs nothing and a
+        // negative bearing has no meaning to a rotation.
+        let normalised = (value.truncatingRemainder(dividingBy: 360) + 360)
+            .truncatingRemainder(dividingBy: 360)
         Task { @MainActor in
-            self.heading = value
+            self.heading = normalised
         }
     }
 

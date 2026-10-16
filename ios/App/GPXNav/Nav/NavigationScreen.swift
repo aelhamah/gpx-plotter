@@ -28,6 +28,11 @@ struct NavigationScreen: View {
     /// the last fix stays on the map, so the screen has to say so rather than
     /// look frozen.
     @State private var isPaused = false
+    /// Heading-follow was defaulted on for this navigation, so leaving the screen
+    /// can put it back the way it was rather than stranding the viewer on a
+    /// heading-up map they did not ask for.
+    @State private var followsHeadingDefaulted = false
+
     /// The hike is over, as opposed to this view going away.
     ///
     /// The distinction is the whole of #71. `onDisappear` fires when MapLibre
@@ -71,6 +76,14 @@ struct NavigationScreen: View {
         .onAppear {
             session.start()
             location.startStreaming()
+            // Facing the direction of travel, which is the point of navigating:
+            // the map was north-up because `followsHeading` lived on the locate
+            // button, and that button is not on this screen, so there was no way
+            // to reach it from here at all. Reset rather than assign, so coming
+            // back from the viewer with it turned off does not quietly re-enable
+            // a mode the user turned off there.
+            location.followsHeading = true
+            followsHeadingDefaulted = true
             // Navigation is the one moment the "Always" prompt has context: the
             // user has just chosen to walk a route, and it is the only
             // authorisation that keeps the readout running with the phone in a
@@ -90,6 +103,12 @@ struct NavigationScreen: View {
             // blue background indicator stays on with nothing to show for it.
             location.stopStreaming()
             NavigationCommandBus.shared.setObserved(false)
+            // Only undo the default: a compass tapped here is a choice, and
+            // re-setting it on the way out would discard it.
+            if followsHeadingDefaulted {
+                location.followsHeading = false
+                followsHeadingDefaulted = false
+            }
             // Ending here unconditionally was the first attempt and it is wrong:
             // this view is torn down and rebuilt when MapLibre re-attaches, which
             // is why `onAppear` already runs twice, and that took the activity
@@ -394,6 +413,34 @@ struct NavigationScreen: View {
 
             Spacer()
 
+            Button {
+                // Same two states as the viewer's locate button: facing the way
+                // you are going, or facing north. A third tap is back where it
+                // started, which is the compass behaviour people already expect.
+                location.toggleHeading()
+                // The button is a choice now, so it is no longer the default we
+                // put there. Without this the exit code below reads the flag as
+                // "we set this" and switches it back off anyway, discarding what
+                // the user just did -- the exact thing the flag exists to
+                // prevent, one tap later.
+                followsHeadingDefaulted = false
+            } label: {
+                // The same needle as the locate button, and it really turns.
+                // A static `location.north.line.fill` here claimed the map was
+                // pointing north when it was not -- the one thing on this screen
+                // whose whole purpose is to say where the map is pointing.
+                Label {
+                    Text("North")
+                } icon: {
+                    CompassNeedle(alwaysNeedle: true)
+                }
+                .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel(location.followsHeading ? "Face north" : "Face my direction of travel")
+
+            // Ends through `endNavigation()` rather than a bare `dismiss()`, so the
+            // Live Activity is taken down on the same tap. See `onDisappear`.
             Button("End") { endNavigation() }
                 .font(.subheadline.weight(.medium))
                 .buttonStyle(.borderedProminent)

@@ -430,7 +430,8 @@ usable once the profile is an overlay rather than a sibling of the map.
   — Navigate is a tab now. Tapping the remaining button recentres **and** rotates
   the map to the current heading, then tapping again snaps back to north, the way
   a compass button behaves. `MLNMapCamera` calls the rotation `heading`, not
-  `direction`.
+  `direction`. *This entry was written as though it were true and, for the
+  second half, it was not — see #66 below.*
 - **The title bar is slightly translucent**, so the map reads as continuing under
   the navigation bar rather than stopping at it. The map ignores *all* safe
   areas for this to have anything to show through; the search control sits below
@@ -727,6 +728,20 @@ Three findings from building it, all of which look like details and are not:
 correct: the detector ignores fixes below a walking pace on purpose, so
 `location start --speed` is needed.
 
+One finding from device testing, which looks like a styling choice and is not:
+
+- **"Tapping again snaps back to north" was documented and untrue.** Turning
+  heading-follow off never assigned `camera.heading = 0`; it simply stopped
+  assigning a heading, and the camera was copied forward still carrying the
+  rotation. So the position recentred and the map stayed turned -- which reads
+  exactly like a locate button that has stopped working. Worse, "heading-follow"
+  was a *snapshot*, not a mode: `camera.heading` was written once at the tap, and
+  the map never turned again even as the device did. And it was unreachable from
+  navigation at all, because `followsHeading` lived on a button the nav screen
+  does not have, while inheriting `true` from a prior viewer session and then
+  re-stamping a rotation on every fix. `headingOrientation` was never set either,
+  so a sideways phone reported a bearing 90° out.
+
 Four findings from that pass are worth keeping, because each looks like a styling
 choice and is not:
 
@@ -857,7 +872,7 @@ M0 defects the simulator surfaced, all fixed:
 | Multi-route | **Done.** Every visible route is drawn, not only the selected one; the selected route's vertices get the larger radius and dark stroke. Deleting or hiding a route removes its layers and sources. |
 | Waypoints | **Done.** Drawn as a circle layer; they arrive from a GPX's `<wpt>` elements via `RouteKit.parseGPX` and persist with the workspace. |
 | Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`. |
-| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. |
+| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. Heading-follow now *tracks* the bearing rather than stamping it once, and the glyph is a needle that turns with the device (#48, #66). |
 | Search | **Done.** Debounced 300 ms, six results, proximity biased to the route, and the Peak / Trailhead / Trail / Street badges from `RouteKit`. Tapping a result adds it as a waypoint. Verified against the live endpoint: names, peak detection, and summit elevations all arrive. |
 | 3D terrain toggle | **Built, not yet verified on the map.** The map now loads its style from the loopback endpoint with `?terrain=1`, and the toggle forces a style reload because that is the only way to add or drop the block. Needs a look at a pitched camera before it is called done. |
 | Style builder | **Built.** `StyleBuilder` fetches MapTiler's hosted style, adds a `raster-dem` source named `terrain` with an inline `tiles` template, and writes `"terrain": { "source": "terrain", "exaggeration": 1.15 }` — the same source name and exaggeration the web app's `setTerrain` call uses. The basemap is still MapTiler's own; only the terrain block is added. Served from the existing loopback listener at `/style.json?style=…&terrain=…`, cached per variant. |
