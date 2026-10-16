@@ -75,7 +75,7 @@ struct ViewerScreen: View {
                     Label {
                         Text(mapError).font(.caption)
                     } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
+                        Image(systemName: "key.slash.fill")
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
@@ -131,7 +131,12 @@ struct ViewerScreen: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Navigate", systemImage: "location.fill") {
+                    // `figure.hiking`, not `location.fill`: the locate button
+                    // directly below it already used that glyph, and two
+                    // identical icons meaning "start navigating" and "centre on
+                    // me" is what #67 was about. This one now matches the glyph
+                    // the Live Activity uses for a hike in progress.
+                    Button("Navigate", systemImage: "figure.hiking") {
                         beginNavigation()
                     }
                     // A route with fewer than two points has no line to follow, so
@@ -217,7 +222,7 @@ struct ViewerScreen: View {
                     Label {
                         Text(problem).font(.caption).lineLimit(1)
                     } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
+                        Image(systemName: "key.slash.fill")
                     }
                     .foregroundStyle(.orange)
                     .help(problem)

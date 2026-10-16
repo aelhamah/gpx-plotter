@@ -382,7 +382,12 @@ struct NavigationScreen: View {
                 // following snaps it straight back on the next fix.
                 followsUser.toggle()
             } label: {
-                Label(followsUser ? "Following" : "Pan freely", systemImage: followsUser ? "location.fill" : "hand.tap")
+                // A viewfinder says "the camera is tracking me", which is the
+                // question this button answers; `location.fill` said "where I
+                // am", which is the dot on the map underneath it and nothing to
+                // do with following. `hand.raised` rather than `hand.tap` because
+                // it is a mode you are in, not a gesture being made.
+                Label(followsUser ? "Following" : "Pan freely", systemImage: followsUser ? "viewfinder.circle.fill" : "hand.raised.fill")
                     .font(.caption)
             }
             .buttonStyle(.bordered)
