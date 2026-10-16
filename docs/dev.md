@@ -149,6 +149,7 @@ xcrun simctl launch booted com.example.GPXNav
 | `-showRelief` | Turns on the MapTiler hillshade layer at launch. |
 | `-showSlope` | Turns on the loopback slope raster at launch. |
 | `-terrain3D` | Turns on MapLibre 3D terrain at launch. |
+| `-fillElevation` | Turns on the terrain elevation fill at launch, which is off by default (#72). |
 | `-downloadOffline` | Starts the corridor tile download at launch. |
 | `-expandedPanel` | Opens the bottom sheet at the large detent, where the profile chart and the offline row live. |
 | `-scrub <fraction>` | Seeds the profile scrub at a fraction of the route's distance. |

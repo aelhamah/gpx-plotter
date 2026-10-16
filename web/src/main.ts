@@ -41,6 +41,9 @@ let terrainTransition = 0;
 /** Set while the terrain is built ahead of a click; it draws flat until it is not. */
 let terrainWarming = false;
 let reliefEnabled = false;
+// Whether to fill the elevations a GPX does not carry from the terrain model.
+// Off by default (#72): the file's own elevations are what the user imported.
+let fillElevationEnabled = false;
 let satelliteEnabled = false;
 let slopeEnabled = false;
 /** Last device position, if the user asked for it. Never persisted with the workspace. */
@@ -541,8 +544,30 @@ async function refreshRouteStats() {
     return;
   }
   const token = ++statsToken;
-  setStatsLoading(true);
   const resampled = routeProfilePoints(route.points, STATS_PROFILE_STEP_METERS);
+  // Off by default (#72). The DEM supplies the ground between the route's
+  // vertices and the track's own elevations anchor it, so the two cannot
+  // sawtooth: using both raw put a dip at every vertex. Only a track with no
+  // elevation at all is left to the DEM on its own, which is the case it is good
+  // at.
+  //
+  // None of that is a good reason to do it unasked. A GPX recorded with a
+  // barometric altimeter was being quietly second-guessed by a 30 m DEM tile on
+  // every single load, and the profile the user saw was not the profile they
+  // imported. With this off the profile is the file's own elevations and the
+  // lines between them. Turning it on still cannot replace an elevation the file
+  // provided -- `blendTerrainElevations` and the `needsTerrain` branch below both
+  // yield to the track -- so the toggle can add detail but never corrupt a track
+  // that was recorded properly.
+  if (!fillElevationEnabled) {
+    if (token !== statsToken) return;
+    routeProfile = resampled;
+    routeStats = summarizeProfile(resampled);
+    updateUI();
+    drawProfileChart();
+    return;
+  }
+  setStatsLoading(true);
   // The DEM supplies the ground between the route's vertices and the track's own
   // elevations anchor it, so the two cannot sawtooth: using both raw put a dip
   // at every vertex. Only a track with no elevation at all is left to the DEM on
@@ -1581,6 +1606,15 @@ $('terrain-toggle').addEventListener('click', () => setTerrainEnabled(!terrainEn
 // the transition being seen and the whole thing collapsing into one frame.
 $('terrain-toggle').addEventListener('pointerenter', () => void warmUpTerrain());
 $('terrain-toggle').addEventListener('focus', () => void warmUpTerrain());
+
+// Toggling has to redraw, not just remember: the whole point of the setting is
+// which profile is on screen, and leaving the last one up until the next route
+// change would make the button look like it had done nothing.
+$('fill-elevation-toggle').addEventListener('click', () => {
+  fillElevationEnabled = !fillElevationEnabled;
+  $('fill-elevation-toggle').setAttribute('aria-pressed', String(fillElevationEnabled));
+  void refreshRouteStats();
+});
 
 $('relief-toggle').addEventListener('click', () => {
   reliefEnabled = !reliefEnabled;

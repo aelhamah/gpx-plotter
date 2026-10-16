@@ -165,7 +165,16 @@ struct ViewerScreen: View {
                 }
                 await packs.estimate(for: route)
                 await packs.refreshCacheFigures()
-                analysis.fillMissingElevations()
+                // Opt-in (#72). The terrain fill used to run on every open, so a
+                // route was quietly re-drawn from MapTiler's ground model before
+                // anyone had asked for it, and a route recorded with a barometric
+                // altimeter was silently second-guessed by a 30 m DEM tile. With
+                // the setting off the profile is the file's own elevations and
+                // the lines between them, which is what was imported and what a
+                // GPX reader is expected to show.
+                if workspace.fillsMissingElevation {
+                    analysis.fillMissingElevations()
+                }
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                     isSearching = true
                 }
