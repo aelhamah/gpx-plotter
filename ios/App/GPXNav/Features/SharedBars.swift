@@ -206,6 +206,17 @@ struct SettingsView: View {
                     }
                 }
 
+                Section {
+                    Toggle("Fill missing elevation", isOn: $workspace.fillsMissingElevation)
+                } header: {
+                    Text("Elevation")
+                } footer: {
+                    // Both halves of #72 in two sentences: off by default, and
+                    // "never overwrite" is not a caveat on the toggle but a
+                    // property of the fill.
+                    Text("Off by default. Elevations recorded in the file are never replaced — only the gaps between them are filled, from MapTiler's terrain model. A recorded track and the ground model are two different measurements and can disagree by hundreds of metres.")
+                }
+
                 Section("Units") {
                     Picker("System", selection: $workspace.unitSystem) {
                         ForEach(UnitSystem.allCases) { system in

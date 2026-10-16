@@ -126,7 +126,11 @@
         </div>
 
         <div class="section">
-          <div class="section-title">Elevation Profile</div>
+          <div class="section-head">
+            <div class="section-title">Elevation Profile</div>
+            <button id="fill-elevation-toggle" class="section-toggle" type="button" aria-pressed="false"
+              title="Ask the terrain model for elevations this file does not carry. Elevations it does carry are never replaced.">Fill missing</button>
+          </div>
           <div id="profile-readout" class="profile-readout hidden"></div>
           <canvas id="profile" class="profile-canvas hidden"></canvas>
           <p id="profile-empty" class="hint">Draw or import two points to see a terrain elevation profile.</p>

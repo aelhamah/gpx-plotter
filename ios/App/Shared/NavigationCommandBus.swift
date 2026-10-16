@@ -43,6 +43,7 @@ final class NavigationCommandBus: ObservableObject {
         isObserved = observed
     }
 
+    /// Post a command and take the slot, so it is delivered once and once only.
     func send(_ command: NavigationCommand) {
         pending = command
     }

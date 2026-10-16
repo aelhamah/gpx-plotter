@@ -47,6 +47,12 @@ struct HikeActivityAttributes: ActivityAttributes, Sendable {
         /// decision, and "0.03 mi left" on a hike that has finished reads as a
         /// rounding error rather than as an arrival.
         var hasArrived: Bool
+        /// At least one fix has been folded in.
+        ///
+        /// Without it the activity is asked for before the location manager has
+        /// delivered anything, and the all-zero placeholder reads as a completed
+        /// hike — "0.00 mi left" on a phone that has not found you yet.
+        var hasFix: Bool
     }
 
     // MARK: - Fixed for the life of the activity
