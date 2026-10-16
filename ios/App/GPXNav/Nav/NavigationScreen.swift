@@ -372,9 +372,23 @@ struct NavigationScreen: View {
                 // you are going, or facing north. A third tap is back where it
                 // started, which is the compass behaviour people already expect.
                 location.toggleHeading()
+                // The button is a choice now, so it is no longer the default we
+                // put there. Without this the exit code below reads the flag as
+                // "we set this" and switches it back off anyway, discarding what
+                // the user just did -- the exact thing the flag exists to
+                // prevent, one tap later.
+                followsHeadingDefaulted = false
             } label: {
-                Label("North", systemImage: "location.north.line.fill")
-                    .font(.caption)
+                // The same needle as the locate button, and it really turns.
+                // A static `location.north.line.fill` here claimed the map was
+                // pointing north when it was not -- the one thing on this screen
+                // whose whole purpose is to say where the map is pointing.
+                Label {
+                    Text("North")
+                } icon: {
+                    CompassNeedle(alwaysNeedle: true)
+                }
+                .font(.caption)
             }
             .buttonStyle(.bordered)
             .accessibilityLabel(location.followsHeading ? "Face north" : "Face my direction of travel")

@@ -564,6 +564,19 @@ struct MapView: UIViewRepresentable {
         let camera = mapView.camera.copy() as! MLNMapCamera
         camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
         applyRotation(to: camera)
+        // This move has just put the camera on the current heading, so that
+        // heading is not a *change* and must not be eased a second time.
+        //
+        // It used to be inferred instead -- `applyHeadingIfNeeded` skipped
+        // whatever heading arrived first, on the assumption that something had
+        // always just moved the camera. That assumption is wrong on the way into
+        // navigation: the screen sets `followsHeading` without asking for a
+        // recentre, so no move has happened, and the first heading off the device
+        // was thrown away. The map sat north-up until the *second* update, which
+        // on a stationary phone can be a long time. Saying "I consumed this
+        // heading" at the point of the move is true in both cases and false in
+        // neither.
+        followState.lastHeading = location.heading
         mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
     }
 
@@ -598,11 +611,7 @@ struct MapView: UIViewRepresentable {
     private func applyHeadingIfNeeded(to mapView: MLNMapView) {
         guard location.followsHeading, let heading = location.heading else { return }
         guard followState.lastHeading != heading else { return }
-        let wasNil = followState.lastHeading == nil
         followState.lastHeading = heading
-        // The first heading after mode switching is part of a camera move that
-        // has already happened, not a rotation of its own.
-        if wasNil { return }
 
         let camera = mapView.camera.copy() as! MLNMapCamera
         applyRotation(to: camera)
@@ -622,9 +631,10 @@ struct MapView: UIViewRepresentable {
         // never re-centres: a pause on a trail, or a screenshot of a simulator
         // parked at one location.
         let resumed = followsUserLocation && !wasFollowing
-        // Forgetting the last bearing when heading-follow is off is what lets the
-        // next turn-on rotate at all: `applyHeadingIfNeeded` treats the first
-        // heading after a switch as part of the camera move rather than a change.
+        // Forgetting the last bearing while heading-follow is off is what lets the
+        // next turn-on rotate: `applyHeadingIfNeeded` only rotates on a *changed*
+        // heading, and a heading that was current before the mode went off is
+        // still current after it comes back on.
         if !location.followsHeading { followState.lastHeading = nil }
         guard followsUserLocation, let fix = location.fix, resumed || followState.lastFix != fix else { return }
         let firstFollow = followState.lastFix == nil

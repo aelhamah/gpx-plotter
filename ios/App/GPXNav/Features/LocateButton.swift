@@ -11,6 +11,15 @@ import RouteKit
 struct CompassNeedle: View {
     @EnvironmentObject private var location: LocationController
 
+    /// Stay a needle instead of falling back to the locate button's status
+    /// glyphs.
+    ///
+    /// The navigation HUD's compass has no status to report: north-up is a mode
+    /// it offers, not a fault, so it must not turn into a crosshair or a
+    /// crossed-out pin when heading-follow is off. North-up is simply the
+    /// needle pointing up.
+    var alwaysNeedle = false
+
     var body: some View {
         Image(systemName: symbol)
             // Negated: the glyph points at north, so turning it clockwise by the
@@ -29,6 +38,7 @@ struct CompassNeedle: View {
         if location.followsHeading, location.heading != nil {
             return "location.north.line.fill"
         }
+        if alwaysNeedle { return "location.north.line.fill" }
         switch location.status {
         case .located: return "location.fill"
         case .locating: return "location.circle"
