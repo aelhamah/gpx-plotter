@@ -894,9 +894,9 @@ no amount of code fixes (§ "what could not be verified" below).
 | --- | --- |
 | Widget extension | **Done.** `ios/App/GPXNavWidgets` with `HikeLiveActivity`, embedded in the app by `project.yml`. `HikeActivityAttributes` and the command bus live in `ios/App/Shared`, compiled into both targets: an app-extension target cannot link the app, and two types are not worth a package. |
 | Lock screen | **Done, unverified.** Waypoint and remaining distance, progress bar, elevation, grade chip, elapsed clock, off-course banner, and Pause / Resume / End. |
-| Dynamic Island | **Done, verified.** Compact leading/minimal glyph, compact trailing distance, expanded regions, and a keyline that carries the state: cyan walking, orange off course, green arrived. |
+| Dynamic Island | **Done, verified.** Compact leading/minimal glyph, compact trailing distance, expanded regions with the progress bar and the controls, and a keyline that carries the state: cyan walking, orange off course, green arrived. The expanded controls arrived with the device fix below; the compact and minimal presentations had been verified before that. |
 | Update path | **Done.** One activity per hike, requested when navigation starts, updated from each fix behind a 1s throttle with off-course changes exempt, and ended with a known final state on arrival. |
-| Buttons | **Done, untestable here.** `LiveActivityIntent` runs in the *app's* process, which is the only reason a press on the lock screen can reach the navigation session at all; a plain `AppIntent` would run in the extension, where there is no session. |
+| Buttons | **Fixed, and it was broken until a device found it.** `LiveActivityIntent` runs in the *app's* process — which is not a property of the protocol but of the binary the system resolves it in, and `NavigationIntents.swift` was compiled into the widget target only. The buttons rendered and the press went nowhere. The types now live in `Shared`, and `Metadata.appintents/extract.actionsdata` in the *app* names them, which is the artifact iOS actually resolves. Also fixed behind it: pause/resume were dropped by the 1s update throttle, so even a working press would have looked inert. |
 | **Glanceable from the lock screen** | **Not verified.** The simulator cannot be locked from `simctl` and `osascript` cannot send keystrokes here, so the lock screen presentation has never been rendered. Needs a device. |
 
 Three things the plan's sketch had to change, and why:
@@ -924,12 +924,19 @@ stopped minutes ago — and its buttons post commands to a nav screen that is no
 there. The intents check whether anything is listening and take the activity down
 themselves when nothing is, so the buttons cannot become inert.
 
-**Not verified, all of it the same reason:** the lock screen presentation, the
-expanded island (a long press, which the simulator cannot do), and the Pause /
-Resume / End buttons (a tap, which the simulator cannot do). All three are wired
-and compile; none has been run. The capture script cannot help either — it has no
-way to lock the simulator, so the preview's `nav` scene still shows the in-app
-HUD rather than the activity.
+**Verified on a device (iPhone 15 Pro, iOS 27.0.1), and that is where three
+defects surfaced that no simulator could find:** the intents were not in the app
+binary at all; pausing never reached the lock screen because the update throttle
+dropped it; and the activity outlived every hike because the only end trigger had
+been deliberately removed when MapLibre's re-attach made `onDisappear` fire
+mid-walk. The end now lives in one place — `endNavigation()` — called by the
+button, by the lock screen, and by arrival, with a flag so `onDisappear` cannot
+end a hike that is still going.
+
+**Still not verified:** the *expanded* island, which needs a long press. The lock
+screen and the buttons were exercised on the device; the capture script cannot
+help either way, since it has no way to lock the simulator, so the preview's
+`nav` scene still shows the in-app HUD rather than the activity.
 
 **M5 Offline — the mechanism works; the gate is a device.** The storage
 screen was the one piece of the scope (§10) that had no code behind it: the plan

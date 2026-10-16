@@ -22,9 +22,7 @@ struct HikeLiveActivity: Widget {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        Text(context.state.hasArrived
-                             ? "Arrived"
-                             : Units.formatDistance(context.state.remaining, system: context.attributes.unitSystem))
+                        Text(headline(context))
                             .font(.headline)
                             .monospacedDigit()
                     }
@@ -51,16 +49,27 @@ struct HikeLiveActivity: Widget {
                         .lineLimit(1)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HikeProgressBar(progress: progress(context))
-                        .padding(.bottom, 2)
+                    VStack(spacing: 8) {
+                        HikeProgressBar(progress: progress(context))
+                        // The plan has promised Pause and End in the island since
+                        // it was written, and only the lock screen ever had them.
+                        // A hiker who swipes down to the island to read the
+                        // remaining distance cannot end the hike from there, and
+                        // has to unlock the phone to do it.
+                        if !context.state.hasArrived {
+                            HikeControls(isPaused: context.state.isPaused)
+                        }
+                    }
+                    .padding(.bottom, 2)
                 }
             } compactLeading: {
-                Image(systemName: context.state.isOffCourse ? "exclamationmark.triangle.fill" : "figure.hiking")
-                    .foregroundStyle(context.state.isOffCourse ? .orange : .cyan)
+                // Was `isOffCourse ? ... : "figure.hiking"`, so a paused hike and
+                // a finished one showed a walking figure here while `minimal` and
+                // the lock screen showed a pause or a tick for the same state.
+                Image(systemName: symbolName(for: context))
+                    .foregroundStyle(tint(for: context))
             } compactTrailing: {
-                Text(context.state.hasArrived
-                     ? "Arrived"
-                     : Units.formatDistance(context.state.remaining, system: context.attributes.unitSystem))
+                Text(headline(context))
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(context.state.hasArrived ? .green : offCourse(context) ? .orange : .primary)
@@ -105,6 +114,19 @@ struct HikeLiveActivity: Widget {
 
     private func waypointLabel(_ context: ActivityViewContext<HikeActivityAttributes>) -> String {
         context.state.nextWaypointName ?? context.attributes.routeName
+    }
+
+    /// What the distance slot says, for every surface.
+    ///
+    /// One function because this string was computed three ways and only one of
+    /// them knew about arriving. "—" before the first fix: the activity is
+    /// requested when navigation starts, which can be a moment before the location
+    /// manager answers, and until then the honest reading is "not yet", not
+    /// "0.00 mi left".
+    private func headline(_ context: ActivityViewContext<HikeActivityAttributes>) -> String {
+        if context.state.hasArrived { return "Arrived" }
+        guard context.state.hasFix else { return "—" }
+        return Units.formatDistance(context.state.remaining, system: context.attributes.unitSystem)
     }
 }
 
@@ -159,25 +181,12 @@ private struct LockScreenHike: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 10) {
-                if context.state.isPaused {
-                    Button(intent: ResumeNavigationIntent()) {
-                        Label("Resume", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button(intent: PauseNavigationIntent()) {
-                        Label("Pause", systemImage: "pause.fill")
-                    }
-                    .buttonStyle(.bordered)
-                }
-                Spacer(minLength: 0)
-                Button(intent: EndNavigationIntent()) {
-                    Label("End", systemImage: "stop.fill")
-                }
-                .buttonStyle(.borderedProminent)
+            // Hidden once arrived: the hike is over, and a Pause button that
+            // stops an already-stopped stream while appearing to do nothing is
+            // worse than no button.
+            if !context.state.hasArrived {
+                HikeControls(isPaused: context.state.isPaused)
             }
-            .font(.caption.weight(.semibold))
         }
         .padding(14)
     }
@@ -188,10 +197,11 @@ private struct LockScreenHike: View {
         context.state.nextWaypointName ?? context.attributes.routeName
     }
 
-    /// What the big number says. On arrival the distance left is a rounding error
-    /// around the threshold, so the number that matters is the arrival itself.
+    /// What the big number says. Same three cases as the island's, kept as one
+    /// function each so a change to one does not silently miss the other.
     private var headline: String {
         if context.state.hasArrived { return "Arrived" }
+        guard context.state.hasFix else { return "—" }
         return Units.formatDistance(context.state.remaining, system: system)
     }
 
@@ -205,6 +215,37 @@ private struct LockScreenHike: View {
         let total = context.attributes.totalDistance
         guard total > 0 else { return 0 }
         return min(max(context.state.distanceAlong / total, 0), 1)
+    }
+}
+
+/// Pause / Resume and End, on whichever surface is asking.
+///
+/// A view rather than duplicated button rows, because the two surfaces drifting
+/// apart is exactly what already went wrong with the state glyphs: the lock
+/// screen grew controls and the island never did.
+struct HikeControls: View {
+    let isPaused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isPaused {
+                Button(intent: ResumeNavigationIntent()) {
+                    Label("Resume", systemImage: "play.fill")
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button(intent: PauseNavigationIntent()) {
+                    Label("Pause", systemImage: "pause.fill")
+                }
+                .buttonStyle(.bordered)
+            }
+            Spacer(minLength: 0)
+            Button(intent: EndNavigationIntent()) {
+                Label("End", systemImage: "stop.fill")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .font(.caption.weight(.semibold))
     }
 }
 
