@@ -156,6 +156,41 @@ xcrun simctl launch booted com.example.GPXNav
 | `-openSearch` | Opens the search sheet on the route screen. |
 | `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
 
+### Live Activity on a device
+
+The lock screen, the Dynamic Island's expanded presentation, and the Pause /
+Resume / End buttons all need a real device: `simctl` cannot lock the simulator
+or tap, and `osascript` cannot send keystrokes. Only the *compact* and *minimal*
+island presentations are reachable from a simulator, and only by backgrounding the
+app (`simctl launch $D com.apple.Preferences`).
+
+```bash
+# iPhone 15 Pro in this setup
+D=00008130-001945C93011401C
+xcrun simctl privacy $D grant location com.example.GPXNav
+xcrun simctl privacy $D grant location-always com.example.GPXNav
+xcrun simctl install $D ios/App/build/Debug-iphoneos/GPXNav.app
+xcrun simctl launch $D com.example.GPXNav -tab navigate -openFirstRoute -navigate
+```
+
+Then, on the phone:
+
+1. Lock it. The activity should appear on the lock screen.
+2. **Pause.** The tile should offer *Resume* and the HUD should say the readout is
+   paused. **Resume.** Both should flip back.
+3. **End.** The activity should go. This is the one that used to do nothing — the
+   in-app End button dismissed the screen without ending the activity, so it
+   outlived the hike and blocked the next one from starting.
+4. Long-press the island to expand it: the progress bar and the same controls
+   should be there.
+
+Signing is a prerequisite and its failures are worded in a way that does not say
+which one it was. See [device-troubleshooting.md](device-troubleshooting.md):
+"invalid code signature, inadequate entitlements or its profile has not been
+explicitly trusted" is the certificate trust prompt, "requires a development
+team" is the extension not inheriting `Secrets.xcconfig`, and "Mismatched bundle
+IDs" is `PRODUCT_BUNDLE_IDENTIFIER` on the extension.
+
 ### The offline storage screen
 
 `-openStorage` opens it directly from Settings, which is how the preview

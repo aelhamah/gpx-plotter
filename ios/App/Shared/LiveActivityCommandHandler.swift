@@ -51,11 +51,24 @@ enum LiveActivityCommandHandler {
 
         switch command {
         case .end:
+            // End the activities directly as well as telling the screen, because
+            // the two fail independently: with nothing observing there is no
+            // screen to tell, and on a *sleeping* app the screen may not act on
+            // the post before the user sees the lock screen again.
             await endEveryActivity()
-            await MainActor.run { NavigationCommandBus.shared.send(.end) }
+            // Left in the slot rather than cleared here, deliberately: the screen
+            // clears it once it has handled the command, and clearing it in the
+            // same turn would race the subscription and could lose the command
+            // outright. Nothing is written to the slot when nothing is observing,
+            // so a press cannot be replayed into a later hike.
+            if observed {
+                await MainActor.run { NavigationCommandBus.shared.send(.end) }
+            }
         case .pause, .resume where observed:
             await MainActor.run { NavigationCommandBus.shared.send(command) }
         case .pause, .resume:
+            // Nothing to pause or resume, so do not leave a hike-shaped tile
+            // counting down: take it down instead.
             await endEveryActivity()
         }
     }

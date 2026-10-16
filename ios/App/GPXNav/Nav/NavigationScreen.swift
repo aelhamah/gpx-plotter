@@ -28,6 +28,16 @@ struct NavigationScreen: View {
     /// the last fix stays on the map, so the screen has to say so rather than
     /// look frozen.
     @State private var isPaused = false
+    /// The hike is over, as opposed to this view going away.
+    ///
+    /// The distinction is the whole of #71. `onDisappear` fires when MapLibre
+    /// re-attaches, so it cannot be the signal to end a Live Activity — but it
+    /// is also the only thing that happens when the in-app End button is tapped,
+    /// and with nothing else ending it the activity outlived every hike and
+    /// `isActive` stayed true, so the next navigation could never even replace
+    /// it. So: end where the hike actually ends, and use this to stop
+    /// `onDisappear` ending a hike that is still going.
+    @State private var hasEnded = false
 
     init(route: Route, waypoints: [Waypoint], profile: RouteProfile) {
         _session = StateObject(wrappedValue: NavigationSession(
@@ -80,13 +90,18 @@ struct NavigationScreen: View {
             // blue background indicator stays on with nothing to show for it.
             location.stopStreaming()
             NavigationCommandBus.shared.setObserved(false)
-            // Deliberately *not* ending the activity here. `onDisappear` is not a
-            // signal that the hike ended: this view is torn down and rebuilt when
-            // MapLibre re-attaches, which is why `onAppear` already runs twice
-            // here, and ending on that would take the activity down mid-hike.
-            // A hike ends when the hiker ends it, when it arrives, or when iOS
-            // reclaims the app -- and the last of those should leave the activity
-            // up, the way a run does when your phone dies.
+            // Ending here unconditionally was the first attempt and it is wrong:
+            // this view is torn down and rebuilt when MapLibre re-attaches, which
+            // is why `onAppear` already runs twice, and that took the activity
+            // down about 15s into a walk. So the end lives in `endNavigation()`,
+            // which both the button and the lock screen call, and this only
+            // catches the case where the hike is genuinely over — arrival, or the
+            // user ending it and the dismissal landing before the end call.
+            // An app iOS kills leaves the activity up, the way a run does when
+            // your phone dies, which is the behaviour we want there.
+            if hasEnded {
+                Task { await LiveActivityController.shared.end(dismissal: .immediate) }
+            }
         }
         .onChange(of: location.fix) { _, fix in
             ingest(fix)
@@ -109,6 +124,7 @@ struct NavigationScreen: View {
         }
         .onChange(of: session.hasArrived) { _, arrived in
             guard arrived else { return }
+            hasEnded = true
             location.stopStreaming()
             // Lingers briefly rather than vanishing: the arrival is the one thing
             // worth seeing on the lock screen after the hike.
@@ -153,8 +169,15 @@ struct NavigationScreen: View {
         }
     }
 
-    private func updateActivity(_ readout: NavigationSession.Readout, isPaused: Bool) async {
-        await LiveActivityController.shared.update(state(readout, isPaused: isPaused))
+    private func updateActivity(
+        _ readout: NavigationSession.Readout,
+        isPaused: Bool,
+        immediately: Bool = false
+    ) async {
+        await LiveActivityController.shared.update(
+            state(readout, isPaused: isPaused),
+            immediately: immediately
+        )
     }
 
     /// The activity's state for a readout. The lock screen's numbers are the nav
@@ -170,7 +193,8 @@ struct NavigationScreen: View {
             isOffCourse: session.isOffCourse,
             offCourseMeters: readout.offRoute,
             isPaused: isPaused,
-            hasArrived: session.hasArrived
+            hasArrived: session.hasArrived,
+            hasFix: true
         )
     }
 
@@ -185,16 +209,32 @@ struct NavigationScreen: View {
         case .pause:
             location.stopStreaming()
             isPaused = true
-            Task { if let readout = session.readout { await updateActivity(readout, isPaused: true) } }
+            // Immediately: a pause the lock screen does not show is a pause the
+            // hiker cannot confirm, and the tile would keep offering "Pause"
+            // forever.
+            Task { if let readout = session.readout { await updateActivity(readout, isPaused: true, immediately: true) } }
         case .resume:
             location.startStreaming()
             isPaused = false
-            Task { if let readout = session.readout { await updateActivity(readout, isPaused: false) } }
+            Task { if let readout = session.readout { await updateActivity(readout, isPaused: false, immediately: true) } }
         case .end:
-            location.stopStreaming()
-            Task { await LiveActivityController.shared.end(dismissal: .immediate) }
-            dismiss()
+            endNavigation()
         }
+    }
+
+    /// End the hike: stop tracking, take the activity down, leave.
+    ///
+    /// The single place a hike ends, so the button, the lock screen and
+    /// `onDisappear` cannot disagree about whether it has. Ending used to be a
+    /// `dismiss()` on the button and nothing at all on the lock screen, which is
+    /// how an activity outlived the hike and left `isActive` set — and that in
+    /// turn blocked the *next* navigation from ever starting one.
+    private func endNavigation() {
+        guard !hasEnded else { return }
+        hasEnded = true
+        location.stopStreaming()
+        Task { await LiveActivityController.shared.end(dismissal: .immediate) }
+        dismiss()
     }
 
     /// Fold a fix into the session and mirror it onto the map. The covered
@@ -349,7 +389,7 @@ struct NavigationScreen: View {
 
             Spacer()
 
-            Button("End") { dismiss() }
+            Button("End") { endNavigation() }
                 .font(.subheadline.weight(.medium))
                 .buttonStyle(.borderedProminent)
                 .accessibilityHint("Stops navigation")

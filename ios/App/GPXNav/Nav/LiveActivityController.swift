@@ -78,14 +78,24 @@ final class LiveActivityController {
     }
 
     /// Push the current readout, if it is worth the budget.
-    func update(_ state: HikeActivityAttributes.ContentState) async {
+    ///
+    /// - Parameter immediately: skip the interval. For updates a person is
+    ///   waiting on — pause, resume, arriving — the throttle does not merely
+    ///   delay them, it usually *drops* them: a press on the lock screen lands
+    ///   within a second of the last fix about always, so the tile kept saying
+    ///   "Pause" after being paused. A fix a second later cannot fix that.
+    func update(_ state: HikeActivityAttributes.ContentState, immediately: Bool = false) async {
         guard let activity else { return }
         let now = Date()
 
-        // An off-course change is the one update worth breaking the interval for:
-        // it is the moment the hiker most needs to know, and it happens rarely.
+        // An off-course change is the other update worth breaking the interval
+        // for: it is the moment the hiker most needs to know, and it happens
+        // rarely, so it cannot crowd anything else out.
         let offCourseChanged = state.isOffCourse != (lastState?.isOffCourse ?? false)
-        if !offCourseChanged, let lastUpdateAt, now.timeIntervalSince(lastUpdateAt) < minimumUpdateInterval {
+        if !immediately,
+           !offCourseChanged,
+           let lastUpdateAt,
+           now.timeIntervalSince(lastUpdateAt) < minimumUpdateInterval {
             return
         }
 
@@ -96,11 +106,6 @@ final class LiveActivityController {
         )
     }
 
-    /// Take the activity down.
-    ///
-    /// - Parameter dismissal: `.immediate` when the user ends it, `.after` when
-    ///   the hike finished on its own, so the lock screen can show the total for a
-    ///   moment instead of vanishing mid-glance.
     /// End the hike with a known final state.
     ///
     /// Separate from `end(dismissal:)` because the arrival fix is often the one
@@ -121,6 +126,10 @@ final class LiveActivityController {
     }
 
     /// Take the activity down as-is.
+    ///
+    /// - Parameter dismissal: `.immediate` when the user ends it, `.after` when
+    ///   the hike finished on its own, so the lock screen can show the total for a
+    ///   moment instead of vanishing mid-glance.
     func end(dismissal: ActivityUIDismissalPolicy) async {
         guard let activity else { return }
         // Read the last state before dropping it: the activity's final content is
@@ -150,6 +159,7 @@ extension HikeActivityAttributes.ContentState {
         isOffCourse: false,
         offCourseMeters: 0,
         isPaused: false,
-        hasArrived: false
+        hasArrived: false,
+        hasFix: false
     )
 }
