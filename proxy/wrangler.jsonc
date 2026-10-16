@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gpxnav-tile-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-01",
+  // One Durable Object per allowed client, holding that client's day.
+  "durable_objects": {
+    "bindings": [{ "name": "QUOTA", "class_name": "QuotaCounter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QuotaCounter"] }],
+  "vars": {
+    // Exact User-Agent values. Must match MapNetworkIdentity.allowlistToken in the
+    // app, byte for byte — see README §Wiring the app.
+    "ALLOWED_CLIENTS": "GPXNav (iOS; com.aelhamah.GPXNav)",
+    // Generous for 100 users of an app that caches tiles on the device. This is a
+    // runaway guard, not a budget: if a client is near it, the key is being shared.
+    "DAILY_QUOTA": "20000",
+    "UPSTREAM": "https://api.maptiler.com"
+    // CACHE_TILES is deliberately absent. See README §Enabling caching.
+  }
+  // MAPTILER_KEY is a secret and is never in this file:
+  //   wrangler secret put MAPTILER_KEY
+}
