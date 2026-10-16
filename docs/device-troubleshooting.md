@@ -239,6 +239,13 @@ A paid account gets a year, and also removes the per-machine restriction on
 Personal Teams. For testing that needs to outlive a week, that is the
 difference between a device check and TestFlight.
 
+## Once it is installed
+
+Getting the app onto the phone is this file. Checking what it *does* on the phone
+is [ios-device-checks.md](ios-device-checks.md) — the Live Activity buttons, the
+compass, airplane mode, and the MapTiler checks, none of which a simulator can
+reach.
+
 ## Offline testing on device
 
 The device check that the simulator cannot satisfy, since the simulator shares

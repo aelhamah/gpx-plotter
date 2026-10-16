@@ -534,6 +534,13 @@ behavior of skipping preview deploys for forks.
 
 ## Manual verification
 
+Behaviour that needs a physical device is written up as a runbook in
+[ios-device-checks.md](ios-device-checks.md) rather than here, because the
+reasons it cannot be automated are the reasons it is easy to forget. The checks
+below are the ones a browser or a simulator can reach.
+
+
+
 Because the app is map- and DOM-heavy, some checks are manual:
 
 - Import a small GPX and a large one (see `web/public/demos/Afternoon_Hike.gpx`) and
