@@ -23,7 +23,19 @@ struct SearchView: View {
     var body: some View {
         NavigationStack {
             List {
-                if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                if let limitation = AppConfig.searchLimitation {
+                    // Said up front, rather than after the user has typed a place
+                    // and been met with "No results". With no geocoder configured
+                    // every search returns an empty list, so an empty list is
+                    // indistinguishable from a search that genuinely found
+                    // nothing — which is what #69 was: not a broken button, a
+                    // working search with nothing to search.
+                    ContentUnavailableView(
+                        "Search is unavailable",
+                        systemImage: "magnifyingglass",
+                        description: Text(limitation)
+                    )
+                } else if query.trimmingCharacters(in: .whitespaces).isEmpty {
                     ContentUnavailableView(
                         "Search for a place",
                         systemImage: "magnifyingglass",
@@ -116,6 +128,13 @@ struct SearchView: View {
         searchTask?.cancel()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
+            results = []
+            isSearching = false
+            return
+        }
+        // No geocoder: the empty state above already says why, and running the
+        // debounce anyway would flash "Searching…" before returning nothing.
+        guard AppConfig.geocodingClient != nil else {
             results = []
             isSearching = false
             return

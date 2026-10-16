@@ -181,7 +181,11 @@ struct ViewerScreen: View {
                     analysis.fillMissingElevations()
                 }
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
-                    isSearching = true
+                    // Through `openSearch()`, not straight to `isSearching`: the
+                    // panel has to come away first or the sheet is dropped, and a
+                    // capture that set the flag directly would photograph the
+                    // broken path and call it fixed.
+                    openSearch()
                 }
                 // `-scrub 0.4` seeds the profile scrub at a fraction of the
                 // route. `simctl` cannot drag, so this is how the map trace gets
@@ -199,7 +203,12 @@ struct ViewerScreen: View {
                     packs.download(for: route)
                 }
             }
-            .sheet(isPresented: $isSearching) {
+            .sheet(isPresented: $isSearching, onDismiss: {
+                // Put the figures back: `openSearch` took them away to make room,
+                // and a map that loses its statistics because you looked a peak
+                // up is its own small wrongness.
+                isPanelPresented = true
+            }) {
                 SearchView(proximity: route.points.first?.coordinate)
             }
     }
@@ -306,6 +315,24 @@ struct ViewerScreen: View {
     /// hierarchy is still up — the flag flips and nothing appears. Dropping the
     /// panel first also means the readout is not competing with the stats for the
     /// screen.
+    /// Open the search sheet, which means putting the figures sheet away first.
+    ///
+    /// The viewer's figures sheet is presented for as long as the screen is up,
+    /// and a presentation made while another from the same host is already up is
+    /// dropped rather than queued — so the search button did nothing, with no
+    /// error and nothing to explain it. The recipe is `beginNavigation`'s:
+    /// dismiss, then ask on a later turn, because setting both in the same
+    /// transaction is what loses one of them.
+    ///
+    /// The figures come back when the search closes, so looking something up costs
+    /// a swipe of the panel rather than losing it.
+    private func openSearch() {
+        isPanelPresented = false
+        Task { @MainActor in
+            isSearching = true
+        }
+    }
+
     private func beginNavigation() {
         isPanelPresented = false
         // One runloop later, so the sheet's dismissal has been committed before
@@ -346,15 +373,23 @@ struct ViewerScreen: View {
     @ViewBuilder
     private var searchButton: some View {
         if let limitation = AppConfig.searchLimitation {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .frame(width: 40, height: 40)
-                .background(.regularMaterial, in: Circle())
-                .accessibilityLabel("Search unavailable")
-                .help(limitation)
+            // Tappable even with no geocoder, because the sheet explains itself
+            // and a control that silently refuses to respond is the thing this was
+            // reported as. A greyed glyph with the reason hidden in a tooltip
+            // told the user nothing on a phone, where there is no hover.
+            Button {
+                openSearch()
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .frame(width: 40, height: 40)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .buttonStyle(MapChromeButtonStyle())
+            .accessibilityLabel("Search")
+            .accessibilityHint(limitation)
         } else {
             Button {
-                isSearching = true
+                openSearch()
             } label: {
                 Image(systemName: "magnifyingglass")
                     .frame(width: 40, height: 40)

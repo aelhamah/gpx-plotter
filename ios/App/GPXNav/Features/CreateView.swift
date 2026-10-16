@@ -71,6 +71,15 @@ struct CreateView: View {
                 draft.addWaypoint(result)
             }
         }
+        // `-openSearch`, the same argument the viewer's search uses, so the
+        // capture script can photograph this one too. It could not before: the
+        // argument was read only by the viewer, which left this screen's sheet
+        // with no way to reach it from outside.
+        .task {
+            if ProcessInfo.processInfo.arguments.contains("-openSearch") {
+                isSearching = true
+            }
+        }
     }
 }
 
