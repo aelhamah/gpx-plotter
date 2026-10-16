@@ -1031,3 +1031,31 @@ Four findings from the storage screen, all of which look like bookkeeping:
   `snap.ts` partly. Snapping is more useful on a phone but pulls in the vector
   tile decoding that §3 lists as dropped. Freehand-only is much less work and
   loses the feature that makes drawn routes follow real paths.
+
+## 13. Icons
+
+There was no written record of which glyph meant what, so the same two or three
+were reused for different jobs and the collisions were the bug (#67). This is
+the mapping, and the reason each one is what it is. The rule underneath all of
+it: **a glyph names an action or a state, never a place.** "Where I am" is the
+dot on the map and the crosshair that centres it, so nothing else gets to be a
+crosshair.
+
+| Where | Glyph | Why |
+| --- | --- | --- |
+| Start navigation | `figure.hiking` | The Live Activity's own glyph for a hike in progress, so the button that starts one and the activity it starts are the same picture. It used to be `location.fill`, identical to the locate button directly below it. |
+| Locate / recentre | `location.fill` | Unchanged, and the reason nothing else may use it. |
+| Heading-up mode | `location.north.line.fill`, rotating | A needle that points where the map is pointing, animated by the real heading rather than a spinner. |
+| Following | `viewfinder.circle.fill` | Asks "is the camera tracking me", which is what the button answers. `location.fill` said "where I am", which is the dot underneath it. |
+| Pan freely | `hand.raised.fill` | An open hand is a mode you are in, not a gesture being made — `hand.tap` read as a one-off action. |
+| Navigate tab | `location.north.fill` | Kept as-is: the one place a compass means "this tab is about direction". |
+| Missing MapTiler key | `key.slash.fill` | The cause, not a severity. |
+
+The red/orange `exclamationmark.triangle.fill` stays with actual faults — a
+failed import, an off-route warning, a failed download. Two of the three places
+it appeared were a missing key, which is a misconfiguration to fix rather than
+something that went wrong, and it left the triangle meaning six unrelated
+things.
+
+The map's layer-stack control is deliberately untouched. It is a control, not a
+status indicator, and restyling it is a separate piece of work.
