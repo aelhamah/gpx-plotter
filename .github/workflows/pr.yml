@@ -27,6 +27,7 @@ jobs:
     outputs:
       web: ${{ steps.filter.outputs.web }}
       ios: ${{ steps.filter.outputs.ios }}
+      proxy: ${{ steps.filter.outputs.proxy }}
       ios_present: ${{ steps.probe.outputs.present }}
     steps:
       # Required before the filter, not just for the probe below: on a push event
@@ -48,6 +49,9 @@ jobs:
               - '.github/workflows/**'
             ios:
               - 'ios/**'
+              - '.github/workflows/**'
+            proxy:
+              - 'proxy/**'
               - '.github/workflows/**'
 
       # A workflow-only change sets the ios filter, so the iOS job would try to
@@ -87,6 +91,33 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+  proxy:
+    name: Proxy (typecheck + test)
+    needs: changes
+    if: needs.changes.outputs.proxy == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22, like the web job. The default `node` on some machines is 14,
+          # which cannot even install this tree.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      # Typecheck before test: the Worker entry point only exists to satisfy
+      # Cloudflare's ambient types, so a type error here is otherwise invisible
+      # until deploy time.
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Run unit tests
+        run: npm test
+
   ios:
     name: iOS (swift build + test)
     needs: changes
@@ -110,7 +141,7 @@ jobs:
 
   gate:
     name: CI
-    needs: [changes, web, ios]
+    needs: [changes, web, ios, proxy]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -119,12 +150,13 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           WEB: ${{ needs.web.result }}
           IOS: ${{ needs.ios.result }}
+          PROXY: ${{ needs.proxy.result }}
         run: |
           # `changes` has to be checked too. If it fails, both platform jobs are
           # skipped rather than failed, so a gate that only inspects web/ios
           # would report success for a run that tested nothing at all.
           status=0
-          for job in "changes:$CHANGES" "web:$WEB" "ios:$IOS"; do
+          for job in "changes:$CHANGES" "web:$WEB" "ios:$IOS" "proxy:$PROXY"; do
             name=${job%%:*}
             result=${job#*:}
             case "$result" in
@@ -139,8 +171,8 @@ jobs:
             esac
           done
           if [ "$status" -eq 0 ]; then
-            echo "All applicable jobs passed (changes=$CHANGES, web=$WEB, ios=$IOS)."
+            echo "All applicable jobs passed (changes=$CHANGES, web=$WEB, ios=$IOS, proxy=$PROXY)."
           else
-            echo "Failed (changes=$CHANGES, web=$WEB, ios=$IOS)."
+            echo "Failed (changes=$CHANGES, web=$WEB, ios=$IOS, proxy=$PROXY)."
           fi
           exit "$status"

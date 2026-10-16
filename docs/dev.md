@@ -149,12 +149,48 @@ xcrun simctl launch booted com.example.GPXNav
 | `-showRelief` | Turns on the MapTiler hillshade layer at launch. |
 | `-showSlope` | Turns on the loopback slope raster at launch. |
 | `-terrain3D` | Turns on MapLibre 3D terrain at launch. |
+| `-fillElevation` | Turns on the terrain elevation fill at launch, which is off by default (#72). |
 | `-downloadOffline` | Starts the corridor tile download at launch. |
 | `-expandedPanel` | Opens the bottom sheet at the large detent, where the profile chart and the offline row live. |
 | `-scrub <fraction>` | Seeds the profile scrub at a fraction of the route's distance. |
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
 | `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
+
+### Live Activity on a device
+
+The lock screen, the Dynamic Island's expanded presentation, and the Pause /
+Resume / End buttons all need a real device: `simctl` cannot lock the simulator
+or tap, and `osascript` cannot send keystrokes. Only the *compact* and *minimal*
+island presentations are reachable from a simulator, and only by backgrounding the
+app (`simctl launch $D com.apple.Preferences`).
+
+```bash
+# iPhone 15 Pro in this setup
+D=00008130-001945C93011401C
+xcrun simctl privacy $D grant location com.example.GPXNav
+xcrun simctl privacy $D grant location-always com.example.GPXNav
+xcrun simctl install $D ios/App/build/Debug-iphoneos/GPXNav.app
+xcrun simctl launch $D com.example.GPXNav -tab navigate -openFirstRoute -navigate
+```
+
+Then, on the phone:
+
+1. Lock it. The activity should appear on the lock screen.
+2. **Pause.** The tile should offer *Resume* and the HUD should say the readout is
+   paused. **Resume.** Both should flip back.
+3. **End.** The activity should go. This is the one that used to do nothing — the
+   in-app End button dismissed the screen without ending the activity, so it
+   outlived the hike and blocked the next one from starting.
+4. Long-press the island to expand it: the progress bar and the same controls
+   should be there.
+
+Signing is a prerequisite and its failures are worded in a way that does not say
+which one it was. See [device-troubleshooting.md](device-troubleshooting.md):
+"invalid code signature, inadequate entitlements or its profile has not been
+explicitly trusted" is the certificate trust prompt, "requires a development
+team" is the extension not inheriting `Secrets.xcconfig`, and "Mismatched bundle
+IDs" is `PRODUCT_BUNDLE_IDENTIFIER` on the extension.
 
 ### Search
 
@@ -519,6 +555,13 @@ behavior of skipping preview deploys for forks.
 6. **Verify.** `npm run build && npm test`, then try it in the browser.
 
 ## Manual verification
+
+Behaviour that needs a physical device is written up as a runbook in
+[ios-device-checks.md](ios-device-checks.md) rather than here, because the
+reasons it cannot be automated are the reasons it is easy to forget. The checks
+below are the ones a browser or a simulator can reach.
+
+
 
 Because the app is map- and DOM-heavy, some checks are manual:
 

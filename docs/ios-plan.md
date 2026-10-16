@@ -430,7 +430,8 @@ usable once the profile is an overlay rather than a sibling of the map.
   — Navigate is a tab now. Tapping the remaining button recentres **and** rotates
   the map to the current heading, then tapping again snaps back to north, the way
   a compass button behaves. `MLNMapCamera` calls the rotation `heading`, not
-  `direction`.
+  `direction`. *This entry was written as though it were true and, for the
+  second half, it was not — see #66 below.*
 - **The title bar is slightly translucent**, so the map reads as continuing under
   the navigation bar rather than stopping at it. The map ignores *all* safe
   areas for this to have anything to show through; the search control sits below
@@ -671,7 +672,7 @@ locked" — is **not** met, for a reason no amount of code fixes: it needs a dev
 | Continuous location | **Done.** `LocationController` gained a streaming mode: `activityType = .fitness`, `pausesLocationUpdatesAutomatically = false` (the default stops updates when the system decides the user is stationary, which is exactly when progress should keep being measured), `distanceFilter = 5`, and `allowsBackgroundLocationUpdates`. The nav screen also asks for "Always" when navigation starts, which is the only authorisation that survives a locked screen. |
 | Nav UI | **Done.** A `fullScreenCover` — not a sheet, because guidance is read one-handed and a grabber puts the numbers behind a drag. It is the map itself, with a compact HUD over the bottom: next waypoint and remaining distance on the left, then progress, elevation, grade ahead, elapsed, and an End button. The walked part of the route is drawn as a trace over it, reusing the viewer's `scrubbedDistance`, so the map answers "where am I on this route" without a second mechanism. Off-course banner above the HUD. Every number formatted through `Units`. |
 | Off-course | **Done**, and driven by the existing tested detector rather than a second implementation. |
-| **Hike with the phone locked** | **Not verified.** Needs a physical device: `simctl` can synthesize a path, but not a lock screen, and the gate is about the hike continuing in a pocket. The settings that make it work are in place and the background-location indicator was observed running on the simulator. |
+| **Hike with the phone locked** | **Not verified.** Procedure in [ios-device-checks.md](ios-device-checks.md) §7.  Needs a physical device: `simctl` can synthesize a path, but not a lock screen, and the gate is about the hike continuing in a pocket. The settings that make it work are in place and the background-location indicator was observed running on the simulator. |
 
 Three findings from building it, all of which look like details and are not:
 
@@ -726,6 +727,20 @@ Three findings from building it, all of which look like details and are not:
 *static* simulated position will not trigger the off-course banner, and that is
 correct: the detector ignores fixes below a walking pace on purpose, so
 `location start --speed` is needed.
+
+One finding from device testing, which looks like a styling choice and is not:
+
+- **"Tapping again snaps back to north" was documented and untrue.** Turning
+  heading-follow off never assigned `camera.heading = 0`; it simply stopped
+  assigning a heading, and the camera was copied forward still carrying the
+  rotation. So the position recentred and the map stayed turned -- which reads
+  exactly like a locate button that has stopped working. Worse, "heading-follow"
+  was a *snapshot*, not a mode: `camera.heading` was written once at the tap, and
+  the map never turned again even as the device did. And it was unreachable from
+  navigation at all, because `followsHeading` lived on a button the nav screen
+  does not have, while inheriting `true` from a prior viewer session and then
+  re-stamping a rotation on every fix. `headingOrientation` was never set either,
+  so a sideways phone reported a bearing 90° out.
 
 Four findings from that pass are worth keeping, because each looks like a styling
 choice and is not:
@@ -857,7 +872,7 @@ M0 defects the simulator surfaced, all fixed:
 | Multi-route | **Done.** Every visible route is drawn, not only the selected one; the selected route's vertices get the larger radius and dark stroke. Deleting or hiding a route removes its layers and sources. |
 | Waypoints | **Done.** Drawn as a circle layer; they arrive from a GPX's `<wpt>` elements via `RouteKit.parseGPX` and persist with the workspace. |
 | Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`. |
-| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. |
+| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. Heading-follow now *tracks* the bearing rather than stamping it once, and the glyph is a needle that turns with the device (#48, #66). |
 | Search | **Done, but neither entry point actually worked until a device found it (#69).** Debounced 300 ms, six results, proximity biased to the route, and the Peak / Trailhead / Trail / Street badges from `RouteKit`. Tapping a result adds it as a waypoint. Verified against the live endpoint: names, peak detection, and summit elevations all arrive. Two bugs sat on top of that: the viewer's figures sheet is presented for the screen's whole life, so a search sheet presented while another is up from the same host was dropped and the button did nothing; and with no key `geocodingClient` is nil, so every query returned an empty list — indistinguishable from a place that does not exist, which is what "search doesn't work" turned out to be. Both fixed; both screens now say **Search is unavailable** before anyone types. |
 | 3D terrain toggle | **Built, not yet verified on the map.** The map now loads its style from the loopback endpoint with `?terrain=1`, and the toggle forces a style reload because that is the only way to add or drop the block. Needs a look at a pitched camera before it is called done. |
 | Style builder | **Built.** `StyleBuilder` fetches MapTiler's hosted style, adds a `raster-dem` source named `terrain` with an inline `tiles` template, and writes `"terrain": { "source": "terrain", "exaggeration": 1.15 }` — the same source name and exaggeration the web app's `setTerrain` call uses. The basemap is still MapTiler's own; only the terrain block is added. Served from the existing loopback listener at `/style.json?style=…&terrain=…`, cached per variant. |
@@ -894,9 +909,9 @@ no amount of code fixes (§ "what could not be verified" below).
 | --- | --- |
 | Widget extension | **Done.** `ios/App/GPXNavWidgets` with `HikeLiveActivity`, embedded in the app by `project.yml`. `HikeActivityAttributes` and the command bus live in `ios/App/Shared`, compiled into both targets: an app-extension target cannot link the app, and two types are not worth a package. |
 | Lock screen | **Done, unverified.** Waypoint and remaining distance, progress bar, elevation, grade chip, elapsed clock, off-course banner, and Pause / Resume / End. |
-| Dynamic Island | **Done, verified.** Compact leading/minimal glyph, compact trailing distance, expanded regions, and a keyline that carries the state: cyan walking, orange off course, green arrived. |
+| Dynamic Island | **Done, verified.** Compact leading/minimal glyph, compact trailing distance, expanded regions with the progress bar and the controls, and a keyline that carries the state: cyan walking, orange off course, green arrived. The expanded controls arrived with the device fix below; the compact and minimal presentations had been verified before that. |
 | Update path | **Done.** One activity per hike, requested when navigation starts, updated from each fix behind a 1s throttle with off-course changes exempt, and ended with a known final state on arrival. |
-| Buttons | **Done, untestable here.** `LiveActivityIntent` runs in the *app's* process, which is the only reason a press on the lock screen can reach the navigation session at all; a plain `AppIntent` would run in the extension, where there is no session. |
+| Buttons | **Fixed, and it was broken until a device found it.** `LiveActivityIntent` runs in the *app's* process — which is not a property of the protocol but of the binary the system resolves it in, and `NavigationIntents.swift` was compiled into the widget target only. The buttons rendered and the press went nowhere. The types now live in `Shared`, and `Metadata.appintents/extract.actionsdata` in the *app* names them, which is the artifact iOS actually resolves. Also fixed behind it: pause/resume were dropped by the 1s update throttle, so even a working press would have looked inert. |
 | **Glanceable from the lock screen** | **Not verified.** The simulator cannot be locked from `simctl` and `osascript` cannot send keystrokes here, so the lock screen presentation has never been rendered. Needs a device. |
 
 Three things the plan's sketch had to change, and why:
@@ -924,12 +939,19 @@ stopped minutes ago — and its buttons post commands to a nav screen that is no
 there. The intents check whether anything is listening and take the activity down
 themselves when nothing is, so the buttons cannot become inert.
 
-**Not verified, all of it the same reason:** the lock screen presentation, the
-expanded island (a long press, which the simulator cannot do), and the Pause /
-Resume / End buttons (a tap, which the simulator cannot do). All three are wired
-and compile; none has been run. The capture script cannot help either — it has no
-way to lock the simulator, so the preview's `nav` scene still shows the in-app
-HUD rather than the activity.
+**Verified on a device (iPhone 15 Pro, iOS 27.0.1), and that is where three
+defects surfaced that no simulator could find:** the intents were not in the app
+binary at all; pausing never reached the lock screen because the update throttle
+dropped it; and the activity outlived every hike because the only end trigger had
+been deliberately removed when MapLibre's re-attach made `onDisappear` fire
+mid-walk. The end now lives in one place — `endNavigation()` — called by the
+button, by the lock screen, and by arrival, with a flag so `onDisappear` cannot
+end a hike that is still going.
+
+**Still not verified:** the *expanded* island, which needs a long press. The lock
+screen and the buttons were exercised on the device; the capture script cannot
+help either way, since it has no way to lock the simulator, so the preview's
+`nav` scene still shows the in-app HUD rather than the activity.
 
 **M5 Offline — the mechanism works; the gate is a device.** The storage
 screen was the one piece of the scope (§10) that had no code behind it: the plan
@@ -942,13 +964,14 @@ were done while the third was represented by two aggregate numbers in Settings.
 | Corridor prefetch | **Done.** Downloads the route's corridor for **every source the loaded style declares**, z12–z14, four requests in flight. Verified on the simulator: 68 tiles / 4.4 MB for the Maroon Bells loop, with `outdoor`, `contours`, `maptiler_planet`, and `terrain` each present as their own files. |
 | Satellite basemap offline | **Done.** Raster sources go through the same seam, so `satellite`'s jpg tiles are cached alongside the labels. Verified with `-satellite`. |
 | Per-source tile identity | **Fixed.** The cache was keyed by `z/x/y` alone, so all four sources collided: `contours` was answered with `outdoor`'s bytes, and a prefetch of four sources fetched one. `TileCacheKey` (source, coordinates, format) now owns the identity, with the loopback path round trip under test. |
+| Elevation fill | **Done, and it was on by default until a device user noticed (#72).** The DEM supplies the ground between a route's vertices and the track's own elevations anchor it, so the two cannot sawtooth against each other. Recorded elevations were never overwritten and still are not. What was wrong was that the fill ran unasked on every route open, so a GPX recorded with a barometric altimeter was silently second-guessed by a 30 m DEM tile and the profile on screen was not the profile that was imported. It is now an explicit setting, off by default, on iOS and on the web. |
 | Elevation offline | **Done.** The DEM is cached as `raster-dem` source `terrain` across z12–z14 — not just z14, because MapLibre asks for a DEM tile at the camera's zoom — and the slope generator decodes the cached bytes rather than re-fetching. |
 | Size estimate | **Measured, per source.** `TileSourceSize` replaces a flat per-format table that was 5× high for satellite rasters and 5× low for the DEM. See §9. |
 | Progress and honesty | **Done.** Per-tile progress; a partial download reports how many tiles it could not fetch rather than claiming clean coverage, and Settings shows the cache's size with a way to clear it. |
 | Storage screen | **Done, verified on the simulator.** Settings → Offline maps lists each corridor with its tile count, size and download date, deletes one, and clears everything. The cache figure is reported separately from the list, with the difference shown as "From browsing". The offline bar's **Clear** is now per route: it used to wipe the whole cache, including corridors belonging to other routes. |
 | What was downloaded | **Done.** `OfflinePackManifest` records the corridor each route asked for — route id, buffer, zoom range and source formats — which is what makes a pack's tiles listable for deletion. Without it the cache could only be wiped wholesale, because it warms as the map is panned and cannot say which tiles came from which route. |
 | LRU eviction | **Possible now, and manual.** The manifest's ordering makes oldest-first eviction a two-line operation, and the storage screen offers "Free Up Space" once the recorded total passes a 200 MB budget. Deliberately not automatic: a corridor downloaded last week is not the app's to delete on its own judgement. |
-| Full hike in airplane mode | **Not yet run.** The disk-hit path is verified two ways — a unit test that a stored tile is answered without the upstream closure ever being called, and a live check that a sentinel written into a cache file comes back byte-for-byte over the loopback — but the end-to-end gate still wants a physical device, since `simctl` has no connectivity toggle. |
+| Full hike in airplane mode | **Not yet run.** Procedure in [ios-device-checks.md](ios-device-checks.md) §8.  The disk-hit path is verified two ways — a unit test that a stored tile is answered without the upstream closure ever being called, and a live check that a sentinel written into a cache file comes back byte-for-byte over the loopback — but the end-to-end gate still wants a physical device, since `simctl` has no connectivity toggle. |
 
 Four findings from the storage screen, all of which look like bookkeeping:
 
@@ -989,7 +1012,14 @@ Four findings from the storage screen, all of which look like bookkeeping:
 3. **MapTiler terms on offline caching** in a distributed app. **Unresolved, and
    now urgent** — the app caches MapTiler tiles on the user's device and serves
    them back with no network. A licensing question, not an engineering one, and it
-   can invalidate §9 entirely.
+   can invalidate §9 entirely. **Narrowed, not solved:** [`proxy/`](../proxy/README.md)
+   moves the key out of the app bundle and puts an allowlist and a daily cap in
+   front of it, and deliberately **does not cache tile bodies** — edge caching is
+   bulk downloading, which is the clause in question, so a pass-through proxy is
+   useful today under the terms as they stand. That fixes the open-ended bill and
+   the extractable key. It does not make §9 legal, and no version of it can: the
+   offline decision is still one of asking MapTiler for a written exception,
+   buying On-Prem, or self-hosting.
 4. **Swift 6 concurrency** against an unaudited Obj-C framework. **Confirmed
    real:** `MLNOfflinePack` is non-`Sendable` and cannot be retained, sent across
    an isolation boundary, or even captured in a completion handler. The offline
@@ -998,7 +1028,16 @@ Four findings from the storage screen, all of which look like bookkeeping:
 5. **MapTiler key restrictions do not transfer to native** (§5.1). Not a
    MapTiler bug, but it invalidates the plan's original key guidance: the key
    needs both an origin allowlist and a user-agent allowlist, and the iOS
-   half of that is easy to leave out.
+   half of that is easy to leave out. **Partly closed:** the app pins one
+   `User-Agent` (`MapNetworkIdentity.allowlistToken`) and applies it to
+   MapLibre's session, so tiles, the DEM tileset and offline prefetch all
+   send it. What was still missing was everything that is *not* a map tile —
+   geocoding and the DEM samples behind the elevation profile are plain
+   `URLSession` requests and were sending `CFNetwork/… Darwin/…`, which no
+   allowlist can match. Both now send the same token, and
+   `HTTPIdentityOnTheWireTests` proves it against a real socket rather than
+   asserting a dictionary contains a key. The rest of the risk stands: the
+   key itself, and whether a 100-user app wants a public-bundle key at all.
 6. **No cache eviction.** `TileCache` drops its whole in-memory corpus at 32 MB
    and has no LRU on disk, so the cache only shrinks when the user clears it from
    Settings. Fine while a download is one corridor; worth revisiting before
@@ -1031,3 +1070,31 @@ Four findings from the storage screen, all of which look like bookkeeping:
   `snap.ts` partly. Snapping is more useful on a phone but pulls in the vector
   tile decoding that §3 lists as dropped. Freehand-only is much less work and
   loses the feature that makes drawn routes follow real paths.
+
+## 13. Icons
+
+There was no written record of which glyph meant what, so the same two or three
+were reused for different jobs and the collisions were the bug (#67). This is
+the mapping, and the reason each one is what it is. The rule underneath all of
+it: **a glyph names an action or a state, never a place.** "Where I am" is the
+dot on the map and the crosshair that centres it, so nothing else gets to be a
+crosshair.
+
+| Where | Glyph | Why |
+| --- | --- | --- |
+| Start navigation | `figure.hiking` | The Live Activity's own glyph for a hike in progress, so the button that starts one and the activity it starts are the same picture. It used to be `location.fill`, identical to the locate button directly below it. |
+| Locate / recentre | `location.fill` | Unchanged, and the reason nothing else may use it. |
+| Heading-up mode | `location.north.line.fill`, rotating | A needle that points where the map is pointing, animated by the real heading rather than a spinner. |
+| Following | `viewfinder.circle.fill` | Asks "is the camera tracking me", which is what the button answers. `location.fill` said "where I am", which is the dot underneath it. |
+| Pan freely | `hand.raised.fill` | An open hand is a mode you are in, not a gesture being made — `hand.tap` read as a one-off action. |
+| Navigate tab | `location.north.fill` | Kept as-is: the one place a compass means "this tab is about direction". |
+| Missing MapTiler key | `key.slash.fill` | The cause, not a severity. |
+
+The red/orange `exclamationmark.triangle.fill` stays with actual faults — a
+failed import, an off-route warning, a failed download. Two of the three places
+it appeared were a missing key, which is a misconfiguration to fix rather than
+something that went wrong, and it left the triangle meaning six unrelated
+things.
+
+The map's layer-stack control is deliberately untouched. It is a control, not a
+status indicator, and restyling it is a separate piece of work.

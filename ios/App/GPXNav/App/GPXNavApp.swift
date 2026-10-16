@@ -44,6 +44,22 @@ final class WorkspaceStore: ObservableObject {
     @Published var showHillshade = false
     @Published var showSlope = false
     @Published var showTerrain3D = false
+    /// Whether to ask the terrain model for the elevations a track does not
+    /// carry, off by default (#72).
+    ///
+    /// Off means the profile shows the elevations the file actually recorded,
+    /// joined by straight lines between them, and nothing else. On means the
+    /// gaps between those are filled from MapTiler's terrain model, which costs
+    /// a network round trip per gap and is the only reason to have a key at all.
+    ///
+    /// Neither setting overwrites an elevation the file provided. That is not a
+    /// promise this flag makes and can break -- it is what the fill has always
+    /// done, and `ElevationFillTests` pins it -- so turning this on cannot
+    /// corrupt a track that was recorded properly. The reason it is opt-in at
+    /// all is that the terrain model and a hand-drawn route disagree by hundreds
+    /// of metres, and the user is better placed than the app to decide whose
+    /// answer to show.
+    @Published var fillsMissingElevation = false
     /// Set when the last import failed, so the library can show why.
     @Published var importError: String?
     /// Name of the GPX file the routes came from, when imported.
@@ -75,6 +91,9 @@ final class WorkspaceStore: ObservableObject {
         showHillshade = arguments.contains("-showRelief")
         showSlope = arguments.contains("-showSlope")
         showTerrain3D = arguments.contains("-terrain3D")
+        // `-fillElevation` opts a capture or a device check into the terrain
+        // fill, which is off for everyone else (#72).
+        fillsMissingElevation = arguments.contains("-fillElevation")
 
         // `-importGPX <name>` reads a GPX from Documents at launch, so the import
         // path can be checked without driving the document picker.

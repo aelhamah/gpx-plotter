@@ -141,11 +141,51 @@ public protocol HTTPClient: Sendable {
     func data(from url: String) async throws -> (Data, URLResponse)
 }
 
+/// The headers `DefaultHTTPClient` sends.
+public enum HTTPHeaders: Sendable {
+    /// Headers for a request that identifies itself as `userAgent`.
+    ///
+    /// Empty when there is no user-agent to send, which means "change nothing"
+    /// rather than "send an empty one" -- an empty `User-Agent` is worse than no
+    /// header at all, and MapTiler matches on the value being the one the key was
+    /// allowlisted with.
+    public static func forIdentifyingAs(userAgent: String?) -> [String: String] {
+        guard let userAgent, !userAgent.isEmpty else { return [:] }
+        return ["User-Agent": userAgent]
+    }
+}
+
+/// The HTTP client used for everything that is *not* a map tile.
+///
+/// Tiles, the DEM tileset and offline prefetch all go through MapLibre, which
+/// carries its own identity (see the app's `MapNetworkIdentity`). This is the
+/// other half: geocoding and the terrain lookups behind the elevation profile
+/// are ordinary `URLSession` requests and used to send nothing identifying at
+/// all, which is a quiet way to fail a user-agent-restricted key -- the map
+/// works, and search and elevation do not.
 public struct DefaultHTTPClient: HTTPClient {
-    public init() {}
+    /// One session for the client's lifetime rather than one per request:
+    /// `URLSession` keeps a connection pool and a delegate, and building a fresh
+    /// one per tile-sized GET is how a download ends up opening a socket per
+    /// sample.
+    private let session: URLSession
+
+    /// - Parameter userAgent: the exact value to allowlist on the MapTiler key.
+    ///   `nil` leaves the session's own default alone.
+    public init(userAgent: String? = nil) {
+        let headers = HTTPHeaders.forIdentifyingAs(userAgent: userAgent)
+        if headers.isEmpty {
+            session = .shared
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.httpAdditionalHeaders = headers
+            session = URLSession(configuration: configuration)
+        }
+    }
+
     public func data(from url: String) async throws -> (Data, URLResponse) {
         guard let url = URL(string: url) else { throw URLError(.badURL) }
-        return try await URLSession.shared.data(from: url)
+        return try await session.data(from: url)
     }
 }
 

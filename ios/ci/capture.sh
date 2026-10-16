@@ -44,7 +44,7 @@ DERIVED="$BUILD_DIR/DerivedData"
 OUT_DIR="${OUT_DIR:-$BUILD_DIR/site}"
 SITE_SRC="$ROOT/ios/ci/site"
 
-BUNDLE_ID="com.example.GPXNav"
+BUNDLE_ID="com.aelhamah.GPXNav"
 SCHEME="GPXNav"
 DEVICE_FILTER="${IOS_DEVICE:-iPhone}"
 # See settle_and_shoot: MIN_SETTLE is a floor, not a guess at the usual time,
