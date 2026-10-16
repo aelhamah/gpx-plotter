@@ -1,10 +1,10 @@
 window.GPXNAV_PREVIEW = {
-  "commit": "7447879",
+  "commit": "1fd6ef4",
   "branch": "fix/map-bearing",
   "device": "iPhone 17 Pro Max",
   "runtime": "iOS 26.2",
   "xcode": "Xcode 26.2",
-  "capturedAt": "2026-10-16T15:31:23Z",
+  "capturedAt": "2026-10-16T15:57:11Z",
   "demoTiles": true,
   "width": 828,
   "height": 1800,
