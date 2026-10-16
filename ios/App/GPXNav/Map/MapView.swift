@@ -124,6 +124,7 @@ struct MapView: UIViewRepresentable {
         applyEverything(to: mapView)
         refreshWaypointLabels(for: mapView)
         applyFollowIfNeeded(to: mapView)
+        applyHeadingIfNeeded(to: mapView)
         if fitState.token != fitToken {
             fitState.token = fitToken
             fitMapToRoute(mapView, route: route, animated: true)
@@ -562,10 +563,50 @@ struct MapView: UIViewRepresentable {
         guard force || location.consumeRecentreRequest(), let fix = location.fix else { return }
         let camera = mapView.camera.copy() as! MLNMapCamera
         camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
-        if location.followsHeading, let heading = location.heading {
-            camera.heading = heading
-        }
+        applyRotation(to: camera)
         mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
+    }
+
+    /// Point the camera north, or at the direction of travel.
+    ///
+    /// North used to be the *absence* of an assignment: turning heading-follow off
+    /// left `camera.heading` alone, and since the camera was copied forward with
+    /// the bearing still on it, "tapping again snaps back to north" was a thing
+    /// the docs claimed and the code did not do. The position recentred; the map
+    /// stayed rotated.
+    private func applyRotation(to camera: MLNMapCamera) {
+        guard location.followsHeading, let heading = location.heading else {
+            camera.heading = 0
+            return
+        }
+        // Take the short way round. MapLibre eases heading linearly, so from 350
+        // to 10 without this the map spins 340 degrees backwards to get there.
+        var delta = heading - camera.heading
+        if delta > 180 { delta -= 360 }
+        if delta < -180 { delta += 360 }
+        camera.heading = camera.heading + delta
+    }
+
+    /// Keep the bearing on the direction of travel as it changes.
+    ///
+    /// Driven by the heading rather than by the fix, which is the whole of the
+    /// difference between heading-up and a snapshot of it: turning on the spot
+    /// moves no position at all, so a gate on `lastFix != fix` never fires and the
+    /// map keeps pointing where you pointed sixty seconds ago. The `lastHeading`
+    /// box stops it re-easing on unrelated SwiftUI updates the same way
+    /// `FollowState.lastFix` does for position.
+    private func applyHeadingIfNeeded(to mapView: MLNMapView) {
+        guard location.followsHeading, let heading = location.heading else { return }
+        guard followState.lastHeading != heading else { return }
+        let wasNil = followState.lastHeading == nil
+        followState.lastHeading = heading
+        // The first heading after mode switching is part of a camera move that
+        // has already happened, not a rotation of its own.
+        if wasNil { return }
+
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        applyRotation(to: camera)
+        mapView.setCamera(camera, withDuration: 0.6, animationTimingFunction: nil)
     }
 
     /// Keep the user under the crosshair while navigating.
@@ -581,6 +622,10 @@ struct MapView: UIViewRepresentable {
         // never re-centres: a pause on a trail, or a screenshot of a simulator
         // parked at one location.
         let resumed = followsUserLocation && !wasFollowing
+        // Forgetting the last bearing when heading-follow is off is what lets the
+        // next turn-on rotate at all: `applyHeadingIfNeeded` treats the first
+        // heading after a switch as part of the camera move rather than a change.
+        if !location.followsHeading { followState.lastHeading = nil }
         guard followsUserLocation, let fix = location.fix, resumed || followState.lastFix != fix else { return }
         let firstFollow = followState.lastFix == nil
         followState.lastFix = fix
@@ -633,6 +678,8 @@ struct MapView: UIViewRepresentable {
     private final class FollowState {
         var lastFix: LocationFix?
         var isFollowing = false
+        /// The bearing last rotated to, so a units toggle does not re-ease the map.
+        var lastHeading: CLLocationDirection?
     }
 
     /// Re-project the waypoint labels after the camera moves.

@@ -28,6 +28,10 @@ struct NavigationScreen: View {
     /// the last fix stays on the map, so the screen has to say so rather than
     /// look frozen.
     @State private var isPaused = false
+    /// Heading-follow was defaulted on for this navigation, so leaving the screen
+    /// can put it back the way it was rather than stranding the viewer on a
+    /// heading-up map they did not ask for.
+    @State private var followsHeadingDefaulted = false
 
     init(route: Route, waypoints: [Waypoint], profile: RouteProfile) {
         _session = StateObject(wrappedValue: NavigationSession(
@@ -61,6 +65,14 @@ struct NavigationScreen: View {
         .onAppear {
             session.start()
             location.startStreaming()
+            // Facing the direction of travel, which is the point of navigating:
+            // the map was north-up because `followsHeading` lived on the locate
+            // button, and that button is not on this screen, so there was no way
+            // to reach it from here at all. Reset rather than assign, so coming
+            // back from the viewer with it turned off does not quietly re-enable
+            // a mode the user turned off there.
+            location.followsHeading = true
+            followsHeadingDefaulted = true
             // Navigation is the one moment the "Always" prompt has context: the
             // user has just chosen to walk a route, and it is the only
             // authorisation that keeps the readout running with the phone in a
@@ -80,6 +92,12 @@ struct NavigationScreen: View {
             // blue background indicator stays on with nothing to show for it.
             location.stopStreaming()
             NavigationCommandBus.shared.setObserved(false)
+            // Only undo the default: a compass tapped here is a choice, and
+            // re-setting it on the way out would discard it.
+            if followsHeadingDefaulted {
+                location.followsHeading = false
+                followsHeadingDefaulted = false
+            }
             // Deliberately *not* ending the activity here. `onDisappear` is not a
             // signal that the hike ended: this view is torn down and rebuilt when
             // MapLibre re-attaches, which is why `onAppear` already runs twice
@@ -348,6 +366,18 @@ struct NavigationScreen: View {
             .buttonStyle(.bordered)
 
             Spacer()
+
+            Button {
+                // Same two states as the viewer's locate button: facing the way
+                // you are going, or facing north. A third tap is back where it
+                // started, which is the compass behaviour people already expect.
+                location.toggleHeading()
+            } label: {
+                Label("North", systemImage: "location.north.line.fill")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel(location.followsHeading ? "Face north" : "Face my direction of travel")
 
             Button("End") { dismiss() }
                 .font(.subheadline.weight(.medium))
