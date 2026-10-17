@@ -290,7 +290,7 @@ public enum TerrainError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .missingConfiguration:
-            return "No MapTiler config — set MAPTILER_API_KEY in Secrets.xcconfig."
+            return "No MapTiler config — set TILE_PROXY_HOST in Secrets.xcconfig."
         case .tileFailed(let key, let status):
             return "DEM tile \(key) failed with HTTP \(status)."
         }

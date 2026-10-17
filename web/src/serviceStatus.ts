@@ -1,3 +1,5 @@
+import { TILE_PROXY_HOST } from './config';
+
 /**
  * A single banner for when a backing service stops answering.
  *
@@ -40,7 +42,12 @@ export function classifyServiceFailure(message: string): ServiceKind | null {
   if (text.includes('terrain-rgb') || text.includes('dem tile')) return 'elevation';
   if (text.includes('geocoding')) return 'search';
   if (text.includes('style.json')) return 'style';
-  if (text.includes('api.maptiler.com')) return 'basemap';
+  // The tile proxy's host, not MapTiler's: the proxy is now the only host this
+  // app talks to, so matching the old one would classify every real failure as
+  // "not ours" and show no banner at all. An empty `TILE_PROXY_HOST` (no proxy
+  // configured) makes `includes('')` true, which is why this is guarded — a
+  // blank config must not be reported as a basemap outage.
+  if (TILE_PROXY_HOST !== '' && text.includes(TILE_PROXY_HOST)) return 'basemap';
   return null;
 }
 

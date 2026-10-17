@@ -304,13 +304,25 @@ func testNiceTicksUseQuarterStepsWhereTenthsWouldOverfill() {
     }
 
     func testConfigURLs() {
-        let config = MapTilerConfig(apiKey: "test-key")
+        let config = MapTilerConfig(baseURL: "https://proxy.example")
         XCTAssertTrue(config.mapStyleURL.contains("/maps/outdoor-v2/"))
         XCTAssertTrue(config.satelliteStyleURL.contains("/maps/satellite-v4/"))
         XCTAssertTrue(config.terrainURL.contains("terrain-rgb"))
         XCTAssertTrue(config.terrainTileURL.contains("terrain-rgb"))
         XCTAssertTrue(config.terrainTileURL.contains("{z}/{x}/{y}"))
         XCTAssertTrue(config.mapStyleURL.starts(with: "https://"))
+        // No key anywhere: not in the style URL, not in a tile URL.
+        for url in [config.mapStyleURL, config.satelliteStyleURL, config.terrainURL, config.terrainTileURL] {
+            XCTAssertFalse(url.contains("key="), url)
+            XCTAssertFalse(url.contains("maptiler"), url)
+        }
+    }
+
+    /// A trailing slash would concatenate into `//maps/...`, which the proxy's
+    /// path allowlist treats as a different path and answers 404 to.
+    func testConfigNormalisesATrailingSlash() {
+        let config = MapTilerConfig(baseURL: "https://proxy.example/")
+        XCTAssertEqual(config.mapStyleURL, "https://proxy.example/maps/outdoor-v2/style.json")
     }
 
     func testTileMath() {

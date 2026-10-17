@@ -58,6 +58,14 @@ struct MapView: UIViewRepresentable {
     /// handle on the `MLNMapView`, so the fit button raises this instead. Only
     /// read here, so a binding is enough.
     @Binding var fitToken: Int
+    /// The highest zoom the loaded style serves tiles for, as `StyleBuilder`
+    /// resolved it from the style's own sources.
+    ///
+    /// Optional because the style may not have finished building when the map is
+    /// first laid out; `AppConfig.fallbackMaxZoom(for:)` stands in until it does.
+    /// See `StyleBuilder.maxZoom(for:)` for why getting this wrong costs the whole
+    /// basemap rather than a little detail.
+    let maxBasemapZoom: Double?
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
 
@@ -83,7 +91,8 @@ struct MapView: UIViewRepresentable {
         onStyleLoaded: (() -> Void)? = nil,
         waypointLabels: Binding<[ProjectedWaypoint]> = .constant([]),
         followsUserLocation: Binding<Bool> = .constant(false),
-        fitToken: Binding<Int> = .constant(0)
+        fitToken: Binding<Int> = .constant(0),
+        maxBasemapZoom: Double? = nil
     ) {
         self.route = route
         self._scrubbedDistance = scrubbedDistance
@@ -92,6 +101,7 @@ struct MapView: UIViewRepresentable {
         self._waypointLabels = waypointLabels
         self._followsUserLocation = followsUserLocation
         self._fitToken = fitToken
+        self.maxBasemapZoom = maxBasemapZoom
         // Seeded, so the first `updateUIView` does not read as a fit request and
         // animate the camera over the fit the coordinator has already done.
         self.fitState.token = fitToken.wrappedValue
@@ -444,6 +454,31 @@ struct MapView: UIViewRepresentable {
 
     // MARK: - Camera
 
+    /// The zoom ceiling in force right now: what the loaded style reported, or
+    /// the per-basemap backstop while it has not reported yet.
+    private var zoomCeiling: Double {
+        maxBasemapZoom ?? AppConfig.fallbackMaxZoom(for: workspace.mapStyle)
+    }
+
+    /// Keep MapLibre's own gesture limits inside the tile ceiling.
+    ///
+    /// `setVisibleCoordinateBounds` is clamped explicitly, but a pinch is
+    /// MapLibre's own gesture pipeline and `maximumZoomLevel` is the only thing
+    /// that reaches it. Left at its default the user can zoom straight past the
+    /// last real tile and get the blank canvas this whole clamp exists to
+    /// prevent — the fit was only ever the easy way in.
+    private func applyZoomCeiling(to mapView: MLNMapView) {
+        let ceiling = zoomCeiling
+        guard abs(mapView.maximumZoomLevel - ceiling) > 0.001 else { return }
+        mapView.maximumZoomLevel = ceiling
+        // Setting the ceiling while already past it does not pull the camera
+        // back, so a map that was out there when the style finished building has
+        // to be brought in explicitly.
+        if mapView.zoomLevel > ceiling {
+            mapView.setZoomLevel(ceiling, animated: false)
+        }
+    }
+
     /// Tilt the camera when 3D terrain is on, matching the web app, which does
     /// `easeTo({ pitch: 55 })` alongside `setTerrain`. Without the tilt the
     /// terrain is loaded but invisible.
@@ -472,6 +507,17 @@ struct MapView: UIViewRepresentable {
             edgePadding: AppConfig.fitEdgePadding,
             animated: animated
         )
+
+        // `setVisibleCoordinateBounds` fits for a top-down camera and takes no
+        // zoom argument, so it will happily frame a four-block loop at z17 —
+        // past the last tile MapTiler serves, which is a blank map rather than a
+        // detailed one. The web app caps the same call with `FIT_MAX_ZOOM`; this
+        // is that cap. Read back rather than predicted, because the fit is the
+        // only thing that knows what zoom it actually chose.
+        let ceiling = zoomCeiling
+        if mapView.zoomLevel > ceiling {
+            mapView.setZoomLevel(ceiling, animated: animated)
+        }
     }
 
     // MARK: - Everything

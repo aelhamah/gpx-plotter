@@ -91,16 +91,24 @@ final class SearchTests: XCTestCase {
     ]
 
     func testGeocodeURL() {
-        let url = geocodeURL(query: "Mount Rainier", apiKey: "test-key")
-        XCTAssertTrue(url.hasPrefix("https://api.maptiler.com/geocoding/Mount%20Rainier.json"))
+        let url = geocodeURL(query: "Mount Rainier", baseURL: "https://proxy.example")
+        XCTAssertTrue(url.hasPrefix("https://proxy.example/geocoding/Mount%20Rainier.json"))
         XCTAssertTrue(url.contains("types=\(geocodeTypes)"))
         XCTAssertTrue(url.contains("address"))
         XCTAssertTrue(url.contains("limit=6"))
         XCTAssertFalse(url.contains("proximity="))
     }
 
+    /// The key used to be a query parameter here. It must never be again: that
+    /// query string ends up in the proxy's logs, and in anything that logs URLs.
+    func testGeocodeURLCarriesNoKey() {
+        let url = geocodeURL(query: "Mount Rainier", baseURL: "https://proxy.example")
+        XCTAssertFalse(url.contains("key="))
+        XCTAssertFalse(url.lowercased().contains("maptiler"))
+    }
+
     func testGeocodeURLWithProximity() {
-        let url = geocodeURL(query: "Mount Rainier", options: GeocodeOptions(proximity: Coordinate(lat: 46.8523, lon: -121.7576)), apiKey: "test-key")
+        let url = geocodeURL(query: "Mount Rainier", options: GeocodeOptions(proximity: Coordinate(lat: 46.8523, lon: -121.7576)), baseURL: "https://proxy.example")
         XCTAssertTrue(url.contains("proximity=-121.7576,46.8523"))
     }
 

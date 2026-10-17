@@ -69,14 +69,23 @@ const backcountryRoadFeature = {
 };
 
 describe('geocodeUrl', () => {
-  it('encodes the query and pins the key, type filter, and limit', () => {
+  it('encodes the query and pins the type filter and limit', () => {
     const url = geocodeUrl('Mount Rainier');
-    expect(url.startsWith('https://api.maptiler.com/geocoding/Mount%20Rainier.json')).toBe(true);
-    expect(url).toContain('key=');
+    expect(url.startsWith('https://proxy.test/geocoding/Mount%20Rainier.json')).toBe(true);
     expect(url).toContain(`types=${GEOCODE_TYPES}`);
     expect(url).toContain('address');
     expect(url).toContain('limit=6');
     expect(url).not.toContain('proximity=');
+  });
+
+  /**
+   * The key moved into the proxy's secrets. A `key=` in this URL would put it
+   * back in the shipped bundle and in every log that records a request line.
+   */
+  it('never puts a key in the query', () => {
+    const url = geocodeUrl('Mount Rainier');
+    expect(url).not.toContain('key=');
+    expect(url).not.toContain('maptiler');
   });
 
   it('adds the proximity parameter when a map position is given', () => {

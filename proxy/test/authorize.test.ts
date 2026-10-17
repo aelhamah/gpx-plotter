@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { authorize, countRequest, identifyClient, withinQuota, type QuotaState } from '../src/authorize';
+import {
+  authorize,
+  countRequest,
+  identifyCaller,
+  identifyClient,
+  identifyOrigin,
+  withinQuota,
+  type ClientPolicy,
+  type QuotaState,
+} from '../src/authorize';
 
 const TOKEN = 'GPXNav (iOS; com.aelhamah.GPXNav)';
 const OTHER = 'GPXNav (iOS; com.example.SomeoneElse)';
+const SITE = 'https://aelhamah.github.io';
+const EVIL = 'https://aelhamah.github.io.evil.test';
+const POLICY: ClientPolicy = { userAgents: [TOKEN], origins: [SITE] };
 const TODAY = '2026-10-16';
 const YESTERDAY = '2026-10-15';
 
@@ -94,28 +106,102 @@ describe('countRequest', () => {
   });
 });
 
+describe('identifyOrigin', () => {
+  it('accepts an exact origin', () => {
+    expect(identifyOrigin(SITE, [SITE])).toBe(SITE);
+  });
+
+  /**
+   * The browser equivalent of the exact-match rule above. A prefix match would
+   * accept a lookalike site, which is the one mistake this check exists to make
+   * impossible.
+   */
+  it('rejects an origin that merely starts the same way', () => {
+    expect(identifyOrigin(EVIL, [SITE])).toBeNull();
+  });
+
+  it('rejects a missing origin', () => {
+    expect(identifyOrigin(null, [SITE])).toBeNull();
+  });
+
+  it('is case-sensitive, because origins are compared as written', () => {
+    expect(identifyOrigin('https://Aelhamah.github.io', [SITE])).toBeNull();
+  });
+
+  it('ignores surrounding whitespace rather than failing the match', () => {
+    expect(identifyOrigin(`  ${SITE}  `, [SITE])).toBe(SITE);
+  });
+});
+
+describe('identifyCaller', () => {
+  it('recognises a native client by user-agent', () => {
+    expect(identifyCaller(TOKEN, null, POLICY)).toEqual({ kind: 'native', token: TOKEN });
+  });
+
+  it('recognises a browser by origin', () => {
+    expect(identifyCaller('Mozilla/5.0 (Macintosh)', SITE, POLICY)).toEqual({ kind: 'web', token: SITE });
+  });
+
+  /**
+   * The user-agent is tried first on purpose. A captive portal or an enterprise
+   * proxy can add an `Origin` header to a native request; without this ordering
+   * the app's traffic would be filed into the browser's shared allowance and
+   * exhaust every web user's quota.
+   */
+  it('keeps a native client native even when an Origin is attached', () => {
+    expect(identifyCaller(TOKEN, SITE, POLICY)).toEqual({ kind: 'native', token: TOKEN });
+  });
+
+  it('refuses a caller matching neither list', () => {
+    expect(identifyCaller('Mozilla/5.0', EVIL, POLICY)).toBeNull();
+    expect(identifyCaller(null, null, POLICY)).toBeNull();
+  });
+});
+
 describe('authorize', () => {
   const fresh: QuotaState = { day: TODAY, count: 0 };
 
   it('allows an allowlisted client inside its quota', () => {
-    expect(authorize(TOKEN, [TOKEN], fresh, 10, TODAY)).toEqual({ allowed: true, token: TOKEN });
+    expect(authorize(TOKEN, null, POLICY, fresh, 10, TODAY)).toEqual({
+      allowed: true,
+      kind: 'native',
+      token: TOKEN,
+    });
+  });
+
+  it('allows an allowlisted origin inside its quota', () => {
+    expect(authorize('Mozilla/5.0', SITE, POLICY, fresh, 10, TODAY)).toEqual({
+      allowed: true,
+      kind: 'web',
+      token: SITE,
+    });
   });
 
   it('refuses an unknown client with 403', () => {
-    expect(authorize(OTHER, [TOKEN], fresh, 10, TODAY)).toEqual({
+    expect(authorize(OTHER, null, POLICY, fresh, 10, TODAY)).toEqual({
       allowed: false,
       status: 403,
       reason: 'unknown-client',
     });
   });
 
-  it('tells a missing header apart from an unknown one', () => {
-    const result = authorize(null, [TOKEN], fresh, 10, TODAY);
-    expect(result).toEqual({ allowed: false, status: 403, reason: 'no-user-agent' });
+  it('refuses an unrecognised origin with 403', () => {
+    expect(authorize('Mozilla/5.0', EVIL, POLICY, fresh, 10, TODAY)).toMatchObject({
+      status: 403,
+      reason: 'unknown-client',
+    });
+  });
+
+  it('tells a caller that sent nothing apart from one that sent the wrong thing', () => {
+    expect(authorize(null, null, POLICY, fresh, 10, TODAY)).toEqual({
+      allowed: false,
+      status: 403,
+      reason: 'no-credentials',
+    });
   });
 
   it('refuses an allowlisted client that is over quota with 429', () => {
-    expect(authorize(TOKEN, [TOKEN], { day: TODAY, count: 10 }, 10, TODAY)).toEqual({
+    expect(authorize(TOKEN, null, POLICY, { day: TODAY, count: 10 }, 10, TODAY)).toEqual({
       allowed: false,
       status: 429,
       reason: 'quota-exceeded',
@@ -124,14 +210,14 @@ describe('authorize', () => {
 
   /** Identity is checked first, so an unknown client is refused even over quota. */
   it('never spends quota on a client it would refuse anyway', () => {
-    expect(authorize(OTHER, [TOKEN], { day: TODAY, count: 10 }, 10, TODAY)).toMatchObject({
+    expect(authorize(OTHER, null, POLICY, { day: TODAY, count: 10 }, 10, TODAY)).toMatchObject({
       status: 403,
       reason: 'unknown-client',
     });
   });
 
   it('returns the exact token, so the caller forwards it unchanged', () => {
-    const result = authorize(TOKEN, [TOKEN], fresh, 10, TODAY);
+    const result = authorize(TOKEN, null, POLICY, fresh, 10, TODAY);
     expect(result.allowed && result.token).toBe(TOKEN);
   });
 });

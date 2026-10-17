@@ -41,9 +41,9 @@ targets:
       Debug: Secrets.xcconfig
       Release: Secrets.xcconfig
     # An explicit plist, not GENERATE_INFOPLIST_FILE. Xcode's generated plist
-    # silently drops custom INFOPLIST_KEY_* names (MaptilerAPIKey never arrives,
-    # even as a literal), so the key has to be a real plist entry where
-    # $(MAPTILER_API_KEY) gets expanded. Note xcodegen *rewrites* this file on
+    # silently drops custom INFOPLIST_KEY_* names (TileProxyBaseURL never
+    # arrives, even as a literal), so the key has to be a real plist entry where
+    # $(TILE_PROXY_BASE_URL) gets expanded. Note xcodegen *rewrites* this file on
     # every `generate`, so every key has to live under `properties` here.
     info:
       path: GPXNav/Info.plist
@@ -73,8 +73,12 @@ targets:
         NSSupportsLiveActivitiesFrequentUpdates: true
         # SlopeServer is served over loopback HTTP; see docs/ios-plan.md §6.
         NSAllowsLocalNetworking: true
-        # Injected from MAPTILER_API_KEY in the gitignored Secrets.xcconfig.
-        MaptilerAPIKey: $(MAPTILER_API_KEY)
+        # Injected from TILE_PROXY_SCHEME and TILE_PROXY_HOST in the gitignored
+        # Secrets.xcconfig. Split in two and reassembled here because xcconfig
+        # reads `//` as a comment — see the note at the top of Secrets.xcconfig.
+        # The MapTiler key is NOT in the app: the proxy holds it, and the proxy's
+        # URL is all the app needs to know. See proxy/README.md.
+        TileProxyBaseURL: $(TILE_PROXY_SCHEME)://$(TILE_PROXY_HOST)
     settings:
       base:
         SWIFT_VERSION: 6.0

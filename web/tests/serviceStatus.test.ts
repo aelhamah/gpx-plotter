@@ -10,8 +10,11 @@ import {
   type ServiceIssue,
 } from '../src/serviceStatus';
 
-const STYLE_ERROR = 'AJAXError: Failed to fetch (0): https://api.maptiler.com/maps/outdoor-v2/style.json?key=abc';
-const TILE_ERROR = 'AJAXError: Failed to fetch (0): https://api.maptiler.com/tiles/outdoor/3/1/2.pbf?key=abc';
+// The proxy is now the only remote host, so these are its URLs. The two below
+// still carry `?key=` on purpose: a stray key in a URL must classify correctly
+// all the same, and the app should name the right service if one ever appears.
+const STYLE_ERROR = 'AJAXError: Failed to fetch (0): https://proxy.test/maps/outdoor-v2/style.json';
+const TILE_ERROR = 'AJAXError: Failed to fetch (0): https://proxy.test/tiles/outdoor/3/1/2.pbf';
 const DEM_ERROR = 'Error: DEM tile 12/656/1583 failed with 429';
 
 const issue = (kind: ServiceIssue['kind'], extra: Partial<ServiceIssue> = {}): ServiceIssue => ({
@@ -26,8 +29,8 @@ describe('classifyServiceFailure', () => {
   it('maps each service URL to the service that owns it', () => {
     expect(classifyServiceFailure(STYLE_ERROR)).toBe('style');
     expect(classifyServiceFailure(TILE_ERROR)).toBe('basemap');
-    expect(classifyServiceFailure('https://api.maptiler.com/geocoding/summer.json?key=abc')).toBe('search');
-    expect(classifyServiceFailure('https://api.maptiler.com/tiles/terrain-rgb-v2/12/656/1583.png?key=abc')).toBe('elevation');
+    expect(classifyServiceFailure('https://proxy.test/geocoding/summer.json?key=abc')).toBe('search');
+    expect(classifyServiceFailure('https://proxy.test/tiles/terrain-rgb-v2/12/656/1583.png?key=abc')).toBe('elevation');
   });
 
   it('recognises a DEM failure reported without a URL', () => {
@@ -35,10 +38,10 @@ describe('classifyServiceFailure', () => {
   });
 
   it('prefers the specific service over the shared host', () => {
-    // Terrain and geocoding both live on api.maptiler.com; matching the host
-    // first would blame the basemap for every terrain failure.
-    expect(classifyServiceFailure('https://api.maptiler.com/tiles/terrain-rgb-v2/1/2/3.png')).toBe('elevation');
-    expect(classifyServiceFailure('https://api.maptiler.com/geocoding/x.json')).toBe('search');
+    // Terrain and geocoding are served by the same proxy host; matching the
+    // host first would blame the basemap for every terrain failure.
+    expect(classifyServiceFailure('https://proxy.test/tiles/terrain-rgb-v2/1/2/3.png')).toBe('elevation');
+    expect(classifyServiceFailure('https://proxy.test/geocoding/x.json')).toBe('search');
   });
 
   it('ignores failures the user cannot act on', () => {

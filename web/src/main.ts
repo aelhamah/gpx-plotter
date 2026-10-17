@@ -2,7 +2,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import maplibregl, { type CameraOptions, type MapMouseEvent, type Marker } from 'maplibre-gl';
 import type { GeoJSONSource, LngLatBoundsLike } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
-import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, MAPTILER_API_KEY, SATELLITE_STYLE_URL, TERRAIN_URL } from './config';
+import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, SATELLITE_STYLE_URL, TERRAIN_URL, TILE_PROXY_BASE_URL } from './config';
 import { blendTerrainElevations, colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, profileNeedsTerrain, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, terrainSamplesNeeded, type UnitSystem } from './geo';
 import { geocode, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
@@ -110,8 +110,9 @@ function persistWorkspace() {
   });
 }
 
-if (!MAPTILER_API_KEY) {
-  mapStatus.textContent = 'MapTiler key missing — add it in src/config.ts, then reload.';
+if (!TILE_PROXY_BASE_URL) {
+  mapStatus.textContent =
+    'Tile proxy not configured — set VITE_TILE_PROXY_BASE_URL in web/.env.local, then reload.';
 }
 
 const map = new maplibregl.Map({

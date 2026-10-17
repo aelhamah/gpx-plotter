@@ -78,11 +78,11 @@ final class TileCacheKeyTests: XCTestCase {
     func testUpstreamSubstitutesTheTemplate() {
         let key = TileCacheKey(source: "outdoor", z: 12, x: 656, y: 1583)
         let url = key.upstreamURL(
-            template: "https://api.maptiler.com/tiles/outdoor/{z}/{x}/{y}.pbf?key=abc"
+            template: "https://proxy.example/tiles/outdoor/{z}/{x}/{y}.pbf"
         )
         XCTAssertEqual(
             url?.absoluteString,
-            "https://api.maptiler.com/tiles/outdoor/12/656/1583.pbf?key=abc"
+            "https://proxy.example/tiles/outdoor/12/656/1583.pbf"
         )
     }
 

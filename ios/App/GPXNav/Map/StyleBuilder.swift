@@ -31,6 +31,11 @@ actor StyleBuilder {
     /// TileJSON. The loopback server substitutes coordinates into it on a miss.
     private var upstreamTemplates: [String: String] = [:]
     private var sources: [String: BasemapSource] = [:]
+    /// Basemap style → the highest zoom it was found to serve tiles for.
+    ///
+    /// See `maxZoom(for:)` for what this is for and why it is not the smallest
+    /// source's ceiling.
+    private var zoomCeilings: [String: Double] = [:]
 
     init(config: MapTilerConfig?) {
         self.config = config
@@ -79,11 +84,68 @@ actor StyleBuilder {
                 upstreamTemplate: config.terrainTileURL
             )
             cache[key] = patched
+            if let ceiling = Self.styleZoomCeiling(patched) {
+                // A ceiling is a floor of correctness, so a later variant that
+                // resolved fewer of the style's sources must not raise it. The
+                // satellite raster is the one source that runs deep, and losing it
+                // would make this report 14 for a basemap that draws to 18.
+                zoomCeilings[style.rawValue] = zoomCeilings[style.rawValue].map {
+                    max($0, ceiling)
+                } ?? ceiling
+            }
             return patched
         } catch {
             print("StyleBuilder failed for \(key): \(error)")
             return nil
         }
+    }
+
+    /// The highest zoom the basemap for `style` is known to serve tiles for, or
+    /// nil before it has been built.
+    ///
+    /// ## Why the camera needs to know
+    ///
+    /// MapTiler's `outdoor-v2` tops out at z14. Past it the renderer gets *empty*
+    /// tiles, not overzoomed ones, so a camera that zooms to z16 frames nothing at
+    /// all: a flat grey canvas in light mode, near-black in dark, with the route
+    /// polyline floating on it because that is an overlay we draw ourselves. The
+    /// web app has always capped its fit on `FIT_MAX_ZOOM`; the iOS fit did not,
+    /// and a city-block route — the easy case — fits to z16 or z17, so the commonest
+    /// thing the app can be asked to show was the one thing it could not.
+    ///
+    /// ## Why the highest source, not the lowest
+    ///
+    /// Because a source is overzoomed past *its own* ceiling and keeps drawing,
+    /// while a style goes blank only once every source has stopped. The two
+    /// basemaps are the case in point: `satellite-v4` pairs a deep imagery raster
+    /// with a labels vector that stops at 14 like everything else MapTiler
+    /// publishes, and it renders perfectly well past that — only the labels
+    /// exhaust. Taking the minimum would clamp satellite to 14 as well and throw
+    /// away the very zoom the imagery was there for.
+    func maxZoom(for style: MapStyle) -> Double? {
+        zoomCeilings[style.rawValue]
+    }
+
+    /// The highest `maxzoom` declared by a style's basemap sources, or nil when
+    /// none declares one.
+    ///
+    /// Read off the patched style rather than the TileJSON responses so sources
+    /// MapTiler inlined are counted too. `raster-dem` is skipped: it is elevation
+    /// rather than imagery, it stops at z14 for its own reasons, and it is ours —
+    /// letting it cap the camera would cap the camera at the elevation model's
+    /// depth even on a basemap that draws past it.
+    private static func styleZoomCeiling(_ patched: [String: Any]) -> Double? {
+        guard let sources = patched["sources"] as? [String: Any] else { return nil }
+        var ceilings: [Double] = []
+        for raw in sources.values {
+            guard let source = raw as? [String: Any],
+                  let type = source["type"] as? String,
+                  type == "vector" || type == "raster",
+                  let number = source["maxzoom"] as? NSNumber
+            else { continue }
+            ceilings.append(number.doubleValue)
+        }
+        return ceilings.max()
     }
 
     /// MapTiler's tile URL template for a basemap source, or nil if the style

@@ -73,15 +73,19 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      # capture.sh reads the key from the environment and writes it into the
-      # gitignored Secrets.local.xcconfig itself, so the value never lands in a
-      # file this job later publishes. An unset key is not fatal — the capture
-      # falls back to the keyless demo basemap and the page says so — but a
-      # native key is what makes the terrain scenes worth looking at.
+      # capture.sh reads the tile proxy's host from the environment and writes it
+      # into the gitignored Secrets.local.xcconfig itself, so the value never
+      # lands in a file this job later publishes. There is no MapTiler key in this
+      # repo any more — the proxy holds it. An unset host is not fatal: the
+      # capture falls back to the keyless demo basemap and the page says so — but
+      # the proxy is what makes the terrain scenes worth looking at.
+      #
+      # Scheme and host are separate because xcconfig reads `//` as a comment.
       - name: Capture
         working-directory: ios
         env:
-          MAPTILER_API_KEY: ${{ secrets.MAPTILER_API_KEY }}
+          TILE_PROXY_SCHEME: https
+          TILE_PROXY_HOST: ${{ secrets.TILE_PROXY_HOST }}
           IOS_DEVICE: iPhone
           MIN_SETTLE: '30'
           MAX_SETTLE: '90'

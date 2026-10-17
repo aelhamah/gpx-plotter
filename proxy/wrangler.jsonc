@@ -10,11 +10,30 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QuotaCounter"] }],
   "vars": {
     // Exact User-Agent values. Must match MapNetworkIdentity.allowlistToken in the
-    // app, byte for byte — see README §Wiring the app.
+    // app, byte for byte — see README §Wiring the app. This is also the identity
+    // every request leaves as, including the browser's: the MapTiler key's own
+    // allowlist is a single exact value, and keeping it that way is what lets the
+    // key stay out of every client.
     "ALLOWED_CLIENTS": "GPXNav (iOS; com.aelhamah.GPXNav)",
-    // Generous for 100 users of an app that caches tiles on the device. This is a
-    // runaway guard, not a budget: if a client is near it, the key is being shared.
+    // Exact Origins the browser build may spend the key with. Exact and not
+    // prefix-matched: https://aelhamah.github.io.evil.test starts with an
+    // allowlisted value and is a different site. NOT a secret — anyone can set
+    // an Origin with curl. What it buys is a named, capped, attributable bucket
+    // per deployment instead of an origin-restricted key sitting in a public
+    // bundle. See authorize.ts §ClientKind.
+    //
+    // The Vite dev server needs its own entries, and the port is part of the
+    // origin. No trailing slash, ever.
+    "ALLOWED_ORIGINS": "https://aelhamah.github.io,http://localhost:5173,http://127.0.0.1:5173",
+    // Generous for 100 native users of an app that caches tiles on the device.
+    // This is a runaway guard, not a budget: if a client is near it, the key is
+    // being shared or copied.
     "DAILY_QUOTA": "20000",
+    // Separate, and much larger, because every browser user of a deployment
+    // shares one bucket — there is no stable per-visitor identity a browser can
+    // be asked for — and a single map view is a few hundred requests. The native
+    // figure would be gone in minutes.
+    "WEB_DAILY_QUOTA": "500000",
     "UPSTREAM": "https://api.maptiler.com"
     // CACHE_TILES is deliberately absent. See README §Enabling caching.
   }
