@@ -2,7 +2,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import maplibregl, { type CameraOptions, type MapMouseEvent, type Marker } from 'maplibre-gl';
 import type { GeoJSONSource, LngLatBoundsLike } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
-import { DEFAULT_CENTER, DEFAULT_ZOOM, MAP_STYLE_URL, SATELLITE_STYLE_URL, TERRAIN_URL, TILE_PROXY_BASE_URL } from './config';
+import { MAP_STYLE_URL, SATELLITE_STYLE_URL, TERRAIN_URL, TILE_PROXY_BASE_URL } from './config';
 import { blendTerrainElevations, colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, profileNeedsTerrain, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, terrainSamplesNeeded, type UnitSystem } from './geo';
 import { geocode, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
@@ -14,7 +14,8 @@ import { defaultUnitSystem, formatDistance, formatDistanceAxis, formatElevation,
 import { dragThresholdExceeded } from './drag';
 import { routeColorForId, TRACE_COLOR } from './colors';
 import { normalizeRouteName, normalizeWaypointName } from './names';
-import { clearWorkspace, loadWorkspace, saveWorkspace, type WorkspaceView } from './storage';
+import { clearWorkspace, loadWorkspace, saveCachedFix, saveWorkspace, type WorkspaceView } from './storage';
+import { resolveStartupCenter } from './startup';
 import { PEAK_SNAP_METERS, SNAP_ENABLED_BY_DEFAULT, TRAIL_SNAP_METERS, drawStatusText, nearestLine, nearestSnap, waypointHintText, type SnapPoint } from './snap';
 import { peaksNearPoint, trailsNearPoint } from './snapSources';
 import { snapZoomFor } from './snapTiles';
@@ -117,11 +118,31 @@ if (!TILE_PROXY_BASE_URL) {
     'Tile proxy not configured — set VITE_TILE_PROXY_BASE_URL in web/.env.local, then reload.';
 }
 
+/**
+ * Read before the Map exists, because the workspace's view decides the camera and
+ * the camera decides which tiles the Map asks for first. Loading it afterwards and
+ * `jumpTo`ing would mean fetching a viewport's worth of tiles for the default
+ * centre and throwing them away.
+ */
+const savedWorkspace = loadWorkspace();
+
+/**
+ * Open somewhere useful rather than on a hardcoded default.
+ *
+ * Awaited deliberately. The alternative — construct the Map on the default and
+ * jump once the estimate lands — is faster to first *pixel* and slower to first
+ * *useful* map, because the tiles it fetches while waiting are the ones it throws
+ * away. Bounded by `GEO_TIMEOUT_MS`, and skipped outright when there is a saved
+ * view or a cached fix to use instead, so the common return-to-your-own-map case
+ * pays nothing.
+ */
+const startup = await resolveStartupCenter(savedWorkspace?.view);
+
 const map = new maplibregl.Map({
   container: 'map',
   style: MAP_STYLE_URL,
-  center: DEFAULT_CENTER,
-  zoom: DEFAULT_ZOOM,
+  center: startup.center,
+  zoom: startup.zoom,
   maxPitch: 85,
   attributionControl: false,
   dragRotate: false,
@@ -161,7 +182,6 @@ map.addControl(new maplibregl.AttributionControl(), 'bottom-right');
 
 // Restore the saved workspace (routes, waypoints, name, units, snapping, view) at startup.
 let restoredView: WorkspaceView | undefined;
-const savedWorkspace = loadWorkspace();
 if (savedWorkspace) {
   routes = savedWorkspace.routes;
   waypoints = savedWorkspace.waypoints;
@@ -1368,6 +1388,11 @@ function onLocated(position: GeolocationPosition) {
   locateButton.classList.remove('busy');
   const fix: LocationFix = { lon: position.coords.longitude, lat: position.coords.latitude, accuracyMeters: position.coords.accuracy, at: position.timestamp };
   setLocationFix(fix);
+  // Remember it, so the next load opens here instead of on a city centroid from an
+  // IP. This is the one position in the app worth keeping: the user asked for it,
+  // it is precise, and it is the difference between the first tile request being
+  // for the right valley or for the right continent.
+  saveCachedFix({ lon: fix.lon, lat: fix.lat, at: fix.at, accuracyMeters: fix.accuracyMeters });
   // Locate picks its own scale from the accuracy reading, so the pull-back
   // applies to *that* rather than to the anchor: a deliberate jump to a
   // different zoom is not a tilt. `moveend` re-anchors off it afterwards.

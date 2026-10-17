@@ -480,3 +480,99 @@ describe('the Worker', () => {
     });
   });
 });
+
+/**
+ * A request carrying edge geo properties, which `Request` has no field for.
+ *
+ * `wrangler dev` and the test runtime both leave `cf` undefined, so the
+ * "Cloudflare did not say" path is the one that runs by default here — which is
+ * exactly the path that would otherwise go untested.
+ */
+function geoRequest(
+  cf: Record<string, unknown> | undefined,
+  userAgent: string | null = BROWSER_UA,
+  origin: string | null = SITE
+): Request {
+  const request = get('/geo', userAgent, origin);
+  Object.defineProperty(request, 'cf', { value: cf, configurable: true });
+  return request;
+}
+
+const ANN_ARBOR = { latitude: '42.2808', longitude: '-83.7430', city: 'Ann Arbor', country: 'US' };
+
+describe('/geo', () => {
+  it('answers an allowed browser with the estimate from the edge', async () => {
+    const response = await invoke(geoRequest(ANN_ARBOR));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ lat: 42.2808, lon: -83.743, precision: 'city' });
+  });
+
+  it('tells the browser it is allowed to read the answer', async () => {
+    // Without this the response is fetched, dropped, and the caller falls back to
+    // its default — the same failure the tile CORS work fixed for tiles.
+    const response = await invoke(geoRequest(ANN_ARBOR));
+    expect(response.headers.get('access-control-allow-origin')).toBe(SITE);
+  });
+
+  /** There is no upstream for this: the answer arrived with the request. */
+  it('never touches MapTiler', async () => {
+    await invoke(geoRequest(ANN_ARBOR));
+    expect(upstreamCalls).toHaveLength(0);
+  });
+
+  /**
+   * The quota exists to stop clients spending MapTiler's money and this spends
+   * none. Charging it would buy nothing and cost a Durable Object round trip on
+   * the critical path of first paint.
+   */
+  it('is not charged to the quota', async () => {
+    await invoke(geoRequest(ANN_ARBOR));
+    expect(quotaNames).toHaveLength(0);
+    expect(quotaLimits).toHaveLength(0);
+  });
+
+  it('answers a native client too', async () => {
+    const response = await invoke(geoRequest(ANN_ARBOR, TOKEN, null));
+    expect(response.status).toBe(200);
+  });
+
+  it('refuses a caller that is not on the allowlist', async () => {
+    const response = await invoke(geoRequest(ANN_ARBOR, BROWSER_UA, 'https://aelhamah.github.io.evil.test'));
+    expect(response.status).toBe(403);
+    expect(upstreamCalls).toHaveLength(0);
+    expect(quotaNames).toHaveLength(0);
+  });
+
+  it('refuses a caller that presents nothing', async () => {
+    const response = await invoke(geoRequest(ANN_ARBOR, null, null));
+    expect(response.status).toBe(403);
+  });
+
+  /**
+   * 204 rather than a JSON `null`: "no estimate" is a successful answer to a
+   * question that was asked, and a client waiting on first paint should not have
+   * to parse a body to discover it should use its own default.
+   */
+  it('answers 204 when the edge has no location for the caller', async () => {
+    const response = await invoke(geoRequest(undefined));
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe(SITE);
+  });
+
+  it('answers 204 when the edge sends a half position', async () => {
+    const response = await invoke(geoRequest({ latitude: '42.2808' }));
+    expect(response.status).toBe(204);
+  });
+
+  it('is not reachable by prefix, like every other path here', async () => {
+    const response = await invoke(get('/geo/anything', BROWSER_UA, SITE));
+    expect(response.status).toBe(404);
+  });
+
+  it('does not expose the key', async () => {
+    const response = await invoke(geoRequest(ANN_ARBOR));
+    const body = await response.text();
+    expect(body).not.toContain(KEY);
+    for (const [, value] of response.headers) expect(value).not.toContain(KEY);
+  });
+});
