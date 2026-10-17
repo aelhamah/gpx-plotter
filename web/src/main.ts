@@ -21,6 +21,7 @@ import { snapZoomFor } from './snapTiles';
 import { dedupeTrailLines, trailVerticesBetween } from './trailGraph';
 import { addArrowImages, ARROW_LAYER, routeArrowsGeoJSON } from './arrows';
 import { classifyServiceFailure, onServiceFailure, ServiceStatus } from './serviceStatus';
+import { MapLoading } from './mapLoading';
 import { fitPadding } from './fitPadding';
 import { FLAT_VIEW, RELIEF_VIEW, TERRAIN_TRANSITION_MS, shouldKeepWaiting, terrainAt, tiltZoom, transitionProgress, untiltedZoom, type TerrainView } from './terrain';
 import './style.css';
@@ -66,6 +67,7 @@ const future: AppState[] = [];
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mapStatus = $('map-status');
 const serviceStatus = new ServiceStatus($('service-banner'));
+const mapLoading = new MapLoading($('map-loader'));
 const routesList = $('routes-list');
 const routesEmpty = $('routes-empty');
 const drawHint = $('draw-hint');
@@ -124,6 +126,19 @@ const map = new maplibregl.Map({
   dragRotate: false,
   touchZoomRotate: true,
 });
+
+// The first style request is already in flight by the time the constructor
+// returns, so `dataloading` can fire before a listener attached below it is in
+// place. Arming the indicator here is what guarantees the very first load — the
+// one a user on a slow connection is most likely to sit through, and the only
+// one with nothing else on screen — is covered. The events own it from here.
+mapLoading.beginLoading();
+map.on('dataloading', () => mapLoading.beginLoading());
+// `idle` is MapLibre's "nothing more is coming", and it is the only one of its
+// load events that fires when the *tiles* have landed too, not just the style.
+// A style that never arrives never reaches it, which is the case `fail()` below
+// is for.
+map.on('idle', () => mapLoading.endLoading());
 
 /** Breathing room `fitBounds` leaves on every edge, before the sidebar is added. */
 const FIT_MARGIN = 80;
@@ -209,6 +224,10 @@ map.on('error', (event) => {
   const message = event.error instanceof Error ? event.error.message : String(event.error);
   const kind = classifyServiceFailure(message);
   if (kind) serviceStatus.report(kind, message);
+  // A style that fails never reaches `idle`, so without this the spinner would
+  // keep turning next to a banner that already explains itself — claiming a load
+  // is in progress when it has given up.
+  if (kind === 'style') mapLoading.fail();
 });
 
 // DEM tiles and geocoding fetch outside MapLibre and report their own failures.
