@@ -37,25 +37,25 @@ enum AppConfig {
         if isDemoRequested {
             return .mapLibreDemo
         }
-        return hasMapTilerKey ? .mapTiler : .mapLibreDemo
+        return hasTileProxy ? .mapTiler : .mapLibreDemo
     }
 
-    /// True when the demo basemap is only up because the key never arrived.
+    /// True when the demo basemap is only up because the proxy URL never arrived.
     ///
-    /// Falling back silently is how a missing `MaptilerAPIKey` once looked
-    /// exactly like a working demo run: the map drew, and only the disabled
-    /// terrain/offline controls hinted that the key was missing. This flag lets
+    /// Falling back silently is how a missing configuration once looked exactly
+    /// like a working demo run: the map drew, and only the disabled terrain/offline
+    /// controls hinted that the MapTiler basemap was unavailable. This flag lets
     /// the UI say so out loud.
     static var isKeyMissingFallback: Bool {
         styleSource == .mapLibreDemo && !isDemoRequested
     }
 
-    static var hasMapTilerKey: Bool { !maptilerAPIKey.isEmpty }
+    static var hasTileProxy: Bool { tileProxyBaseURL != nil }
 
     /// Config for the DEM tile store. `nil` on the demo basemap, because the
     /// public demo tileset ships no Terrain-RGB endpoint we can authenticate.
     static var terrainConfig: MapTilerConfig? {
-        hasMapTilerKey ? MapTilerConfig(apiKey: maptilerAPIKey) : nil
+        tileProxyBaseURL.map(MapTilerConfig.init(baseURL:))
     }
 
     /// The same DEM config for the style builder, which runs off the main actor.
@@ -69,7 +69,7 @@ enum AppConfig {
     /// query is what makes a toggle change the URL, and therefore force MapLibre
     /// to reload the style — there is no other way to add or drop the block.
     static func mapStyleURL(for style: MapStyle, terrain3D: Bool) -> URL {
-        guard hasMapTilerKey else { return demoStyleURL }
+        guard hasTileProxy else { return demoStyleURL }
         var components = URLComponents(string: "http://127.0.0.1:\(slopePort)/style.json")!
         components.queryItems = [
             URLQueryItem(name: "style", value: style.rawValue),
@@ -161,9 +161,9 @@ enum AppConfig {
             + safeAreaBottom
     }
 
-    /// Whether 3D terrain can be switched on. Needs a key: the demo basemap has
+    /// Whether 3D terrain can be switched on. Needs the proxy: the demo basemap has
     /// no Terrain-RGB source to point the terrain block at.
-    static var canUseTerrain3D: Bool { hasMapTilerKey }
+    static var canUseTerrain3D: Bool { hasTileProxy }
 
     static var terrain3DLimitation: String? {
         canUseTerrain3D
@@ -184,29 +184,35 @@ enum AppConfig {
         return mapStyleURL(for: style, terrain3D: terrain3D)
     }
 
-    private static var maptilerAPIKey: String {
-        let key = Bundle.main.object(forInfoDictionaryKey: "MaptilerAPIKey") as? String
-        return key?.isEmpty == false ? key! : ""
+    /// Base URL of the tile proxy, or `nil` when it was never configured.
+    ///
+    /// The MapTiler key is no longer in the app at all — it lives in the proxy's
+    /// secrets — so what the app needs is the address of the thing that has it.
+    /// An unset value falls back to MapLibre's demo basemap and says so on screen.
+    private static var tileProxyBaseURL: String? {
+        guard let base = Bundle.main.object(forInfoDictionaryKey: "TileProxyBaseURL") as? String,
+              !base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return base
     }
 
-    /// Shared geocoding client, or `nil` without a key.
+    /// Shared geocoding client, or `nil` without the proxy.
     ///
-    /// Carries the same identity as the map's tile requests, so a key restricted
-    /// to an allowed user-agent answers search as well as tiles. It used to send
-    /// nothing identifying, which fails exactly the key this project recommends
-    /// -- the map would load and search would silently return no results, with
-    /// nothing on screen to say why.
-    static let geocodingClient: GeocodingClient? = hasMapTilerKey
-        ? GeocodingClient(
+    /// Carries the same identity as the map's tile requests, because the proxy
+    /// authenticates on an exact `User-Agent` match: a geocoder that identified
+    /// differently from the map would be refused, and search would silently
+    /// return no results with nothing on screen to say why.
+    static let geocodingClient: GeocodingClient? = tileProxyBaseURL.map { base in
+        GeocodingClient(
             httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
-            apiKey: maptilerAPIKey
+            baseURL: base
         )
-        : nil
+    }
 
     /// Why search is unavailable, or nil when it works.
     static var searchLimitation: String? {
         geocodingClient == nil
-            ? "Search needs a MapTiler key. The demo basemap has no geocoder."
+            ? "Search needs the tile proxy. The demo basemap has no geocoder."
             : nil
     }
 
@@ -230,13 +236,13 @@ enum AppConfig {
     /// One-line explanation for the Settings screen.
     static var basemapStatus: String {
         if isKeyMissingFallback {
-            return "MapTiler key missing — demo tiles"
+            return "Tile proxy missing — demo tiles"
         }
         switch styleSource {
         case .mapTiler:
-            return "MapTiler \(hasMapTilerKey ? "key loaded" : "key missing")"
+            return "MapTiler via tile proxy"
         case .mapLibreDemo:
-            return "MapLibre demo tiles — no MapTiler key in use"
+            return "MapLibre demo tiles — tile proxy not configured"
         }
     }
 
@@ -244,7 +250,7 @@ enum AppConfig {
     /// that is not the case.
     static var keyProblemDescription: String? {
         guard isKeyMissingFallback else { return nil }
-        return "No MapTiler key reached the app, so it fell back to the demo basemap. Check MAPTILER_API_KEY in Secrets.xcconfig — the key must be a real entry in GPXNav/Info.plist, because Xcode drops custom INFOPLIST_KEY_* names."
+        return "No tile proxy URL reached the app, so it fell back to the demo basemap. Check TILE_PROXY_BASE_URL in Secrets.xcconfig — it has to be a real entry in GPXNav/Info.plist, because Xcode drops custom INFOPLIST_KEY_* names."
     }
 
     /// Why the terrain toggles are unavailable, or nil when they work.
@@ -268,6 +274,31 @@ enum AppConfig {
     /// Capped at z14 because that is the highest zoom MapTiler's `outdoor-v2`
     /// style serves; asking for z15–16 would only ever produce empty tiles.
     static let offlineZoomRange = 12...14
+
+    /// The highest zoom to let the camera reach, when `StyleBuilder` has not yet
+    /// reported the loaded style's own ceiling.
+    ///
+    /// A stopgap for the window between "the map is on screen" and "the style
+    /// finished building", and a backstop if that build ever fails: MapLibre
+    /// clamps gestures against `maximumZoomLevel`, so without this a pinch on a
+    /// cold map can outrun the ceiling and leave the user staring at nothing.
+    /// Once the real figure arrives `MapView` uses that instead — see
+    /// `StyleBuilder.maxZoom(for:)` for why the two basemaps differ so much.
+    ///
+    /// Biased low deliberately. Refusing a zoom that would have worked costs one
+    /// gesture; allowing one that does not costs the user their map.
+    static func fallbackMaxZoom(for style: MapStyle) -> Double {
+        switch styleSource {
+        case .mapTiler:
+            // `outdoor-v2`'s vector sources stop at 14; `satellite-v4`'s imagery
+            // raster runs to 18.
+            style == .satellite ? 18 : 14
+        case .mapLibreDemo:
+            // MapLibre's public demo tileset is z0–6, which is why the terrain
+            // overlays and the offline download are disabled on it.
+            6
+        }
+    }
 
     /// How much deliberately downloaded map data to keep before the storage screen
     /// offers to free some up.
@@ -374,7 +405,7 @@ extension MapTilerConfig {
     func styleURL(for style: MapStyle) -> URL {
         let string = style == .outdoor ? mapStyleURL : satelliteStyleURL
         guard let url = URL(string: string) else {
-            preconditionFailure("Invalid MapTiler style URL — check MAPTILER_API_KEY in Secrets.xcconfig")
+            preconditionFailure("Invalid MapTiler style URL — check TILE_PROXY_BASE_URL in Secrets.xcconfig")
         }
         return url
     }

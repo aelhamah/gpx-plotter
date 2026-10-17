@@ -1,37 +1,47 @@
 import Foundation
 
-/// MapTiler endpoints, ported from `web/src/config.ts`.
+/// MapTiler endpoints, reached through the tile proxy.
 ///
-/// The key ships inside the app bundle (unlike the web app, where it is
-/// build-time), so it is passed in rather than read from the environment.
-/// Restrict it by bundle ID in the MapTiler dashboard.
+/// ## Why there is no key here
+///
+/// This used to carry `apiKey` and put it in a query string, which put it in the
+/// `.ipa` where anybody could read it. The key now lives in the proxy's secrets
+/// and this type carries only the proxy's base URL — see `proxy/README.md`.
+///
+/// The proxy re-adds the key on the way upstream and strips it back out of the
+/// styles and TileJSONs it serves, so the key never reaches this process at all.
+///
+/// ## Why the base URL is injected
+///
+/// It is a plain HTTPS origin, and it is injected rather than hardcoded so the
+/// Simulator can be pointed at a locally running `wrangler dev` on
+/// `http://127.0.0.1:8787` — which is also the only way to develop against the
+/// proxy from a network that cannot reach `*.workers.dev`.
 public struct MapTilerConfig: Equatable, Sendable {
-    public var apiKey: String
+    /// Base URL of the tile proxy, with no trailing slash.
+    public var baseURL: String
 
-    public init(apiKey: String) {
-        self.apiKey = apiKey
-    }
-
-    private var key: String {
-        // Matches encodeURIComponent in web/src/geocode.ts: only unreserved characters survive.
-        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-        return apiKey.addingPercentEncoding(withAllowedCharacters: unreserved) ?? ""
+    public init(baseURL: String) {
+        // Normalised once, here, so no call site has to remember. A trailing
+        // slash would produce `//maps/...`, which the proxy's allowlist treats
+        // as a different path and answers 404 to.
+        self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
     }
 
     public var mapStyleURL: String {
-        "https://api.maptiler.com/maps/outdoor-v2/style.json?key=\(key)"
+        "\(baseURL)/maps/outdoor-v2/style.json"
     }
 
     public var satelliteStyleURL: String {
-        "https://api.maptiler.com/maps/satellite-v4/style.json?key=\(key)"
+        "\(baseURL)/maps/satellite-v4/style.json"
     }
 
     public var terrainURL: String {
-        "https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=\(key)"
+        "\(baseURL)/tiles/terrain-rgb-v2/tiles.json"
     }
 
     public var terrainTileURL: String {
-        "https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.png?key=\(key)"
+        "\(baseURL)/tiles/terrain-rgb-v2/{z}/{x}/{y}.png"
     }
 
     public func terrainTileURL(z: Int, x: Int, y: Int) -> URL? {

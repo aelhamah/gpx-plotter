@@ -1,5 +1,18 @@
-import { authorize, countRequest, withinQuota, type QuotaState } from './authorize';
-import { isAllowedPath, sanitizeUpstreamResponse, upstreamURL } from './upstream';
+import {
+  authorize,
+  countRequest,
+  identifyOrigin,
+  withinQuota,
+  type ClientKind,
+  type QuotaState,
+} from './authorize';
+import {
+  isAllowedPath,
+  isTileDocument,
+  rewriteTileDocument,
+  sanitizeUpstreamResponse,
+  upstreamURL,
+} from './upstream';
 
 /**
  * A pass-through proxy in front of MapTiler.
@@ -26,14 +39,36 @@ import { isAllowedPath, sanitizeUpstreamResponse, upstreamURL } from './upstream
  *
  * The client keeps its own on-disk cache. That is where a tile is meant to be
  * remembered: on the user's device, under the user's control.
+ *
+ * ## Two kinds of caller
+ *
+ * The native app authenticates on `User-Agent`; the browser build authenticates
+ * on `Origin`, because `User-Agent` is a forbidden header name and a browser
+ * cannot present an allowlisted one. `authorize.ts` explains what that does and
+ * does not buy.
+ *
+ * Both leave as the *same* upstream user-agent, because the MapTiler key's own
+ * allowlist is a single exact value and the point of this layer is that the key
+ * never appears in a client at all.
  */
 export interface Env {
   /** MapTiler API key. A secret: `wrangler secret put MAPTILER_KEY`. */
   MAPTILER_KEY: string;
   /** Exact `User-Agent` values allowed to spend the key, comma separated. */
   ALLOWED_CLIENTS: string;
-  /** Requests per client per UTC day. */
+  /** Exact `Origin` values browsers may spend the key with, comma separated. */
+  ALLOWED_ORIGINS?: string;
+  /** Requests per native client per UTC day. */
   DAILY_QUOTA: string;
+  /**
+   * Requests per *origin* per UTC day, defaulting to `DAILY_QUOTA`.
+   *
+   * Separate from the native figure because it has to be: every browser user of
+   * a deployment shares one bucket — there is no stable per-visitor identity a
+   * browser can be asked for — and a map view is a few hundred requests, so the
+   * native allowance would be gone in minutes.
+   */
+  WEB_DAILY_QUOTA?: string;
   /** Where to forward to. `https://api.maptiler.com` in production. */
   UPSTREAM?: string;
   /** Set to `"true"` only once MapTiler has agreed in writing. See §Caching. */
@@ -45,40 +80,84 @@ export interface Env {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const originHeader = request.headers.get('origin');
+
+    // Echoed back on every response below, including refusals. A browser cannot
+    // read an error it was not given permission to read, so without this a quota
+    // refusal reaches the user as an opaque CORS failure instead of the
+    // explanation. Computed before authorization precisely so the *refusal* path
+    // can carry it too. Never `*`: that would make the proxy readable by any
+    // page on the internet, which is the opposite of the allowlist.
+    const corsOrigin = identifyOrigin(originHeader, parseClients(env.ALLOWED_ORIGINS));
 
     // Unauthenticated on purpose: it reveals nothing about the key, and a deploy
     // that 404s on its own health check is worse than one that leaks a boolean.
-    if (url.pathname === '/__health') return json({ ok: true });
+    if (url.pathname === '/__health') return withCors(json({ ok: true }), corsOrigin);
+
+    /**
+     * Preflight. MapLibre GL JS sends no custom headers, so tiles and styles are
+     * simple requests and never arrive here — but a preflight that is answered
+     * 405 makes the browser report a CORS error for *every* request that follows
+     * it, turning one unsupported call into a blank map. Answered cheaply and
+     * without touching upstream or the quota, because a browser never charges a
+     * preflight against its own allowance.
+     */
+    if (request.method === 'OPTIONS') {
+      return withCors(new Response(null, { status: 204 }), corsOrigin, {
+        'access-control-allow-methods': 'GET, HEAD, OPTIONS',
+        'access-control-allow-headers': 'content-type',
+        'access-control-max-age': '86400',
+      });
+    }
 
     // MapLibre issues HEADs while probing a source. Forwarding them is cheaper
     // than refusing them, which would surface as a failed style load.
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return json({ error: 'method_not_allowed' }, 405);
+      return withCors(json({ error: 'method_not_allowed' }, 405), corsOrigin);
     }
 
     // An allowlist, so an unknown or future endpoint cannot be proxied by
     // accident. See §ALLOWED_PREFIXES.
-    if (!isAllowedPath(url.pathname)) return json({ error: 'not_proxied' }, 404);
+    if (!isAllowedPath(url.pathname)) return withCors(json({ error: 'not_proxied' }, 404), corsOrigin);
 
     const today = todayUTC();
-    const clients = parseClients(env.ALLOWED_CLIENTS);
-    const limit = Number(env.DAILY_QUOTA);
+    const nativeLimit = Number(env.DAILY_QUOTA);
+    const webLimit = Number(env.WEB_DAILY_QUOTA ?? env.DAILY_QUOTA);
 
     // Authorize on the identity alone first, so an unknown client costs one
     // Durable Object round trip and no upstream traffic.
-    const identity = authorize(request.headers.get('user-agent'), clients, { day: today, count: 0 }, limit, today);
-    if (!identity.allowed) return json({ error: identity.reason }, identity.status);
+    const identity = authorize(
+      request.headers.get('user-agent'),
+      originHeader,
+      { userAgents: parseClients(env.ALLOWED_CLIENTS), origins: parseClients(env.ALLOWED_ORIGINS) },
+      { day: today, count: 0 },
+      nativeLimit,
+      today
+    );
+    if (!identity.allowed) {
+      return withCors(json({ error: identity.reason }, identity.status), corsOrigin);
+    }
 
-    const quota = env.QUOTA.get(env.QUOTA.idFromName(identity.token));
+    const limit = limitFor(identity.kind, nativeLimit, webLimit);
+    // Namespaced by kind so a native token and an origin can never collide in
+    // the same Durable Object, and so one client class cannot spend the other's
+    // allowance even if their identifiers happened to match.
+    const quota = env.QUOTA.get(env.QUOTA.idFromName(`${identity.kind}:${identity.token}`));
     const spent = await quota.fetch(`https://quota/check?day=${today}&limit=${limit}`);
     if (spent.status !== 200) {
       const state = (await spent.json()) as { day: string; count: number };
-      return json({ error: 'quota_exceeded', day: state.day, count: state.count, limit }, 429);
+      return withCors(
+        json({ error: 'quota_exceeded', day: state.day, count: state.count, limit }, 429),
+        corsOrigin
+      );
     }
 
     const upstream = new Request(
       upstreamURL(env.UPSTREAM ?? 'https://api.maptiler.com', url.pathname, url.search, env.MAPTILER_KEY),
-      { method: request.method, headers: upstreamHeaders(request.headers, identity.token) }
+      {
+        method: request.method,
+        headers: upstreamHeaders(request.headers, upstreamIdentity(env, identity.kind)),
+      }
     );
 
     const response = await fetch(upstream);
@@ -94,9 +173,50 @@ export default {
       ctx.waitUntil(caches.default.put(new Request(upstream.url), safe.clone()));
     }
 
-    return safe;
+    return withCors(
+      isTileDocument(url.pathname)
+        ? await rewritten(safe, request, env.UPSTREAM ?? 'https://api.maptiler.com', url.origin)
+        : safe,
+      corsOrigin
+    );
   },
 };
+
+/**
+ * Serve a style or TileJSON with the key taken out of it.
+ *
+ * `sanitizeUpstreamResponse` cannot do this job: the key in a style is in the
+ * body, as part of a URL the renderer is going to follow. Stripping it is what
+ * turns "the key ships in the app" into "the key does not ship in the app",
+ * which is the whole point of this Worker.
+ */
+async function rewritten(
+  response: Response,
+  request: Request,
+  upstream: string,
+  proxyOrigin: string
+): Promise<Response> {
+  // A HEAD has no body, and an error body is already a fixed `upstream_rejected`
+  // with nothing to rewrite.
+  if (request.method === 'HEAD' || !response.ok) return response;
+
+  const body = await response.text();
+  let document: unknown;
+  try {
+    document = JSON.parse(body);
+  } catch {
+    // If MapTiler ever sends something unparseable, pass it through untouched.
+    // Failing to understand the document is our bug; silently replacing it with
+    // `{}` would hand the client a map with no sources and no error, which is
+    // far harder to diagnose than a style that failed to load.
+    return new Response(body, { status: response.status, headers: response.headers });
+  }
+
+  return new Response(JSON.stringify(rewriteTileDocument(document, upstream, proxyOrigin)), {
+    status: response.status,
+    headers: response.headers,
+  });
+}
 
 /**
  * One client's day.
@@ -141,15 +261,66 @@ export class QuotaCounter {
 
 // MARK: - Helpers
 
+/**
+ * Add CORS headers for a verified origin.
+ *
+ * A no-op when the caller presented no allowlisted origin, which is every native
+ * request: `NSURLSession` sends no `Origin` and is not subject to CORS at all.
+ *
+ * `Vary: Origin` is not optional. Cloudflare's cache is a shared cache in front
+ * of this Worker, and without `Vary` a response built for one allowlisted origin
+ * can be handed to another — which would mean either a cross-origin data leak or
+ * a page mysteriously failing, depending on which order the cache filled in.
+ */
+function withCors(response: Response, origin: string | null, extra?: Record<string, string>): Response {
+  const headers = new Headers(response.headers);
+  if (origin) {
+    headers.set('access-control-allow-origin', origin);
+    headers.set('access-control-expose-headers', 'content-type');
+  }
+  headers.set('vary', 'Origin');
+  for (const [name, value] of Object.entries(extra ?? {})) headers.set(name, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/** The day's allowance for a caller. */
+function limitFor(kind: ClientKind, nativeLimit: number, webLimit: number): number {
+  return kind === 'web' ? webLimit : nativeLimit;
+}
+
+/**
+ * The `User-Agent` this request leaves with.
+ *
+ * Both caller kinds present the same value, because the MapTiler key's allowlist
+ * is a single exact string and this layer exists so that no client ever sees the
+ * key. Giving the browser its own upstream identity would mean adding a second
+ * entry to that allowlist and, with it, a second thing to revoke — for traffic
+ * that is already attributable to a named origin bucket in the quota below.
+ */
+function upstreamIdentity(env: Env, _kind: ClientKind): string {
+  const clients = parseClients(env.ALLOWED_CLIENTS);
+  if (clients.length === 0) return '';
+  return clients[0]!;
+}
+
 /** Forwarded request headers: the identity, and nothing that could carry a key. */
 function upstreamHeaders(incoming: Headers, token: string): Headers {
   const headers = new Headers();
-  // The client's own token, byte for byte. Rewriting this breaks the MapTiler
-  // key allowlist — the mechanism §5.1 of the plan relies on — so the value that
-  // authenticated here is the value forwarded.
+  // The allowlisted token, byte for byte. Rewriting this breaks the MapTiler key
+  // allowlist, so the value this layer presents upstream is the one it was built
+  // around — for both caller kinds. See §upstreamIdentity.
   headers.set('user-agent', token);
   const accept = incoming.get('accept');
   if (accept) headers.set('accept', accept);
+  // Forwarded so MapTiler's own referrer restriction still applies to browser
+  // traffic instead of being bypassed by the hop through here. A native client
+  // sends no Origin, so this is absent for it, exactly as it is today.
+  const origin = incoming.get('origin');
+  if (origin) headers.set('origin', origin);
   // Deliberately not forwarded: `cookie`, `authorization`, `accept-encoding`.
   // Cloudflare handles encoding at the edge, and forwarding `accept-encoding`
   // buys a decompress step and nothing else.

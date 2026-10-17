@@ -166,10 +166,11 @@ public func normalizeFeature(_ feature: [String: Any]) -> GeocodeResult? {
 }
 
 /// Build the MapTiler geocoding URL for a query.
-public func geocodeURL(query: String, options: GeocodeOptions = GeocodeOptions(), apiKey: String) -> String {
+///
+/// Goes to the tile proxy, which holds the key — see `MapTilerConfig`.
+public func geocodeURL(query: String, options: GeocodeOptions = GeocodeOptions(), baseURL: String) -> String {
     let round5 = { (value: Double) in (value * 100000).rounded() / 100000 }
     var params = [
-        "key=\(apiKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")",
         "limit=\(options.limit)",
         "types=\(geocodeTypes)"
     ]
@@ -178,17 +179,17 @@ public func geocodeURL(query: String, options: GeocodeOptions = GeocodeOptions()
     }
     let encodedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
-    return "https://api.maptiler.com/geocoding/\(encodedQuery).json?\(params.joined(separator: "&"))"
+    return "\(baseURL)/geocoding/\(encodedQuery).json?\(params.joined(separator: "&"))"
 }
 
 /// Geocoding client for MapTiler.
 public actor GeocodingClient {
     private let httpClient: HTTPClient
-    private let apiKey: String
+    private let baseURL: String
 
-    public init(httpClient: HTTPClient = DefaultHTTPClient(), apiKey: String) {
+    public init(httpClient: HTTPClient = DefaultHTTPClient(), baseURL: String) {
         self.httpClient = httpClient
-        self.apiKey = apiKey
+        self.baseURL = baseURL
     }
 
     /// Forward-geocode a query; returns [] on empty input, HTTP errors, or network failure.
@@ -196,7 +197,7 @@ public actor GeocodingClient {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return [] }
 
-        let url = geocodeURL(query: trimmed, options: options, apiKey: apiKey)
+        let url = geocodeURL(query: trimmed, options: options, baseURL: baseURL)
 
         do {
             let (data, response) = try await httpClient.data(from: url)

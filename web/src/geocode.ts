@@ -1,4 +1,4 @@
-import { MAPTILER_API_KEY } from './config';
+import { TILE_PROXY_BASE_URL } from './config';
 import { reportServiceFailure } from './serviceStatus';
 
 /**
@@ -156,11 +156,19 @@ function parseElevation(ele: string | undefined): number | undefined {
 
 const round5 = (value: number) => Number(value.toFixed(5));
 
+/**
+ * Goes to the tile proxy, which holds the key — see `config.ts`.
+ *
+ * No `key=` parameter: the proxy adds it upstream. A key in a query string ends
+ * up in the proxy's access logs, in anything else that logs URLs, and in this
+ * page's history entry.
+ */
 export function geocodeUrl(query: string, options: GeocodeOptions = {}): string {
   const { limit = DEFAULT_LIMIT, proximity } = options;
-  const params = [`key=${encodeURIComponent(MAPTILER_API_KEY)}`, `limit=${limit}`, `types=${GEOCODE_TYPES}`];
+  const params = [`limit=${limit}`, `types=${GEOCODE_TYPES}`];
   if (proximity) params.push(`proximity=${round5(proximity.lon)},${round5(proximity.lat)}`);
-  return `https://api.maptiler.com/geocoding/${encodeURIComponent(query.trim())}.json?${params.join('&')}`;
+  const base = TILE_PROXY_BASE_URL.replace(/\/+$/, '');
+  return `${base}/geocoding/${encodeURIComponent(query.trim())}.json?${params.join('&')}`;
 }
 
 /** Forward-geocode a query; returns [] on empty input, HTTP errors, or network failure. */

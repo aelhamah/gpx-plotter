@@ -17,8 +17,9 @@
 #   ios/ci/capture.sh
 #
 # Environment:
-#   MAPTILER_API_KEY  Optional. A native key (User-Agent allowlisted, not
-#                     origin-restricted). Without one the capture falls back to
+#   TILE_PROXY_HOST   Optional. Host of the Cloudflare Worker that holds the
+#                     MapTiler key (see proxy/README.md); TILE_PROXY_SCHEME
+#                     defaults to https. Without one the capture falls back to
 #                     MapLibre's keyless demo basemap, which is zoom 0-6 only
 #                     and switches the terrain overlays off in-app, so the
 #                     overlay scenes come out looking broken rather than empty.
@@ -182,20 +183,25 @@ fi
 # Secrets
 #
 # Written to the gitignored Secrets.local.xcconfig that Secrets.xcconfig
-# #include?s, which is how MAPTILER_API_KEY reaches info.properties in
-# project.yml and from there the Info.plist. Never logged, never committed.
+# #include?s, which is how they reach info.properties in project.yml and from
+# there the Info.plist. Never logged, never committed.
 # --------------------------------------------------------------------------
 
+# Scheme and host are separate because xcconfig reads `//` as a comment: one
+# `TILE_PROXY_BASE_URL = https://host` line would resolve to `https:` and the
+# app would silently capture against the demo basemap instead. project.yml
+# rejoins them, where no `//` is ever adjacent.
 DEMO_TILES=0
-if [ -n "${MAPTILER_API_KEY:-}" ]; then
+if [ -n "${TILE_PROXY_HOST:-}" ]; then
   # `printf '... %s'` rather than an echo so a value with a backslash or a % in
   # it cannot be mangled on the way into the file.
-  printf 'MAPTILER_API_KEY = %s\n' "$MAPTILER_API_KEY" > "$APP_DIR/Secrets.local.xcconfig"
+  printf 'TILE_PROXY_SCHEME = %s\nTILE_PROXY_HOST = %s\n' \
+    "${TILE_PROXY_SCHEME:-https}" "$TILE_PROXY_HOST" > "$APP_DIR/Secrets.local.xcconfig"
   chmod 600 "$APP_DIR/Secrets.local.xcconfig"
-  log "MapTiler: using the configured native key."
+  log "MapTiler: using the configured tile proxy."
 else
   DEMO_TILES=1
-  warn "No MAPTILER_API_KEY: capturing against the keyless demo basemap."
+  warn "No TILE_PROXY_HOST: capturing against the keyless demo basemap."
   warn "  It only has tiles to zoom 6, and the app turns its terrain overlays off"
   warn "  on it, so the relief, slope and 3D scenes will show that explanation."
 fi
