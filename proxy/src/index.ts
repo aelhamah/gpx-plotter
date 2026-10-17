@@ -6,6 +6,7 @@ import {
   type ClientKind,
   type QuotaState,
 } from './authorize';
+import { geoFromCf } from './geo';
 import {
   isAllowedPath,
   isTileDocument,
@@ -93,6 +94,45 @@ export default {
     // Unauthenticated on purpose: it reveals nothing about the key, and a deploy
     // that 404s on its own health check is worse than one that leaks a boolean.
     if (url.pathname === '/__health') return withCors(json({ ok: true }), corsOrigin);
+
+    /**
+     * Where the client roughly is, from the connection it arrived on.
+     *
+     * Not a proxied path, so it is answered before the allowlist below and never
+     * reaches MapTiler: there is no upstream, because Cloudflare attached the
+     * answer to the request that got here. See `geo.ts` for why this is here
+     * rather than at a third-party geo-IP service.
+     *
+     * Authorized on identity but **not** charged to the quota. The quota exists to
+     * stop clients spending MapTiler's money, and this spends none — so charging
+     * it would buy nothing, while the Durable Object round trip it needs would
+     * cost more than answering the question does. That is a trade on the critical
+     * path of first paint: a DO hop to count a request that is not metered is a
+     * hop spent making the app slower to be useful.
+     *
+     * The identity check stays, though. It costs nothing (no I/O) and it keeps
+     * this from being an open geolocation oracle for anyone who has not read the
+     * allowlist out of this file.
+     */
+    if (url.pathname === '/geo') {
+      const caller = authorize(
+        request.headers.get('user-agent'),
+        originHeader,
+        { userAgents: parseClients(env.ALLOWED_CLIENTS), origins: parseClients(env.ALLOWED_ORIGINS) },
+        { day: '', count: 0 },
+        Number.POSITIVE_INFINITY,
+        ''
+      );
+      if (!caller.allowed) {
+        return withCors(json({ error: caller.reason }, caller.status), corsOrigin);
+      }
+      const estimate = geoFromCf(request.cf);
+      // 204 rather than a JSON null: "no estimate" is a successful answer to a
+      // question that was asked, and a client waiting on first paint should not
+      // have to parse a body to discover it should use its own default.
+      if (!estimate) return withCors(new Response(null, { status: 204 }), corsOrigin);
+      return withCors(json(estimate), corsOrigin);
+    }
 
     /**
      * Preflight. MapLibre GL JS sends no custom headers, so tiles and styles are
