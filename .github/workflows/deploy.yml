@@ -44,7 +44,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_TILE_PROXY_BASE_URL: ${{ secrets.VITE_TILE_PROXY_BASE_URL }}
+          VITE_TILE_PROXY_BASE_URL: ${{ vars.VITE_TILE_PROXY_BASE_URL }}
 
       - name: Publish to gh-pages (site root)
         uses: peaceiris/actions-gh-pages@v4

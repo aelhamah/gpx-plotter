@@ -85,7 +85,7 @@ jobs:
         working-directory: ios
         env:
           TILE_PROXY_SCHEME: https
-          TILE_PROXY_HOST: ${{ secrets.TILE_PROXY_HOST }}
+          TILE_PROXY_HOST: ${{ vars.TILE_PROXY_HOST }}
           IOS_DEVICE: iPhone
           MIN_SETTLE: '30'
           MAX_SETTLE: '90'

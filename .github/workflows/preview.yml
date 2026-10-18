@@ -74,7 +74,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_TILE_PROXY_BASE_URL: ${{ secrets.VITE_TILE_PROXY_BASE_URL }}
+          VITE_TILE_PROXY_BASE_URL: ${{ vars.VITE_TILE_PROXY_BASE_URL }}
 
       - name: Compute preview path
         id: meta
