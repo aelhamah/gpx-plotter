@@ -1,0 +1,114 @@
+name: Deploy tile proxy
+
+# Publishes the Worker in `proxy/` to Cloudflare.
+#
+# `wrangler deploy` was a thing a person typed, which means the Worker on the edge
+# only changed when somebody remembered. That is exactly how `/geo` ended up
+# merged and reviewed but 404 in production: the code was correct on main and the
+# thing serving it was weeks out of date. A deploy that is only reachable by hand
+# is a deploy that does not happen.
+
+on:
+  push:
+    branches: [main]
+    # Only when the Worker actually changes. `proxy/` is small and this runs in
+    # about half a minute, but a merge that touches only `web/` shipping a
+    # pointless Worker version is the kind of noise that makes people ignore the
+    # workflow's status badge, which is the signal worth protecting.
+    paths:
+      - 'proxy/**'
+      - '.github/workflows/proxy-deploy.yml'
+  # For the deploy nobody pushed a commit for: rotating a secret, or a rollback.
+  workflow_dispatch:
+
+# The whole point is that `wrangler deploy` replaces the Worker on the edge, and
+# two runs doing that at once is the same non-fast-forward class of problem the
+# gh-pages workflows have. Serialise on the Worker name so a re-run queues behind
+# the deploy it is re-running rather than interleaving with it.
+#
+# cancel-in-progress is off: a half-applied Worker is worse than a slow queue, and
+# cancelling a deploy mid-push leaves the edge on whichever version won the race.
+concurrency:
+  group: tile-proxy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: proxy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22, matching the CI job in pr.yml. The default `node` on some
+          # runner images is 14, which cannot install this tree at all.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The same two checks pr.yml runs on every pull request, repeated here
+      # rather than trusted from there. A deploy workflow's whole value is that it
+      # cannot publish a broken Worker; running against the merge commit instead
+      # of the PR head is a different commit, and "it passed on the PR" is a
+      # weaker claim than it sounds.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Deploy
+        # CLOUDFLARE_API_TOKEN needs Workers Scripts:Edit on the account and
+        # Account Settings:Read, which is what `wrangler deploy` uses to find out
+        # which account it is deploying to.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      # `MAPTILER_KEY` is a `secret_text` binding set with `wrangler secret put`
+      # and is deliberately absent from wrangler.jsonc, so it is not in this
+      # repository and not in the deployed bundle. `wrangler deploy` reconciles the
+      # bindings it knows about and leaves the rest alone — it does not clear
+      # secrets it cannot see. The /geo check below is the backstop: if a deploy
+      # ever did drop it, every style and tile request starts failing with 401 and
+      # the map goes blank everywhere at once.
+      - name: Check the Worker answers
+        env:
+          WORKER: gpxnav-tile-proxy.gpxnav.workers.dev
+        run: |
+          set -euo pipefail
+          health=$(curl -sS -o /dev/null -w '%{http_code}' "https://$WORKER/__health")
+          echo "health: $health"
+          [ "$health" = 200 ] || { echo "::error::health check returned $health"; exit 1; }
+
+          # 200 with a position, or 204 when the edge has no location for the
+          # runner's IP. Both are healthy. 404 is the one that means the endpoint
+          # is missing from the deployed bundle, which is the failure that let
+          # /geo sit merged and unshipped — so it is the one worth failing on.
+          geo=$(curl -sS -o /dev/null -w '%{http_code}' -H "Origin: https://aelhamah.github.io" "https://$WORKER/geo")
+          echo "geo: $geo"
+          case "$geo" in
+            200|204) ;;
+            *) echo "::error::/geo returned $geo — the deployed Worker is missing it"; exit 1 ;;
+          esac
+
+          # The site's own origin, because a 200 with no
+          # access-control-allow-origin is a response a browser throws away: the
+          # tile is fetched, dropped, and the map is blank. Asserting the header is
+          # the only way CI can see the difference between a Worker that serves
+          # tiles and one a browser can actually read them from.
+          cors=$(curl -sS -o /dev/null -D - -H "Origin: https://aelhamah.github.io" \
+            "https://$WORKER/maps/outdoor-v2/style.json" | tr -d '\r' | awk -F': ' 'tolower($1)=="access-control-allow-origin"{print $2}')
+          echo "access-control-allow-origin: ${cors:-<absent>}"
+          [ "$cors" = "https://aelhamah.github.io" ] || { echo "::error::CORS header missing or wrong for the site origin"; exit 1; }
