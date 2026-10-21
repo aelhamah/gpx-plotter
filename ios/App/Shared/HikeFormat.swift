@@ -12,11 +12,14 @@ enum HikeFormat {
     ///
     /// `gradeAheadPercent` is a rise-over-run *percentage*, while the arrow bands
     /// and `Units.formatSlope` both want degrees, so this converts rather than
-    /// labelling a percentage with a degree sign.
+    /// labelling a percentage with a degree sign. Flat ground gets the bare
+    /// angle: the level bar beside a `0°` read like the missing-value dash with
+    /// a number stuck to it.
     static func grade(_ percent: Double?) -> String? {
         guard let percent else { return nil }
         let degrees = atan(percent / 100) * 180 / .pi
-        let arrow = degrees > 1 ? "▲" : (degrees < -1 ? "▼" : "▬")
-        return "\(arrow) \(Int(degrees.rounded()))°"
+        let angle = "\(Int(degrees.rounded()))°"
+        guard degrees > 1 || degrees < -1 else { return angle }
+        return "\(degrees > 1 ? "▲" : "▼") \(angle)"
     }
 }

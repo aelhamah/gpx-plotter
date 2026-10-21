@@ -235,30 +235,57 @@ final class AppServices: ObservableObject {
 
     private var server: SlopeServer?
 
+    /// The loopback listener has bound, so a request to it will be answered
+    /// rather than refused.
+    ///
+    /// The map views wait on this before building themselves at all, because
+    /// MapLibre asks for `style.json` the instant the view exists and never
+    /// repeats a refused ask — and `start()` cannot promise the bind has
+    /// landed, only that it has been requested. See `SlopeServer.onReady`.
+    @Published private(set) var serverReady = false
+
     init() {
         let config = AppConfig.terrainTileConfig
         styleBuilder = StyleBuilder(config: config)
         offline = OfflinePackManager(cache: cache, styleBuilder: styleBuilder)
+        // Started here rather than from the scene's `.task`, which runs *after*
+        // the first view has rendered — and the first view may be the map.
+        //
+        // Starting early shrinks the race but does not close it: `NWListener`
+        // binds asynchronously, so `start()` returning does not mean the port
+        // accepts yet. Inside that window MapLibre's first `style.json` ask is
+        // refused and never repeated, while its own resource cache serves back
+        // a style built in an earlier launch — one whose `StyleBuilder` is
+        // gone — so `upstreamTemplates` stays empty here, every tile answers
+        // 404 "no basemap", and the map renders as a flat colour with the
+        // route floating on it. The views hold the map until `serverReady`.
+        //
+        // `start()` is idempotent, so the scene's call is harmless.
+        start()
     }
 
     /// Bring up the loopback server. Everything else is lazy.
     func start() {
         guard server == nil else { return }
-        do {
-            let server = try SlopeServer(
-                styleBuilder: styleBuilder,
-                tileCache: cache,
-                port: AppConfig.slopePort
-            )
-            server.start()
-            self.server = server
-        } catch {
-            print("Loopback server failed to start: \(error)")
+        let server = SlopeServer(
+            styleBuilder: styleBuilder,
+            tileCache: cache,
+            port: AppConfig.slopePort
+        )
+        // The listener reports on its own queue; hop, because
+        // `serverReady` drives view updates.
+        server.onReady = { [weak self] in
+            Task { @MainActor in
+                self?.serverReady = true
+            }
         }
+        server.start()
+        self.server = server
     }
 
     func stop() {
         server?.stop()
         server = nil
+        serverReady = false
     }
 }

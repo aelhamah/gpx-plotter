@@ -48,6 +48,42 @@ struct CompassNeedle: View {
     }
 }
 
+/// The map's compass: a needle that turns to the bearing and snaps back to north.
+///
+/// Separate from `LocateButton` because they answer different questions — this
+/// one is about *which way*, that one about *where am I* — and it is the reason
+/// MapLibre's own compass can be switched off.
+///
+/// It used to be MapLibre's built-in one, which is how there came to be two
+/// compasses on screen at once: MapLibre's faded in over the app's own controls
+/// as soon as the heading became non-zero, drawn in MapLibre's colours with its
+/// own hit area, sitting *behind* the SwiftUI buttons and answering taps to
+/// `resetNorth` outside `LocationController` entirely.
+struct CompassButton: View {
+    @EnvironmentObject private var location: LocationController
+
+    var body: some View {
+        Button {
+            location.toggleHeading()
+        } label: {
+            Image(systemName: "location.north.line.fill")
+                // Negated: the glyph points at north, so turning it clockwise by
+                // the bearing is what puts *its* point where the device is
+                // facing. Zero unless heading-follow is on — a needle spinning
+                // while the map stays north-up would be the map lying twice over.
+                .rotationEffect(.degrees(needleRotation))
+        }
+        .buttonStyle(ChromeButtonStyle(isOn: location.followsHeading))
+        .accessibilityLabel(location.followsHeading ? "Face north" : "Face my direction of travel")
+        .accessibilityHint("Turns the map north-up, or back to the way you are facing")
+    }
+
+    private var needleRotation: Double {
+        guard location.followsHeading, let heading = location.heading else { return 0 }
+        return -heading
+    }
+}
+
 /// The map's locate button, with the same states the web app's `locate.ts`
 /// distinguishes: locating, located, permission refused, and unavailable.
 ///
@@ -70,12 +106,8 @@ struct LocateButton: View {
             }
         } label: {
             CompassNeedle()
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 44, height: 44)
-                .background(.regularMaterial, in: Circle())
-                .shadow(radius: 2, y: 1)
         }
+        .buttonStyle(ChromeButtonStyle(tint: tint))
         .accessibilityLabel(label)
         .accessibilityHint(label)
         // This button is the only thing that starts heading updates outside

@@ -68,12 +68,20 @@ enum AppConfig {
     /// equivalent, so the `terrain` block is injected server-side. The `terrain`
     /// query is what makes a toggle change the URL, and therefore force MapLibre
     /// to reload the style — there is no other way to add or drop the block.
+    ///
+    /// `rev` is for MapLibre's own resource cache (`.mapbox/cache.db`): a copy
+    /// cached by an older build loads without ever asking the loopback, which
+    /// means this process's `StyleBuilder` never runs and every tile 404s
+    /// "no basemap". A new URL bypasses any such entry regardless of its
+    /// expiry — bump it whenever the loopback's style behaviour changes in a
+    /// way that old cached copies would break.
     static func mapStyleURL(for style: MapStyle, terrain3D: Bool) -> URL {
         guard hasTileProxy else { return demoStyleURL }
         var components = URLComponents(string: "http://127.0.0.1:\(slopePort)/style.json")!
         components.queryItems = [
             URLQueryItem(name: "style", value: style.rawValue),
             URLQueryItem(name: "terrain", value: terrain3D ? "1" : "0"),
+            URLQueryItem(name: "rev", value: "2"),
         ]
         return components.url!
     }
@@ -287,12 +295,20 @@ enum AppConfig {
     ///
     /// Biased low deliberately. Refusing a zoom that would have worked costs one
     /// gesture; allowing one that does not costs the user their map.
+    ///
+    /// The outdoor figure is 15, not 14. `outdoor-v2`'s *base geometry* —
+    /// landcover, roads, buildings, water — comes from the planet tileset, which
+    /// runs to z15; the trails source is the one that stops at 14. 14 was measured
+    /// from the wrong source and would have capped the camera a level short of
+    /// everything MapTiler actually draws there.
     static func fallbackMaxZoom(for style: MapStyle) -> Double {
         switch styleSource {
         case .mapTiler:
-            // `outdoor-v2`'s vector sources stop at 14; `satellite-v4`'s imagery
-            // raster runs to 18.
-            style == .satellite ? 18 : 14
+            // Verified against the styles' TileJSON: `outdoor-v2` serves to z15
+            // and answers 502 above it; `satellite-v4`'s imagery raster serves to
+            // z22. `StyleBuilder` reads both back from the style that loaded, and
+            // this is only what stands in until it has.
+            style == .satellite ? 22 : 15
         case .mapLibreDemo:
             // MapLibre's public demo tileset is z0–6, which is why the terrain
             // overlays and the offline download are disabled on it.
@@ -382,6 +398,71 @@ enum Screen {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let windows = scenes.flatMap { $0.windows }
         return windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.bottom ?? 0
+    }
+
+    /// The display's top safe-area inset — the status bar or Dynamic Island.
+    @MainActor
+    static var safeAreaTop: CGFloat {
+        keyWindow?.safeAreaInsets.top ?? 0
+    }
+
+    /// How much of the top of the map the app's own chrome covers: the status bar
+    /// plus the navigation bar.
+    ///
+    /// Measured rather than written down, because it was written down once — as
+    /// `MapChrome.topInset = 52` — and that number is wrong by a wide margin on
+    /// any device with a notch. Measured on an iPhone 17 Pro the real figure is
+    /// **113pt**, so the map was culling waypoint labels against a line 61pt above
+    /// the bottom of the navigation bar, i.e. labels were being hidden *behind*
+    /// chrome rather than kept clear of it.
+    ///
+    /// The navigation bar's height is not in the safe area and SwiftUI does not
+    /// expose it, so it comes off the real bar via the responder chain. No
+    /// navigation stack (Settings, reached from a tab with no bar) is zero, which
+    /// is the right answer there.
+    @MainActor
+    static var topChrome: CGFloat {
+        safeAreaTop + navBarHeight
+    }
+
+    @MainActor
+    static var navBarHeight: CGFloat {
+        guard let root = keyWindow?.rootViewController else { return 0 }
+        return root.topmostNavigationBarHeight
+    }
+
+    /// The tab bar's own height, excluding the home indicator it sits on.
+    ///
+    /// Needed for the same reason as `topChrome`: the map runs under the tab bar
+    /// too, so the sheet's top edge — which is what the map controls and the
+    /// waypoint labels have to stay above — is measured from the bottom of the
+    /// content, not the bottom of the screen.
+    @MainActor
+    static var tabBarHeight: CGFloat {
+        keyWindow?.rootViewController?.tabBarController?.tabBar.bounds.height ?? 0
+    }
+
+    @MainActor
+    private static var keyWindow: UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+    }
+}
+
+/// The navigation bar actually on screen, found by walking the presentation chain.
+///
+/// The bar that matters is the topmost one: a modal can put a different stack up,
+/// and a sheet is presented over the map rather than inside its stack, so the
+/// first `navigationController` met on the way down is not necessarily the one
+/// drawn at the top of the screen.
+private extension UIViewController {
+    var topmostNavigationBarHeight: CGFloat {
+        if let presented = presentedViewController {
+            return presented.topmostNavigationBarHeight
+        }
+        return navigationController?.navigationBar.bounds.height ?? 0
     }
 }
 

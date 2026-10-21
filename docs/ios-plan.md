@@ -601,6 +601,22 @@ out at z14 (`outdoor` z5–14, `contours` z9–14), so z15–z16 would only ever
 produce empty tiles. `AppConfig.offlineZoomRange` is capped accordingly. The
 satellite raster goes to z22, so nothing caps it, but nothing needs it to.
 
+The live camera is capped by the same fact, separately enforced. The ceiling is
+read back from the style that loaded — the highest `maxzoom` over its vector and
+raster sources, `raster-dem` excluded because an elevation model's depth is not
+imagery depth (`StyleBuilder.styleZoomCeiling`) — and lands on the map three
+ways: as `MapView.maximumZoomLevel`, which is the only thing that reaches
+MapLibre's own pinch pipeline; as a clamp on a camera carried across a style
+swap, since the old style may have allowed a zoom the new one has fewer tiles
+for; and as the `maxZoom` of a fit, so the fit targets the ceiling rather than
+being dragged down to it afterwards. Outdoor reports 15 — `outdoor-v2`'s base
+geometry is the planet tileset, which runs to z15 even though the trails source
+stops at z14 — satellite 22, and `AppConfig.fallbackMaxZoom` stands in until
+the style has answered. MapTiler returns 502 past a tileset's maxzoom rather
+than overzooming, so an unclamped zoom does not get soft parent tiles: it gets
+the blank canvas this clamp exists to prevent, which is the same failure the
+offline cap is dodging from the other side.
+
 The plan originally said to test each tile centre against distance-to-route. As
 written that selects **nothing at low zoom**, because a z12 tile is ~9.8 km across
 while the buffer is ~1 km, so every tile centre falls outside the corridor. The
@@ -871,7 +887,7 @@ M0 defects the simulator surfaced, all fixed:
 | Full layer stack | **Done.** `route-casing` / `route-line` / `route-points` per route, waypoint circles, `location-accuracy` / `location-halo` / `location-dot`, relief, and slope, with the web app's paint values ported into `MapLayers.swift`. Route vertices are circle layers rather than annotations, for the same reason the web app moved them off DOM markers. |
 | Multi-route | **Done.** Every visible route is drawn, not only the selected one; the selected route's vertices get the larger radius and dark stroke. Deleting or hiding a route removes its layers and sources. |
 | Waypoints | **Done.** Drawn as a circle layer; they arrive from a GPX's `<wpt>` elements via `RouteKit.parseGPX` and persist with the workspace. |
-| Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`. |
+| Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`, and the zoom clamped to the style's ceiling so the fit cannot ask for tiles MapTiler will not serve (§9). |
 | Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. Heading-follow now *tracks* the bearing rather than stamping it once, and the glyph is a needle that turns with the device (#48, #66). |
 | Search | **Done, but neither entry point actually worked until a device found it (#69).** Debounced 300 ms, six results, proximity biased to the route, and the Peak / Trailhead / Trail / Street badges from `RouteKit`. Tapping a result adds it as a waypoint. Verified against the live endpoint: names, peak detection, and summit elevations all arrive. Two bugs sat on top of that: the viewer's figures sheet is presented for the screen's whole life, so a search sheet presented while another is up from the same host was dropped and the button did nothing; and with no key `geocodingClient` is nil, so every query returned an empty list — indistinguishable from a place that does not exist, which is what "search doesn't work" turned out to be. Both fixed; both screens now say **Search is unavailable** before anyone types. |
 | 3D terrain toggle | **Built, not yet verified on the map.** The map now loads its style from the loopback endpoint with `?terrain=1`, and the toggle forces a style reload because that is the only way to add or drop the block. Needs a look at a pitched camera before it is called done. |
