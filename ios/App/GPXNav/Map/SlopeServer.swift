@@ -89,18 +89,30 @@ final class SlopeServer: @unchecked Sendable {
         }
     }
 
-    /// Release the spent listener and schedule another attempt while attempts
-    /// remain — 0.25s backing off to 2s each, about ten seconds in total,
-    /// which is orders of magnitude longer than a port takes to clear.
+    /// Release the spent listener and schedule another attempt.
+    ///
+    /// The first eight attempts are for ordinary teardown overlap — 0.25s
+    /// backing off to 2s each, about twelve seconds in total, which is orders
+    /// of magnitude longer than a port takes to clear. Past that the port is
+    /// being held by something else entirely: a sibling simulator on the same
+    /// host's network stack, or a relaunch that wedged rather than tore down.
+    /// The original code gave up there, and giving up is permanent — nothing
+    /// else retries, `onReady` never fires, `serverReady` never publishes, and
+    /// the map sits white until the next launch. So the ladder ends in a slow
+    /// steady retry instead: the views are already waiting on this bind, and a
+    /// reattempt every few seconds costs nothing but a log line until the port
+    /// comes back.
     private func bindFailed(_ error: Error, url: String) {
         listener = nil
-        guard bindAttempts < maxBindAttempts else {
-            print("SlopeServer failed to bind: \(error)")
-            return
+        let delay: Double
+        if bindAttempts < maxBindAttempts {
+            bindAttempts += 1
+            delay = min(0.25 * pow(2.0, Double(bindAttempts - 1)), 2.0)
+            print("SlopeServer bind attempt \(bindAttempts) failed (\(error)); retrying in \(String(format: "%.2f", delay))s")
+        } else {
+            delay = 5.0
+            print("SlopeServer still cannot bind (\(error)); retrying every \(Int(delay))s until the port frees")
         }
-        bindAttempts += 1
-        let delay = min(0.25 * pow(2.0, Double(bindAttempts - 1)), 2.0)
-        print("SlopeServer bind attempt \(bindAttempts) failed (\(error)); retrying in \(String(format: "%.2f", delay))s")
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.bind()
         }

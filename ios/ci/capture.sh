@@ -521,9 +521,9 @@ path, mode = sys.argv[1], sys.argv[2]
 BANDS = {"collapsed": (0.17, 0.72), "expanded": (0.17, 0.36), "nav": (0.10, 0.62)}
 SHEET = {"collapsed": 185, "expanded": 497}          # pt from bottom, detent height
 PROBES = {                                            # rails from the left edge,
-    "collapsed": [("L", 328), ("L", 270), ("R", 319), ("R", 270)],
-    "expanded":  [("L", 648), ("L", 594), ("R", 643), ("R", 594)],
-}
+    "collapsed": [("L", 270), ("R", 319), ("R", 270)],  # left rail is one circle
+    "expanded":  [("L", 594), ("R", 643), ("R", 594)],  # since the compass merged
+}                                                      # into the locate button
 PLAUSIBLE_W = {320, 375, 390, 393, 402, 414, 428, 430, 440}
 PLAUSIBLE_H = {568, 667, 736, 812, 844, 852, 874, 896, 926, 932}
 
@@ -615,7 +615,12 @@ if mode in SHEET:
 if mode in PROBES:
     half = int(16*scale)
     for side, ypt in PROBES[mode]:
-        cx = int(36*scale) if side == "L" else width - int((wpt-36)*scale)
+        # 36pt in from the side the control is on. This used to read
+        # `width - (wpt-36)*scale` for the right side, which is algebraically
+        # just 36*scale — the LEFT edge — so every right-hand probe had been
+        # sampling the left rail, and passing only while the left rail had a
+        # control at the same heights. One left circle later, it did not.
+        cx = int(36*scale) if side == "L" else width - int(36*scale)
         cy = h - int(ypt*scale)
         dark = 0
         for yy in range(max(0, cy-half), min(h, cy+half)):

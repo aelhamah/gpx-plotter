@@ -83,12 +83,9 @@ struct MapView: UIViewRepresentable {
     /// coordinator, which cannot mutate the representable's own storage.
     private let profileCache = ProfileCache()
     /// The profile index the trace was last cut at, so repeated frames at the
-    /// same position do no work. Reset whenever the style is replaced, because a
-    /// style swap drops the trace's source and it has to be re-added.
+    /// same position do no work. Reset whenever the style is replaced, because
+    /// a style swap drops the trace's source and it has to be re-added.
     private let traceState = TraceState()
-    /// The `fitToken` the representable last acted on, so `updateUIView` only
-    /// refits when the button was actually tapped.
-    private let fitState = FitState()
     private let followState = FollowState()
 
     init(
@@ -111,9 +108,6 @@ struct MapView: UIViewRepresentable {
         self._fitToken = fitToken
         self.maxBasemapZoom = maxBasemapZoom
         self.mapInsets = mapInsets
-        // Seeded, so the first `updateUIView` does not read as a fit request and
-        // animate the camera over the fit the coordinator has already done.
-        self.fitState.token = fitToken.wrappedValue
     }
 
     func makeUIView(context: Context) -> MLNMapView {
@@ -160,9 +154,21 @@ struct MapView: UIViewRepresentable {
         refreshWaypointLabels(for: mapView)
         applyFollowIfNeeded(to: mapView)
         applyHeadingIfNeeded(to: mapView)
-        if fitState.token != fitToken {
-            fitState.token = fitToken
+        // Compared against the coordinator's copy, which survives updates; a box
+        // stored on the struct would be recreated — and re-seeded — every time
+        // SwiftUI rebuilt it, and the button would never fit anything.
+        if context.coordinator.lastFitToken != fitToken {
+            context.coordinator.lastFitToken = fitToken
             fitMapToRoute(mapView, route: route, animated: true)
+        }
+        // The style can finish loading before the view's first layout (a warm
+        // loopback answers instantly), and the fit in `didFinishLoading` then
+        // bails on the zero-size viewport. The first layout-driven update —
+        // chrome frames, the style-loaded generation — lands here with a real
+        // size, so this is the second chance. `style != nil` keeps it from
+        // racing ahead of the style load itself.
+        if !context.coordinator.hasFitted, mapView.style != nil {
+            context.coordinator.hasFitted = fitMapToRoute(mapView, route: route, animated: false)
         }
     }
 
@@ -529,9 +535,22 @@ struct MapView: UIViewRepresentable {
         mapView.setCamera(camera, withDuration: 0.6, animationTimingFunction: nil)
     }
 
-    private func fitMapToRoute(_ mapView: MLNMapView, route: Route, animated: Bool) {
+    /// Frame the route, if there is a route to frame and a map to frame it in.
+    ///
+    /// Returns false when it did nothing, so the caller can retry later rather
+    /// than latching: the loopback answers a warm style instantly and the style
+    /// can finish loading before the view's first layout — a zero-size viewport
+    /// yields no zoom, and MapLibre drops a camera move computed against one.
+    /// Fitting once against `size == .zero` used to leave the map at its
+    /// world-view default with `hasFitted` latched and nothing left to correct
+    /// it.
+    @discardableResult
+    private func fitMapToRoute(_ mapView: MLNMapView, route: Route, animated: Bool) -> Bool {
         let bounds = Self.bounds(of: route)
-        guard let bounds else { return }
+        guard let bounds else { return false }
+        // Before any of the padding arithmetic: an un-laid-out view is not a
+        // viewport.
+        guard mapView.bounds.width > 1, mapView.bounds.height > 1 else { return false }
 
         // `setVisibleCoordinateBounds` takes no zoom argument and, while it is
         // animating, `zoomLevel` reports the zoom it is *leaving* — so a
@@ -547,10 +566,15 @@ struct MapView: UIViewRepresentable {
             width: Double(mapView.bounds.width),
             height: Double(mapView.bounds.height)
         )
+        // The sheet is up on every screen that fits, and it only reaches this
+        // view as an input inset; a bottom padding smaller than the sheet frames
+        // the route centred behind it, which reads as the button having done
+        // nothing. The constant stays the floor for the navigation screen,
+        // which draws no sheet and passes zeros.
         let paddingEdges = (
             top: Double(padding.top),
             left: Double(padding.left),
-            bottom: Double(padding.bottom),
+            bottom: Double(max(padding.bottom, mapInsets.bottom)),
             right: Double(padding.right)
         )
         let targetZoom = MapFit.clampedZoom(
@@ -579,6 +603,7 @@ struct MapView: UIViewRepresentable {
             )
         }
         mapView.setCamera(camera, withDuration: animated ? 0.4 : 0, animationTimingFunction: nil)
+        return true
     }
 
     /// The geographic bounds of a route, or nil when it has no extent.
@@ -800,13 +825,6 @@ struct MapView: UIViewRepresentable {
         var index: Int?
     }
 
-    /// Reference box for the last acted-on `fitToken`, for the same reason as
-    /// `TraceState`: the representable is a struct, but `updateUIView` has to
-    /// remember whether this update was caused by the fit button.
-    private final class FitState {
-        var token: Int?
-    }
-
     /// The fix the camera last followed, so a state change that did not move the
     /// user does not re-animate the map. Without it every unrelated SwiftUI
     /// update would ease the camera to the same place again.
@@ -947,9 +965,18 @@ struct MapView: UIViewRepresentable {
     final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate {
         private let parent: MapView
         var hasFitted = false
+        /// The `fitToken` last acted on. Lives here, not on the struct: the
+        /// coordinator is created once per map view and survives the updates
+        /// that rebuild the struct, so a token stored here can actually
+        /// distinguish "the button was tapped" from "SwiftUI made a new copy".
+        /// Seeded from the token at creation so the first `updateUIView` does
+        /// not read as a fit request and animate over the fit
+        /// `didFinishLoading` is about to do.
+        var lastFitToken: Int
 
         init(_ parent: MapView) {
             self.parent = parent
+            self.lastFitToken = parent.fitToken
         }
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
@@ -963,8 +990,7 @@ struct MapView: UIViewRepresentable {
             parent.onStyleLoaded?()
             parent.applyEverything(to: mapView)
             if !hasFitted {
-                parent.fitMapToRoute(mapView, route: parent.route, animated: false)
-                hasFitted = true
+                hasFitted = parent.fitMapToRoute(mapView, route: parent.route, animated: false)
             }
             // After the fit, so fitting the route does not undo the tilt.
             parent.applyTerrainCamera(to: mapView)
@@ -981,7 +1007,6 @@ struct MapView: UIViewRepresentable {
 
         func mapView(_ mapView: MLNMapView, didFailToLoadWithError error: Error) {
             let nsError = error as NSError
-            print("[Map] style failed to load: \(nsError.localizedDescription) (\(nsError.domain) \(nsError.code))")
             parent.loadError = "Map failed to load: \(nsError.localizedDescription)"
         }
 

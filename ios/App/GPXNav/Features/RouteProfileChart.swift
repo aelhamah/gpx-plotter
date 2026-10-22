@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import UIKit
 import RouteKit
 
 /// Elevation profile for a route, drawn with Swift Charts.
@@ -15,6 +16,12 @@ struct RouteProfileChart: View {
     /// Distance along the route currently scrubbed, which the map draws as a
     /// trace. Nil when nothing is scrubbed.
     @Binding var scrubbedDistance: Double?
+
+    /// The impact generator for the scrub tick, kept across frames so the first
+    /// tick after a touch is not paying for the generator's warm-up.
+    @State private var scrubHaptics = UIImpactFeedbackGenerator(style: .light)
+    /// Where the last scrub impact fired, so a drag does not buzz on every frame.
+    @State private var lastHapticDistance: Double?
 
     /// How many samples the chart draws.
     ///
@@ -100,7 +107,7 @@ struct RouteProfileChart: View {
                     // the profile instead of escaping the plot and landing on the
                     // stats bar, which is what `y: .disabled` did.
                     .annotation(position: .top, overflowResolution: .init(x: .fit, y: .fit)) {
-                        readout(at: scrubbedDistance)
+                        readout(at: scrubbedDistance, in: samples)
                     }
             }
         }
@@ -122,7 +129,16 @@ struct RouteProfileChart: View {
                                 let origin = geometry[proxy.plotAreaFrame].origin
                                 let x = value.location.x - origin.x
                                 guard let distance: Double = proxy.value(atX: x) else { return }
-                                scrubbedDistance = min(max(distance, 0), analysis.totalDistance)
+                                let clamped = min(max(distance, 0), analysis.totalDistance)
+                                scrubbedDistance = clamped
+                                // One tick per ~25 m of travel: enough for the
+                                // gesture to feel it is going somewhere, sparse
+                                // enough not to buzz continuously under a finger
+                                // held still while the drag jitters a point.
+                                if lastHapticDistance.map({ abs(clamped - $0) >= 25 }) ?? true {
+                                    lastHapticDistance = clamped
+                                    scrubHaptics.impactOccurred()
+                                }
                             }
                     )
             }
@@ -181,16 +197,30 @@ struct RouteProfileChart: View {
         )
     }
 
-    /// Distance, elevation, and grade at the scrubbed point.
-    private func readout(at distance: Double) -> some View {
-        let index = analysis.profile.index(nearestTo: distance)
-        let point = analysis.profile.points[min(max(index, 0), analysis.profile.points.count - 1)]
-        let elevation = Units.formatElevation(point.elevation, system: system)
+    /// Distance and elevation at the scrubbed point, for the tooltip on the rule.
+    ///
+    /// The distance is the gesture's own, so the number matches where the rule
+    /// sits to the pixel. The elevation comes from the nearest *chart sample*
+    /// rather than the raw profile: the profile's nearest point can be one the
+    /// thinning filtered out for having no elevation, and `Units.formatElevation`
+    /// then draws the missing-value dash — a tooltip half full of `—`. Every
+    /// sample has an elevation by construction, and they are what the line under
+    /// the tooltip is drawn from.
+    ///
+    /// Solid dark rather than a material: over the route's pink area fill the
+    /// blur picked the colour up and the capsule read as a muddy patch of the
+    /// chart it sits on. A tooltip has to look like it is *on top of* the chart.
+    private func readout(at distance: Double, in samples: [ProfileSample]) -> some View {
+        let nearest = samples.min { abs($0.distance - distance) < abs($1.distance - distance) }
+        let elevation = Units.formatElevation(nearest?.elevation, system: system)
         return Text("\(Units.formatDistance(distance, system: system)) · \(elevation)")
-            .font(.caption2.monospacedDigit())
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.regularMaterial, in: Capsule())
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.black.opacity(0.8), in: Capsule())
+            .shadow(radius: 3, y: 1)
+            .allowsHitTesting(false)
     }
 
     /// Why there is no line, and what is being done about it.
@@ -333,17 +363,36 @@ struct ProfileSample: Identifiable {
 
     /// Angle of each profile segment, in degrees, indexed with the profile.
     ///
-    /// `atan2(rise, run)` rather than a rise-over-run percentage so the value is
+    /// `atan2(|rise|, run)` rather than a rise-over-run percentage so the value is
     /// already in the units `SlopeBands.slopeBandColorHex` expects. A segment with
     /// no horizontal run is 90°, not a division by zero.
+    ///
+    /// The rise is absolute, matching `Haversine.degrees` and the web app's
+    /// `profileSlope`: a band says how steep the ground is, not which way it
+    /// points. Signed, every descent was a negative angle and `slopeBandColorHex`
+    /// sorts anything under 20° into the green band — so the steepest part of the
+    /// route, drawn as a visibly sharp line, came out uniformly green.
+    ///
+    /// The run spans back to the nearest earlier sample that **has** an
+    /// elevation, not merely to `index - 1`. Resampling leaves every sample
+    /// between the route's vertices at `nil` elevation, and the terrain fill that
+    /// would complete them is opt-in (`-fillElevation`), so with the default
+    /// settings adjacent samples are almost never both known — pairing `index`
+    /// with `index - 1` yielded a nil gradient for every segment and the whole
+    /// trace fell into the `?? 0` green band however steep the hill. Skipping the
+    /// nils computes the vertex-to-vertex angle, which is the same number the
+    /// stats bar's "Max slope" reports.
     private static func slopeDegrees(from profile: RouteProfile) -> [Double?] {
         var result = [Double?](repeating: nil, count: profile.points.count)
-        for index in 1..<profile.points.count {
-            guard let from = profile.points[index - 1].elevation,
-                  let to = profile.points[index].elevation
-            else { continue }
-            let run = profile.cumulativeDistances[index] - profile.cumulativeDistances[index - 1]
-            result[index] = atan2(to - from, run) * 180 / .pi
+        var previousKnown: Int?
+        for index in profile.points.indices {
+            guard let elevation = profile.points[index].elevation else { continue }
+            if let previous = previousKnown,
+               let previousElevation = profile.points[previous].elevation {
+                let run = profile.cumulativeDistances[index] - profile.cumulativeDistances[previous]
+                result[index] = atan2(abs(elevation - previousElevation), run) * 180 / .pi
+            }
+            previousKnown = index
         }
         return result
     }

@@ -32,23 +32,15 @@ enum MapChrome {
     /// Gap between the sheet's top edge and the rails sitting above it.
     static let railInset: CGFloat = 12
 
-    /// The left rail's height: two circles and the gap between them.
+    /// The left rail's height: one circle.
     ///
-    /// Two, not three, and the arithmetic is the reason.
-    ///
-    /// The rails are bottom-anchored to the sheet, so the taller the sheet gets
-    /// the higher they have to sit, and at the expanded detent they arrive in
-    /// the space that has to be shared with the search button. Measured on an
-    /// iPhone 17 Pro the content area is 665pt, the expanded sheet takes 475 of
-    /// it, and what is left above the sheet is 190pt — against a three-circle
-    /// rail (164pt) plus a search button (40pt) plus their margins. Three does
-    /// not fit; the rail's top circle lands on the search button. Two leaves a
-    /// 20pt gap.
-    ///
-    /// 3D terrain went to `MapModesSheet` with the other overlays rather than
-    /// crowding the map, which is where Apple puts everything that is not
-    /// orientation or framing anyway.
-    static let railHeight = controlSize * 2 + controlSpacing
+    /// It was two — compass and fit — and the detent arithmetic above is why it
+    /// never became three: at the expanded detent the rail shares its space with
+    /// the search button. The compass is gone now (it duplicated what
+    /// `LocateButton` already does once the location is known; see
+    /// `MapControlRail`), so the rail is a single framing control with all of
+    /// the clearance the two-circle version had and more to spare.
+    static let railHeight = controlSize
 
     /// The hairline between the two halves of the right capsule.
     static let pillDivider: CGFloat = 1
@@ -170,26 +162,20 @@ struct WaypointLabelOverlay: View {
     }
 }
 
-/// The map's orientation and view controls, as a rail of separate circles.
+/// The map's framing control, as a single circle.
 ///
-/// Orientation and framing, each of which answers one question about where you
-/// are or what you are looking at. They are loose circles rather than a capsule
-/// because they are not one family — a compass and a fit button have nothing to
-/// do with each other, and a shared container would imply a relationship that is
-/// not there.
-///
-/// The terrain toggle is the odd one out and still rides here, because it is the
-/// one overlay a reader reaches for while looking at the map rather than while
-/// deciding what kind of map they want. The rest live in `MapModesSheet`.
+/// It used to hold the compass above the fit button, but the compass was a
+/// duplicate: `LocateButton` in `MapControlPill` already calls
+/// `location.toggleHeading()` once a location fix exists — the same action the
+/// compass called, behind a different glyph. Orientation and location are one
+/// question, which is the capsule's whole reason to exist; the compass joined
+/// it by disappearing into the control that already answered it.
 struct MapControlRail: View {
     let onFit: () -> Void
 
     var body: some View {
-        VStack(spacing: MapChrome.controlSpacing) {
-            CompassButton()
-            FitButton(action: onFit)
-        }
-        .chromeFrame("rail")
+        FitButton(action: onFit)
+            .chromeFrame("rail")
     }
 }
 
