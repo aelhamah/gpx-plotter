@@ -1,10 +1,10 @@
 window.GPXNAV_PREVIEW = {
-  "commit": "8e0fcc1",
+  "commit": "93115a1",
   "branch": "fix/ios-blank-basemap",
   "device": "iPhone 17 Pro Max",
   "runtime": "iOS 26.2",
   "xcode": "Xcode 26.2",
-  "capturedAt": "2026-10-22T19:42:34Z",
+  "capturedAt": "2026-10-22T21:39:29Z",
   "demoTiles": false,
   "width": 828,
   "height": 1800,
@@ -21,8 +21,6 @@ window.GPXNAV_PREVIEW = {
     {"id": "route-terrain", "group": "Overlays", "label": "3D terrain", "file": "shots/route-terrain.png", "args": "-tab navigate -openFirstRoute -terrain3D"},
     {"id": "route-satellite", "group": "Overlays", "label": "Satellite basemap", "file": "shots/route-satellite.png", "args": "-tab navigate -openFirstRoute -satellite"},
     {"id": "nav", "group": "Navigation", "label": "Live guidance", "file": "shots/nav.png", "args": "-tab navigate -openFirstRoute -navigate"},
-    {"id": "search", "group": "Search", "label": "Place search, from the map", "file": "shots/search.png", "args": "-tab navigate -openFirstRoute -openSearch"},
-    {"id": "search-create", "group": "Search", "label": "Place search, from Create", "file": "shots/search-create.png", "args": "-tab create -openSearch"},
     {"id": "storage", "group": "Offline", "label": "Offline storage screen", "file": "shots/storage.png", "args": "-tab settings -openStorage"},
     {"id": "storage-sample", "group": "Offline", "label": "Offline storage screen, sample download", "file": "shots/storage-sample.png", "args": "-tab settings -openStorage -seedStorageSample"}
   ]
