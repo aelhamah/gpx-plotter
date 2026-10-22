@@ -295,7 +295,7 @@ same `terrain` source — about five lines. On MapKit this was a whole hand-roll
 `LineMark(xStart:xEnd:yStart:yEnd:)` inside a `Chart` plot, foreground-styled
 with the exact `slopeBandColorHex` colours, translucent `AreaMark` fill at 0.22
 alpha to match. A `RuleMark` selection drives the profile-trace overlay. The
-six-band slope legend is unchanged.
+six-band slope legend now sits on the map, beside the shading it explains.
 
 **Search** is a direct port of `geocode.ts`: debounced, six results, `proximity`
 = current map centre rounded to five decimals, same `Peak` / `Trailhead` /
@@ -363,7 +363,9 @@ makes the profile-trace interaction (§ below) possible.
 over the map rather than in a `VStack` beside it.
 
 The sheet has two detents: collapsed it is **just the figures**, expanded it
-carries the figures, the profile, the slope legend, and the offline row. The
+carries the figures, the profile, and the offline row — plus the slope legend's
+old row, which stays in the height (the capture pins the sheet's size) though
+the legend itself now sits on the map. The
 expanded detent is a `.height(_:)` — the content's own height, not `.large`. A
 profile is for scrubbing, and scrubbing traces the position on the map, so the map
 has to stay visible while the sheet is up; `.large` covered nearly the whole

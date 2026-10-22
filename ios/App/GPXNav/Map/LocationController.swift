@@ -235,9 +235,31 @@ final class LocationController: NSObject, ObservableObject {
     /// change in the icon, and nothing to say why. Toggling anyway means the mode
     /// the user asked for is the mode they get; the map simply stays north-up
     /// until a heading turns up, which is the honest outcome.
+    ///
+    /// Turning heading-follow on also (re)starts the heading stream. `locate()`
+    /// starts it, but only on the branch where authorisation is already granted:
+    /// a first-ever locate requests permission and gets its fix back through
+    /// the authorisation callback, which does not start headings, and the
+    /// button's `onDisappear` stops them outright — so the second tap, which is
+    /// the one that asks the map to face the way the device does, found the
+    /// stream dead and the map sat north-up forever. Starting it here covers
+    /// both, and `startUpdatingHeading()` is idempotent for the case where
+    /// `locate()` already began it. A repeated call does not reset anything a
+    /// magnetometer reset would not reset anyway; the cost is one extra call on
+    /// a tap the user already made.
     func toggleHeading() {
         followsHeading.toggle()
         recentreRequested = true
+        if followsHeading {
+            if CLLocationManager.headingAvailable() {
+                manager.startUpdatingHeading()
+            }
+        } else if !isStreaming {
+            // Nothing else reads the heading while follow is off and navigation
+            // is not streaming, so the magnetometer goes back to sleep rather
+            // than running until the button leaves the screen.
+            manager.stopUpdatingHeading()
+        }
     }
 
     /// Take the pending recentre request, if there is one.

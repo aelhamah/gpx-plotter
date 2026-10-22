@@ -35,11 +35,12 @@ enum MapChrome {
     /// The left rail's height: one circle.
     ///
     /// It was two — compass and fit — and the detent arithmetic above is why it
-    /// never became three: at the expanded detent the rail shares its space with
-    /// the search button. The compass is gone now (it duplicated what
-    /// `LocateButton` already does once the location is known; see
-    /// `MapControlRail`), so the rail is a single framing control with all of
-    /// the clearance the two-circle version had and more to spare.
+    /// never became three: at the expanded detent the rail shares its band with
+    /// the top-leading chrome (the waypoint chip, and until recently the search
+    /// button). The compass is gone now (it duplicated what `LocateButton`
+    /// already does once the location is known; see `MapControlRail`), so the
+    /// rail is a single framing control with all of the clearance the
+    /// two-circle version had and more to spare.
     static let railHeight = controlSize
 
     /// The hairline between the two halves of the right capsule.
@@ -249,15 +250,69 @@ struct FitButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "scope")
+            FitGlyph()
+                .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                .frame(width: 17, height: 17)
         }
         .buttonStyle(ChromeButtonStyle())
         .accessibilityLabel("Fit the route to the screen")
     }
 }
 
+/// The web app's fit glyph: four corner brackets, ported from the inline SVG on
+/// `#fit-route` (`M8 3H5a2 2 0 0 0-2 2v3…`, a 24×24 viewBox, stroke-width 2).
+///
+/// Not an SF Symbol: `scope` — the crosshair this used to draw — is a reticle
+/// with a centre mark, where the web control is corner brackets, and the two do
+/// not read as the same button. The bracket is drawn once and rotated four
+/// times about the centre, so the four corners cannot drift out of step.
+struct FitGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let side = min(rect.width, rect.height)
+        let scale = side / 24
+        // Centre-relative, so each rotation below is about the glyph's own
+        // centre and needs no translation of its own.
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: (x - 12) * scale, y: (y - 12) * scale)
+        }
+
+        // The top-left bracket of the web path: a horizontal arm, a round
+        // corner, a vertical arm. The corner is a true quarter arc of the
+        // 24-unit circle centred at (5,5), as the SVG's `a2 2 0 0 0-2 2` draws
+        // it, approximated by the standard circular cubic (k = 0.5523) — under
+        // 0.03% chord error, which is a rounding error at this size.
+        let k: CGFloat = 1.1046
+        var bracket = Path()
+        bracket.move(to: point(8, 3))
+        bracket.addLine(to: point(5, 3))
+        bracket.addCurve(to: point(3, 5), control1: point(5 - k, 3), control2: point(3, 5 - k))
+        bracket.addLine(to: point(3, 8))
+
+        var rotated = Path()
+        for quarter in 0..<4 {
+            rotated.addPath(
+                bracket,
+                transform: CGAffineTransform(rotationAngle: CGFloat(quarter) * .pi / 2)
+            )
+        }
+        var path = Path()
+        path.addPath(
+            rotated,
+            transform: CGAffineTransform(translationX: rect.midX, y: rect.midY)
+        )
+        return path
+    }
+}
+
 /// The six avalanche slope bands, matching `SlopeBands.slopeBandColorHex` and the
-/// web app's legend.
+/// web app's `#slope-legend`.
+///
+/// On the map at the web app's own corner — bottom-right, above the controls —
+/// shown with the shading it explains, rather than under the profile chart,
+/// which is where this used to sit: the web legend is an on-map overlay
+/// toggled with the slope layer (`main.ts` toggles `#slope-legend` with
+/// `slopeEnabled`), and the chart it appeared to explain is coloured the same
+/// way with or without it.
 ///
 /// The ranges are stated here rather than derived from the band edges so the
 /// labels read the way the web app's do (`20–30°`, not `20.0–29.9°`).
@@ -272,29 +327,35 @@ struct SlopeLegend: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Slope angle")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                ForEach(Self.bands, id: \.label) { band in
-                    HStack(spacing: 3) {
-                        Circle()
-                            .fill(Color(hex: band.hex))
-                            .frame(width: 8, height: 8)
-                        Text(band.label)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Slope \(band.label)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color(hex: "#0f172a"))
+            ForEach(Self.bands, id: \.label) { band in
+                HStack(spacing: 7) {
+                    Capsule()
+                        .fill(Color(hex: band.hex))
+                        .frame(width: 15, height: 6)
+                    Text(band.label)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(hex: "#0f172a"))
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Slope \(band.label)")
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: PanelMetrics.legendHeight)
+        // The web card: `rgba(255,255,255,.85)` over the map, a `rgba(0,0,0,.12)`
+        // hairline, 9pt corners, a soft shadow. A fixed white rather than the
+        // system material, because the legend's dark ink is part of the look —
+        // it is the same card the web app draws at `right: 18px; bottom: 28px`.
+        .padding(.horizontal, 13)
+        .padding(.vertical, 11)
+        .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
     }
 }
 

@@ -192,28 +192,6 @@ explicitly trusted" is the certificate trust prompt, "requires a development
 team" is the extension not inheriting `Secrets.xcconfig`, and "Mismatched bundle
 IDs" is `PRODUCT_BUNDLE_IDENTIFIER` on the extension.
 
-### Search
-
-Both entry points take `-openSearch`: the map's floating button and the Create
-tab's "Search for a place".
-
-```bash
-xcrun simctl launch $D com.example.GPXNav -tab create -openSearch
-xcrun simctl launch $D com.example.GPXNav -tab navigate -openFirstRoute -openSearch
-```
-
-Without a MapTiler key both show **Search is unavailable**, which is the point:
-`geocodingClient` is nil, every search returned an empty list, and an empty list
-looks exactly like a search that found nothing. That is what #69 was — a working
-search with nothing to search, reported as a search that did not work. The viewer's
-button had a second problem on top: its figures sheet is presented for the whole
-life of the screen, and a sheet presented while another is up from the same host
-is dropped, so the button did nothing at all. Both are fixed and both are captured.
-
-The search sheet's `NavigationStack` puts its field at the *bottom* of the sheet
-on iOS 26 rather than in the navigation bar. That is how the system draws it, not
-something the app chose.
-
 ### The offline storage screen
 
 `-openStorage` opens it directly from Settings, which is how the preview
@@ -291,9 +269,10 @@ This was pinned down on the simulator rather than assumed:
 - deferring the request by half a second, five seconds, or thirty-five seconds
   does not help, so it is not a matter of the map still loading.
 
-The search button on the map screen is presumably broken the same way, which
-would mean the sheet has never worked for anyone rather than only under `simctl`.
-Fixing it means giving the search a presentation host that is not already busy —
+The map screen's search button was presumably broken the same way — the sheet
+never worked for anyone rather than only under `simctl` — and it has been
+removed for now, so the Create tab is the only search entry point. Restoring it
+means giving the search a presentation host that is not already busy —
 most likely by making the figures panel an overlay in the view instead of a
 sheet, or by presenting search from `RootTabView`. Until then the capture leaves
 the scene out rather than publish a frame identical to the plain route screen.

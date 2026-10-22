@@ -145,8 +145,8 @@ enum AppConfig {
             + safeAreaBottom
     }
 
-    /// Height of the sheet's tall detent: the figures, the profile, the slope
-    /// legend, and the offline row, and nothing more.
+    /// Height of the sheet's tall detent: the figures, the profile, the legend's
+    /// old row, and the offline row, and nothing more.
     ///
     /// Sized for the **tallest** layout — every optional row present — because the
     /// profile chart is flexible and absorbs whatever is left over. Under-reporting
@@ -367,7 +367,13 @@ enum PanelMetrics {
     /// The key-missing warning. Only present with no MapTiler key.
     static let keyWarningHeight: CGFloat = 24
 
-    /// The six avalanche slope bands.
+    /// The row the slope legend used to take under the profile.
+    ///
+    /// The legend moved onto the map (see `SlopeLegend`), but the row stays in
+    /// the detent: the sheet keeps the height it was measured at — the frame
+    /// assertions in `ios/ci/capture.sh` pin it — and the flexible chart
+    /// absorbs the space instead of the sheet shrinking by the legend's own
+    /// height.
     static let legendHeight: CGFloat = 47
 
     /// The offline download row. Tallest when its explanation wraps to two lines.

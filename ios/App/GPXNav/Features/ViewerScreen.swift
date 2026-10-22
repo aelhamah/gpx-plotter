@@ -122,22 +122,34 @@ struct ViewerScreen: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                HStack(spacing: 8) {
-                    searchButton
-                    waypointCount
+                waypointCount
+                    .padding(.leading, 12)
+                    // Sits just under the navigation bar rather than 52pt below
+                    // it. The bar is 113pt on a notched device and the rails are
+                    // bottom-anchored, so every point this sits lower is a point
+                    // taken out of the space the rails need at the expanded
+                    // detent. See `MapChrome.railHeight`.
+                    .padding(.top, 12)
+                    // Its frame is the top edge the labels must clear — the
+                    // padded frame starts exactly at the content region's top,
+                    // which is where the navigation bar ends. The search button
+                    // that used to sit here is gone (it never worked while the
+                    // figures sheet is up — see docs/dev.md); the waypoint chip,
+                    // when there is one, still has to be avoided.
+                    .chromeFrame("topLeading")
+            }
+            // The slope legend, on the map at the web app's own corner: it
+            // explains the map's slope shading, so it belongs with the shading
+            // rather than under the profile chart, which is where it used to
+            // sit.
+            .overlay(alignment: .bottomTrailing) {
+                if workspace.showSlope {
+                    SlopeLegend()
+                        .padding(.trailing, 12)
+                        .padding(.bottom, MapChrome.bottomInset(panelHeight: panelHeight)
+                            + MapChrome.pillHeight + MapChrome.railInset)
+                        .chromeFrame("slopeLegend")
                 }
-                .padding(.leading, 12)
-                // Sits just under the navigation bar rather than 52pt below it.
-                // That literal was both too much and not enough: the bar is 113pt
-                // on a notched device, and the rails are bottom-anchored, so every
-                // point the search button sits lower is a point taken out of the
-                // space the rails need at the expanded detent. See
-                // `MapChrome.railHeight`.
-                .padding(.top, 12)
-                // Its frame is the top edge the labels must clear — the padded
-                // frame starts exactly at the content region's top, which is
-                // where the navigation bar ends.
-                .chromeFrame("search")
             }
             // Both rails, anchored to the sheet rather than to opposite ends of
             // the screen. They move with the sheet and share one band of known
@@ -250,11 +262,7 @@ struct ViewerScreen: View {
                     analysis.fillMissingElevations()
                 }
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
-                    // Through `openSearch()`, not straight to `isSearching`: the
-                    // panel has to come away first or the sheet is dropped, and a
-                    // capture that set the flag directly would photograph the
-                    // broken path and call it fixed.
-                    openSearch()
+                    isSearching = true
                 }
                 // `-scrub 0.4` seeds the profile scrub at a fraction of the
                 // route. `simctl` cannot drag, so this is how the map trace gets
@@ -272,12 +280,7 @@ struct ViewerScreen: View {
                     packs.download(for: route)
                 }
             }
-            .sheet(isPresented: $isSearching, onDismiss: {
-                // Put the figures back: `openSearch` took them away to make room,
-                // and a map that loses its statistics because you looked a peak
-                // up is its own small wrongness.
-                isPanelPresented = true
-            }) {
+            .sheet(isPresented: $isSearching) {
                 SearchView(proximity: route.points.first?.coordinate)
             }
             // The chrome reports where it drew itself; `mapInsets` turns those
@@ -345,10 +348,6 @@ struct ViewerScreen: View {
                 // has gone after the first drag — shows more profile instead.
                 .frame(height: chartRowHeight)
 
-                // The chart is coloured by these bands, so it is explained whether
-                // or not the on-map slope overlay happens to be switched on.
-                SlopeLegend()
-
                 OfflinePackBar(route: route, packs: packs)
             }
         }
@@ -393,24 +392,6 @@ struct ViewerScreen: View {
     /// hierarchy is still up — the flag flips and nothing appears. Dropping the
     /// panel first also means the readout is not competing with the stats for the
     /// screen.
-    /// Open the search sheet, which means putting the figures sheet away first.
-    ///
-    /// The viewer's figures sheet is presented for as long as the screen is up,
-    /// and a presentation made while another from the same host is already up is
-    /// dropped rather than queued — so the search button did nothing, with no
-    /// error and nothing to explain it. The recipe is `beginNavigation`'s:
-    /// dismiss, then ask on a later turn, because setting both in the same
-    /// transaction is what loses one of them.
-    ///
-    /// The figures come back when the search closes, so looking something up costs
-    /// a swipe of the panel rather than losing it.
-    private func openSearch() {
-        isPanelPresented = false
-        Task { @MainActor in
-            isSearching = true
-        }
-    }
-
     private func beginNavigation() {
         isPanelPresented = false
         // One runloop later, so the sheet's dismissal has been committed before
@@ -433,9 +414,13 @@ struct ViewerScreen: View {
         let fixed = PanelMetrics.expandChevronHeight
             + PanelMetrics.statsBlockHeight
             + PanelMetrics.chartSpacing
-            + PanelMetrics.legendHeight
             + PanelMetrics.offlineRowHeight
             + (AppConfig.keyProblemDescription == nil ? 0 : PanelMetrics.keyWarningHeight)
+        // No `legendHeight`: the slope legend moved to the map (see its overlay
+        // above), so the chart absorbs the row it used to sit in, exactly as it
+        // absorbs the key warning when there is none. The detent itself is
+        // unchanged — `AppConfig.expandedPanelHeight` still counts the row, and
+        // the chart is what takes up the slack.
         let available = panelHeight - Screen.safeAreaBottom - fixed
         return max(PanelMetrics.chartMinimumHeight, available)
     }
@@ -458,19 +443,20 @@ struct ViewerScreen: View {
     /// 49pt below where the buttons actually sat, nothing in the app could
     /// tell — the labels just went under the buttons.
     ///
-    /// The rails and the search button are obstacles rather than edge insets
-    /// because they are columns, not borders: an inset along an edge would cost
-    /// every label near it, where an obstacle costs only the ones that would
-    /// have landed under a button.
+    /// The rails, the waypoint chip's band and the slope legend are obstacles
+    /// rather than edge insets because they are columns, not borders: an inset
+    /// along an edge would cost every label near it, where an obstacle costs
+    /// only the ones that would have landed under a button.
     private var mapInsets: MapInsets {
         let screen = UIScreen.main.bounds
         // A little slack, so a label beside a button does not look glued to it
         // rather than merely clear of it.
         let slack: CGFloat = 4
 
-        let search = chromeFrames["search"]
+        let topLeading = chromeFrames["topLeading"]
         let rail = chromeFrames["rail"]
         let pill = chromeFrames["pill"]
+        let legend = chromeFrames["slopeLegend"]
         // The sheet runs to the screen's edge and its detent is measured above
         // the home indicator, so the sheet is `safeAreaBottom` taller than
         // `panelHeight`. Used only until the sheet has reported its own frame.
@@ -478,57 +464,24 @@ struct ViewerScreen: View {
             ?? (screen.height - panelHeight - Screen.safeAreaBottom)
 
         var obstacles: [CGRect] = []
-        if let search {
-            obstacles.append(search.insetBy(dx: -slack, dy: -slack))
-        }
-        if let rail {
-            obstacles.append(rail.insetBy(dx: -slack, dy: -slack))
-        }
-        if let pill {
-            obstacles.append(pill.insetBy(dx: -slack, dy: -slack))
+        for frame in [topLeading, rail, pill, legend] {
+            if let frame {
+                obstacles.append(frame.insetBy(dx: -slack, dy: -slack))
+            }
         }
         if let errorBanner = chromeFrames["errorBanner"] {
             obstacles.append(errorBanner.insetBy(dx: -slack, dy: -slack))
         }
 
         return MapInsets(
-            // Below the navigation bar: the search row's top edge is exactly
-            // where the content region starts.
-            top: search?.minY ?? Screen.topChrome,
+            // Below the navigation bar: the top-leading row's top edge is
+            // exactly where the content region starts.
+            top: topLeading?.minY ?? Screen.topChrome,
             // Up to the sheet's top edge — the rails sit inside that band and
             // are avoided as obstacles rather than by lifting this further.
             bottom: screen.height - panelTop,
             obstacles: obstacles
         )
-    }
-
-    @ViewBuilder
-    private var searchButton: some View {
-        if let limitation = AppConfig.searchLimitation {
-            // Tappable even with no geocoder, because the sheet explains itself
-            // and a control that silently refuses to respond is the thing this was
-            // reported as. A greyed glyph with the reason hidden in a tooltip
-            // told the user nothing on a phone, where there is no hover.
-            Button {
-                openSearch()
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .frame(width: 40, height: 40)
-                    .background(.regularMaterial, in: Circle())
-            }
-            .buttonStyle(ChromeButtonStyle())
-            .accessibilityLabel("Search")
-            .accessibilityHint(limitation)
-        } else {
-            Button {
-                openSearch()
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .frame(width: 40, height: 40)
-                    .background(.regularMaterial, in: Circle())
-            }
-            .accessibilityLabel("Search for a place")
-        }
     }
 
     @ViewBuilder
