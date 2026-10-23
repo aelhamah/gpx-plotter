@@ -97,10 +97,15 @@ make it happen.
 8. Switch to another tab and back, then tap **Locate** twice again. Same rotation:
    the button stops its heading stream when it disappears, so this covers the
    other way the stream arrives dead.
+9. While the map is facing your direction — and again after one more tap brings
+   it back to north-up — look at the blue dot itself: a translucent cone should
+   fan out of it, pointing the way you face. Switch tabs and back (the cycle
+   resets), and it should be gone until you tap Locate again.
 
 **Pass:** step 2 tracks rotation without movement, step 3 is a true 0° (not
-"approximately up"), step 6 respects a tap, and both viewer taps in steps 7-8
-end up heading-up on a device — not merely centred.
+"approximately up"), step 6 respects a tap, both viewer taps in steps 7-8
+end up heading-up on a device — not merely centred — and the step 9 cone is
+live wherever there is a heading to point with.
 
 **Why here:** the first heading is the one that matters and it cannot be tested
 without a magnetometer. The device is also the only place a genuine 0° reset is
@@ -113,7 +118,10 @@ distinguishable from one that is nearly-north.
 Visual pass, no pass/fail logic. Confirm these are distinct at arm's length:
 
 - **Start navigation** (`figure.hiking`) in the toolbar
-- **Locate** (`location.fill`) directly below it — the two used to be identical
+- **Locate** directly below it — three glyphs now, one per cycle step: the
+  outlined pin while the map is free, the solid one once it has centred on
+  you, the north needle once it is facing your direction (and the two used to
+  be identical to Navigate's)
 - **Fit** (four corner brackets, the web app's glyph — was the `scope` reticle)
   in the left rail
 - **Following / Pan freely** (`viewfinder.circle.fill` / `hand.raised.fill`) in the

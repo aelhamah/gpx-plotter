@@ -166,9 +166,9 @@ struct WaypointLabelOverlay: View {
 /// The map's framing control, as a single circle.
 ///
 /// It used to hold the compass above the fit button, but the compass was a
-/// duplicate: `LocateButton` in `MapControlPill` already calls
-/// `location.toggleHeading()` once a location fix exists — the same action the
-/// compass called, behind a different glyph. Orientation and location are one
+/// duplicate: `LocateButton` in `MapControlPill` already runs
+/// `location.cycleLocateMode()` — the same question of orientation and
+/// location, behind a different glyph. Orientation and location are one
 /// question, which is the capsule's whole reason to exist; the compass joined
 /// it by disappearing into the control that already answered it.
 struct MapControlRail: View {

@@ -76,18 +76,6 @@ struct MapView: UIViewRepresentable {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
 
-    /// Resampled profiles, kept per route so scrubbing does not resample on
-    /// every gesture change. A cache, not a source of truth: the profile the
-    /// stats and chart use lives in `RouteAnalysis`. It is a reference box
-    /// because the layer methods are non-mutating and are also called by the
-    /// coordinator, which cannot mutate the representable's own storage.
-    private let profileCache = ProfileCache()
-    /// The profile index the trace was last cut at, so repeated frames at the
-    /// same position do no work. Reset whenever the style is replaced, because
-    /// a style swap drops the trace's source and it has to be re-added.
-    private let traceState = TraceState()
-    private let followState = FollowState()
-
     init(
         route: Route,
         scrubbedDistance: Binding<Double?> = .constant(nil),
@@ -147,13 +135,16 @@ struct MapView: UIViewRepresentable {
             // `traceState.index` does reset: the swap removes the trace layer
             // with everything else, so with the index kept `applyProfileTrace`
             // would see "already drawn" and never redraw it.
-            traceState.index = nil
+            context.coordinator.traceState.index = nil
             return
         }
-        applyEverything(to: mapView)
-        refreshWaypointLabels(for: mapView)
-        applyFollowIfNeeded(to: mapView)
-        applyHeadingIfNeeded(to: mapView)
+        // Fits before the location logic, so a recentre is the last word in the
+        // update that carries one: the fits re-frame on their own schedule (the
+        // token the fit button sets, the one that waits for a laid-out style),
+        // and a locate request consumed *before* them came back to find the map
+        // parked on the route again — the launch-argument locate never saw its
+        // dot, and the same race was waiting for any locate near startup.
+        //
         // Compared against the coordinator's copy, which survives updates; a box
         // stored on the struct would be recreated — and re-seeded — every time
         // SwiftUI rebuilt it, and the button would never fit anything.
@@ -170,6 +161,10 @@ struct MapView: UIViewRepresentable {
         if !context.coordinator.hasFitted, mapView.style != nil {
             context.coordinator.hasFitted = fitMapToRoute(mapView, route: route, animated: false)
         }
+        applyEverything(to: mapView, styleLoaded: context.coordinator.styleLoaded, coordinator: context.coordinator)
+        refreshWaypointLabels(for: mapView)
+        applyFollowIfNeeded(to: mapView, styleLoaded: context.coordinator.styleLoaded, coordinator: context.coordinator)
+        applyHeadingIfNeeded(to: mapView, coordinator: context.coordinator)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -373,6 +368,41 @@ struct MapView: UIViewRepresentable {
             existing.shape = pointFeature
         }
         if let source = style.source(withIdentifier: MapLayers.locationPointSource) as? MLNSource {
+            // The beam goes in first: layers stack in add order, and it belongs
+            // under the halo and dot so the dot sits on top of its own apex.
+            if style.image(forName: MapLayers.locationBeamImage) == nil {
+                style.setImage(MapLayers.beamImage(), forName: MapLayers.locationBeamImage)
+            }
+            if style.layer(withIdentifier: MapLayers.locationBeam) == nil {
+                let beam = MLNSymbolStyleLayer(identifier: MapLayers.locationBeam, source: source)
+                beam.iconImageName = NSExpression(forConstantValue: MapLayers.locationBeamImage)
+                beam.iconAnchor = NSExpression(forConstantValue: "center")
+                // Map-aligned in both senses: the cone lies on the ground with
+                // the dot, and `icon-rotate` is a compass bearing rather than a
+                // screen angle — north-up it points at north, heading-up it
+                // points up the screen, the way Apple Maps' beam does.
+                beam.iconRotationAlignment = NSExpression(forConstantValue: "map")
+                beam.iconPitchAlignment = NSExpression(forConstantValue: "map")
+                // The dot's own furniture: labels must neither push it aside
+                // nor be pushed.
+                beam.iconAllowsOverlap = NSExpression(forConstantValue: true)
+                beam.iconIgnoresPlacement = NSExpression(forConstantValue: true)
+                style.addLayer(beam)
+            }
+            if let beam = style.layer(withIdentifier: MapLayers.locationBeam) as? MLNSymbolStyleLayer {
+                // Live only while the cycle is running on a heading the stream
+                // is actually delivering (or the debug bearing stands in for it
+                // on a simulator). `heading` alone survives the stream stopping
+                // — a cone frozen at where you faced an hour ago is worse than
+                // no cone.
+                let isLive = location.followMode != .nothing
+                    && location.wantsHeading
+                    && location.heading != nil
+                beam.iconOpacity = NSExpression(
+                    forConstantValue: isLive ? MapLayers.Paint.locationBeamOpacity : 0
+                )
+                beam.iconRotation = NSExpression(forConstantValue: location.heading ?? 0)
+            }
             if style.layer(withIdentifier: MapLayers.locationHalo) == nil {
                 let halo = MLNCircleStyleLayer(identifier: MapLayers.locationHalo, source: source)
                 halo.circleRadius = NSExpression(forConstantValue: MapLayers.Paint.locationHaloRadius)
@@ -624,13 +654,13 @@ struct MapView: UIViewRepresentable {
 
     // MARK: - Everything
 
-    private func applyEverything(to mapView: MLNMapView) {
+    private func applyEverything(to mapView: MLNMapView, styleLoaded: Bool, coordinator: Coordinator) {
         applyRoutes(to: mapView)
-        applyProfileTrace(to: mapView)
+        applyProfileTrace(to: mapView, coordinator: coordinator)
         applyWaypoints(to: mapView)
         applyLocation(to: mapView)
         applyOverlays(to: mapView)
-        applyCamera(to: mapView)
+        applyCamera(to: mapView, styleLoaded: styleLoaded, coordinator: coordinator)
         // Last, so it reads the zoom whatever the layers above settled on.
         applyZoomCeiling(to: mapView)
     }
@@ -639,9 +669,9 @@ struct MapView: UIViewRepresentable {
 
     /// Draw the part of the route up to the scrubbed distance, in the web app's
     /// `TRACE_COLOR`.
-    private func applyProfileTrace(to mapView: MLNMapView) {
+    private func applyProfileTrace(to mapView: MLNMapView, coordinator: Coordinator) {
         guard let style = mapView.style else { return }
-        let profile = analysis(for: route)
+        let profile = analysis(for: route, coordinator: coordinator)
         let distance = scrubbedDistance
 
         guard let distance, distance > 0, profile.points.count > 1 else {
@@ -668,8 +698,8 @@ struct MapView: UIViewRepresentable {
         let step = max(profile.totalDistance / 2000, 1)
         let quantised = (distance / step).rounded() * step
         let quantisedIndex = profile.index(nearestTo: quantised)
-        guard quantisedIndex > 0, quantisedIndex != traceState.index else { return }
-        traceState.index = quantisedIndex
+        guard quantisedIndex > 0, quantisedIndex != coordinator.traceState.index else { return }
+        coordinator.traceState.index = quantisedIndex
 
         let coordinates = profile.points[0...quantisedIndex].map {
             CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
@@ -694,23 +724,41 @@ struct MapView: UIViewRepresentable {
 
     /// The resampled profile for `route`, cached so scrubbing does not rebuild
     /// it on every gesture change.
-    private func analysis(for route: Route) -> RouteProfile {
-        profileCache.profile(for: route)
+    private func analysis(for route: Route, coordinator: Coordinator) -> RouteProfile {
+        coordinator.profileCache.profile(for: route)
     }
 
     // MARK: - Camera
 
     /// Recentre on the fix and face the direction of travel, or north when the
-    /// locate button is tapped a second time.
+    /// locate button's cycle steps back to *my location*.
+    /// - Parameter styleLoaded: whether `didFinishLoading` has run. The camera
+    ///   waits for it, because the fit inside that callback re-frames the map
+    ///   *after* its own `applyEverything` — a request spent there came back to
+    ///   find the route fitted over the top of it.
     /// - Parameter force: move without a pending locate-button request, for the
     ///   navigation follow. The request is left unspent when forced, so a locate
     ///   tap during navigation still recentres.
-    private func applyCamera(to mapView: MLNMapView, force: Bool = false) {
+    private func applyCamera(to mapView: MLNMapView, styleLoaded: Bool, coordinator: Coordinator, force: Bool = false) {
         // Only when the locate button asked. Re-centring on every fix looks fine
         // with the one-shot locate, but navigation streams fixes continuously and
         // this would then drag the camera out from under anyone panning to look at
         // something else.
-        guard force || location.consumeRecentreRequest(), let fix = location.fix else { return }
+        //
+        // The fix is checked *before* the request is taken: a request from a cold
+        // button outlives the wait for the first fix — the permission round trip,
+        // `requestLocation`'s flight — and consuming it on an update where the fix
+        // has not arrived yet is how "tap to show my location" could leave the map
+        // parked wherever it was, with the dot off somewhere under the horizon.
+        //
+        // And until the style has *finished* loading (not merely begun: the
+        // style object exists while its resources are still streaming). The fit
+        // that lands in `didFinishLoading` re-frames the camera on its own, so
+        // a request spent before it has no way to survive it.
+        guard let fix = location.fix,
+              styleLoaded,
+              mapView.style != nil,
+              force || location.consumeRecentreRequest() else { return }
         let camera = mapView.camera.copy() as! MLNMapCamera
         camera.centerCoordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lon)
         applyRotation(to: camera)
@@ -726,7 +774,7 @@ struct MapView: UIViewRepresentable {
         // on a stationary phone can be a long time. Saying "I consumed this
         // heading" at the point of the move is true in both cases and false in
         // neither.
-        followState.lastHeading = location.heading
+        coordinator.followState.lastHeading = location.heading
         mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
     }
 
@@ -758,10 +806,10 @@ struct MapView: UIViewRepresentable {
     /// map keeps pointing where you pointed sixty seconds ago. The `lastHeading`
     /// box stops it re-easing on unrelated SwiftUI updates the same way
     /// `FollowState.lastFix` does for position.
-    private func applyHeadingIfNeeded(to mapView: MLNMapView) {
+    private func applyHeadingIfNeeded(to mapView: MLNMapView, coordinator: Coordinator) {
         guard location.followsHeading, let heading = location.heading else { return }
-        guard followState.lastHeading != heading else { return }
-        followState.lastHeading = heading
+        guard coordinator.followState.lastHeading != heading else { return }
+        coordinator.followState.lastHeading = heading
 
         let camera = mapView.camera.copy() as! MLNMapCamera
         applyRotation(to: camera)
@@ -773,9 +821,9 @@ struct MapView: UIViewRepresentable {
     /// Driven by a *changed fix* rather than by every state update: `updateUIView`
     /// runs for the unit toggle and the offline estimate too, and easing the
     /// camera on each of those would make the map twitch constantly.
-    private func applyFollowIfNeeded(to mapView: MLNMapView) {
-        let wasFollowing = followState.isFollowing
-        followState.isFollowing = followsUserLocation
+    private func applyFollowIfNeeded(to mapView: MLNMapView, styleLoaded: Bool, coordinator: Coordinator) {
+        let wasFollowing = coordinator.followState.isFollowing
+        coordinator.followState.isFollowing = followsUserLocation
         // Turning Following back on is a request to come back to the user even
         // when the fix has not moved since, which is otherwise the one case that
         // never re-centres: a pause on a trail, or a screenshot of a simulator
@@ -785,10 +833,10 @@ struct MapView: UIViewRepresentable {
         // next turn-on rotate: `applyHeadingIfNeeded` only rotates on a *changed*
         // heading, and a heading that was current before the mode went off is
         // still current after it comes back on.
-        if !location.followsHeading { followState.lastHeading = nil }
-        guard followsUserLocation, let fix = location.fix, resumed || followState.lastFix != fix else { return }
-        let firstFollow = followState.lastFix == nil
-        followState.lastFix = fix
+        if !location.followsHeading { coordinator.followState.lastHeading = nil }
+        guard followsUserLocation, let fix = location.fix, resumed || coordinator.followState.lastFix != fix else { return }
+        let firstFollow = coordinator.followState.lastFix == nil
+        coordinator.followState.lastFix = fix
         // The first fix only re-centres, which leaves the camera at whatever zoom
         // the viewer left it at -- and a map that has never been moved is at the
         // style's world view, so navigation would open on a continent. RouteKit
@@ -803,11 +851,11 @@ struct MapView: UIViewRepresentable {
             )
             mapView.setZoomLevel(zoom, animated: false)
         }
-        applyCamera(to: mapView, force: true)
+        applyCamera(to: mapView, styleLoaded: styleLoaded, coordinator: coordinator, force: true)
     }
 
     /// Reference-typed memo for resampled profiles.
-    private final class ProfileCache {
+    fileprivate final class ProfileCache {
         private var profiles: [Int: RouteProfile] = [:]
 
         func profile(for route: Route) -> RouteProfile {
@@ -821,14 +869,14 @@ struct MapView: UIViewRepresentable {
     /// Reference box for the last drawn trace index, for the same reason:
     /// the representable is a struct but the gesture needs to remember where it
     /// got to.
-    private final class TraceState {
+    fileprivate final class TraceState {
         var index: Int?
     }
 
     /// The fix the camera last followed, so a state change that did not move the
     /// user does not re-animate the map. Without it every unrelated SwiftUI
     /// update would ease the camera to the same place again.
-    private final class FollowState {
+    fileprivate final class FollowState {
         var lastFix: LocationFix?
         var isFollowing = false
         /// The bearing last rotated to, so a units toggle does not re-ease the map.
@@ -965,6 +1013,34 @@ struct MapView: UIViewRepresentable {
     final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate {
         private let parent: MapView
         var hasFitted = false
+
+        /// Resampled profiles, kept per route so scrubbing does not resample on
+        /// every gesture change. A cache, not a source of truth: the profile the
+        /// stats and chart use lives in `RouteAnalysis`.
+        fileprivate let profileCache = ProfileCache()
+        /// The profile index the trace was last cut at, so repeated frames at
+        /// the same position do no work. Reset whenever the style is replaced,
+        /// because a style swap drops the trace's source and it has to be
+        /// re-added.
+        fileprivate let traceState = TraceState()
+        /// Camera-follow state: the last fix, heading, and follow flag seen.
+        ///
+        /// Boxes live here rather than on the `MapView` struct for the same
+        /// reason as `lastFitToken`: SwiftUI rebuilds the struct — and with it
+        /// any box stored on it — on every update, so a box on the struct is
+        /// fresh every time. That made `lastHeading` read nil one update after
+        /// `applyCamera` set it, and `applyHeadingIfNeeded` re-eased a 0.6s
+        /// rotation on every state change — each one cancelling the locate
+        /// recentre mid-flight and freezing the camera a third of the way to
+        /// the dot.
+        fileprivate let followState = FollowState()
+        /// Whether `didFinishLoading` has completed at least once. Sticky
+        /// across style swaps: the swap does not re-fit (the camera carries
+        /// over), so there is no window where a fit could eat a recentre.
+        /// `applyCamera` waits on this rather than on `style != nil`, which
+        /// goes true while the style's resources are still streaming — before
+        /// the fit inside `didFinishLoading` has run.
+        var styleLoaded = false
         /// The `fitToken` last acted on. Lives here, not on the struct: the
         /// coordinator is created once per map view and survives the updates
         /// that rebuild the struct, so a token stored here can actually
@@ -988,7 +1064,7 @@ struct MapView: UIViewRepresentable {
             mapView.showsCompassView = false
             parent.loadError = nil
             parent.onStyleLoaded?()
-            parent.applyEverything(to: mapView)
+            parent.applyEverything(to: mapView, styleLoaded: styleLoaded, coordinator: self)
             if !hasFitted {
                 hasFitted = parent.fitMapToRoute(mapView, route: parent.route, animated: false)
             }
@@ -1003,6 +1079,9 @@ struct MapView: UIViewRepresentable {
             // after this method returns; refreshing here means the first frame
             // that shows the fitted route also shows the names in place.
             parent.refreshWaypointLabels(for: mapView)
+            // Last: from here the load fit can no longer land behind a
+            // recentre, so a pending locate request is safe to spend.
+            styleLoaded = true
         }
 
         func mapView(_ mapView: MLNMapView, didFailToLoadWithError error: Error) {

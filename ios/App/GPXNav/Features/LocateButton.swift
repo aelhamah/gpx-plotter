@@ -35,15 +35,25 @@ struct CompassNeedle: View {
     }
 
     private var symbol: String {
-        if location.followsHeading, location.heading != nil {
-            return "location.north.line.fill"
-        }
+        // The navigation HUD's compass stays a needle whatever the mode — the
+        // one branch that must not fall into the cycle's glyphs, because
+        // north-up there is simply the needle pointing up.
         if alwaysNeedle { return "location.north.line.fill" }
-        switch location.status {
-        case .located: return "location.fill"
-        case .locating: return "location.circle"
-        case .denied, .unavailable: return "location.slash"
-        case .idle: return "location"
+        switch location.followMode {
+        case .orientation:
+            return "location.north.line.fill"
+        case .myLocation:
+            return "location.fill"
+        case .nothing:
+            // The outlined pin while the map is free, so centred (solid) reads
+            // apart from not-yet-following (outline) the way Apple Maps'
+            // own arrow reads faint until it has you.
+            switch location.status {
+            case .located: return "location"
+            case .locating: return "location.circle"
+            case .denied, .unavailable: return "location.slash"
+            case .idle: return "location"
+            }
         }
     }
 }
@@ -61,22 +71,25 @@ struct LocateButton: View {
 
     var body: some View {
         Button {
-            // Already tracking: this tap switches between facing the direction
-            // of travel and facing north, the way a compass button behaves.
-            if location.fix != nil {
-                location.toggleHeading()
-            } else {
-                location.locate()
-            }
+            // Nothing → my location → location orientation → my location → …,
+            // one step per tap; see `LocationController.cycleLocateMode()`.
+            // The first step is the one that centres, even when a fix is
+            // already there.
+            location.cycleLocateMode()
         } label: {
             CompassNeedle()
         }
         .buttonStyle(ChromeButtonStyle(tint: tint))
         .accessibilityLabel(label)
         .accessibilityHint(label)
-        // This button is the only thing that starts heading updates outside
-        // navigation, and nothing stopped them.
-        .onDisappear { location.stopHeading() }
+        // The cycle ends where its stream was started: the magnetometer sleeps
+        // with the button, and the mode goes back to *nothing*, whose first tap
+        // is "my location" — the same rule as a fresh launch, so a returning
+        // tab cannot inherit a beam pointing at where you faced an hour ago.
+        .onDisappear {
+            location.stopHeading()
+            location.followMode = .nothing
+        }
     }
 
     /// How far to turn the needle, in degrees.
@@ -94,13 +107,22 @@ struct LocateButton: View {
         }
     }
 
+    /// What the tap will do next, read from the cycle rather than from the
+    /// fix: the fault states still speak for themselves, a fix in flight still
+    /// says it is finding you, and otherwise the label is the step the cycle is
+    /// about to take — *my location* from nothing, *direction of travel* from
+    /// there, *north* from orientation.
     private var label: String {
         switch location.status {
-        case .idle: return "Show my location"
-        case .locating: return "Finding your location"
-        case .located: return location.followsHeading ? "Face north" : "Face my direction of travel"
         case .denied: return "Location access is off. Enable it in Settings to use this."
         case .unavailable(let message): return message
+        case .locating: return "Finding your location"
+        case .idle, .located: break
+        }
+        switch location.followMode {
+        case .nothing: return "Show my location"
+        case .myLocation: return "Face my direction of travel"
+        case .orientation: return "Face north"
         }
     }
 }

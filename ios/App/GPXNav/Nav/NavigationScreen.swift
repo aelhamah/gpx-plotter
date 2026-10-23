@@ -91,12 +91,13 @@ struct NavigationScreen: View {
             session.start()
             location.startStreaming()
             // Facing the direction of travel, which is the point of navigating:
-            // the map was north-up because `followsHeading` lived on the locate
-            // button, and that button is not on this screen, so there was no way
-            // to reach it from here at all. Reset rather than assign, so coming
-            // back from the viewer with it turned off does not quietly re-enable
-            // a mode the user turned off there.
-            location.followsHeading = true
+            // the map was north-up because heading-follow lived on the locate
+            // button's cycle, and that button is not on this screen, so there
+            // was no way to reach it from here at all. `followsHeadingDefaulted`
+            // makes the exit *reset* rather than assign back, so coming
+            // from the viewer with the cycle not running does not quietly
+            // re-enable a mode the user turned off there.
+            location.followMode = .orientation
             followsHeadingDefaulted = true
             // Navigation is the one moment the "Always" prompt has context: the
             // user has just chosen to walk a route, and it is the only
@@ -118,9 +119,11 @@ struct NavigationScreen: View {
             location.stopStreaming()
             NavigationCommandBus.shared.setObserved(false)
             // Only undo the default: a compass tapped here is a choice, and
-            // re-setting it on the way out would discard it.
+            // re-setting it on the way out would discard it. Undo is *nothing*
+            // rather than a remembered mode, so the viewer's first tap starts
+            // the cycle at "my location", the same rule as a fresh launch.
             if followsHeadingDefaulted {
-                location.followsHeading = false
+                location.followMode = .nothing
                 followsHeadingDefaulted = false
             }
             // Ending here unconditionally was the first attempt and it is wrong:
@@ -442,10 +445,12 @@ struct NavigationScreen: View {
             Spacer()
 
             Button {
-                // Same two states as the viewer's locate button: facing the way
-                // you are going, or facing north. A third tap is back where it
-                // started, which is the compass behaviour people already expect.
-                location.toggleHeading()
+                // The same cycle as the viewer's locate button, seen from
+                // inside it: orientation → north-up → orientation, which from
+                // here is the two states people expect from a compass button
+                // (the cycle's first step, centring, has already happened —
+                // this screen starts every hike on the user).
+                location.cycleLocateMode()
                 // The button is a choice now, so it is no longer the default we
                 // put there. Without this the exit code below reads the flag as
                 // "we set this" and switches it back off anyway, discarding what

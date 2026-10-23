@@ -141,9 +141,10 @@ struct ViewerScreen: View {
             // The slope legend, on the map at the web app's own corner: it
             // explains the map's slope shading, so it belongs with the shading
             // rather than under the profile chart, which is where it used to
-            // sit.
+            // sit. Gated with the panel: it is sheet-anchored, and a legend
+            // standing over a dismissed sheet is the same orphanage as the rails.
             .overlay(alignment: .bottomTrailing) {
-                if workspace.showSlope {
+                if isPanelPresented, workspace.showSlope {
                     SlopeLegend()
                         .padding(.trailing, 12)
                         .padding(.bottom, MapChrome.bottomInset(panelHeight: panelHeight)
@@ -154,15 +155,22 @@ struct ViewerScreen: View {
             // Both rails, anchored to the sheet rather than to opposite ends of
             // the screen. They move with the sheet and share one band of known
             // height, so they cannot converge — see `MapChrome` for the geometry
-            // that used to let them.
+            // that used to let them. And they stand only while the sheet does:
+            // `bottomInset(panelHeight:)` measures the *detent*, not the live
+            // sheet, so with the panel down the rails would sit at their old
+            // height over bare map — the floating icons. The panel is only ever
+            // down while navigation's cover is coming up or going away, so this
+            // is the gap between those, not a state anyone can park in.
             .overlay(alignment: .bottom) {
-                HStack(alignment: .bottom) {
-                    MapControlRail { fitToken += 1 }
-                    Spacer(minLength: 0)
-                    MapControlPill { isShowingMapModes = true }
+                if isPanelPresented {
+                    HStack(alignment: .bottom) {
+                        MapControlRail { fitToken += 1 }
+                        Spacer(minLength: 0)
+                        MapControlPill { isShowingMapModes = true }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, MapChrome.bottomInset(panelHeight: panelHeight))
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, MapChrome.bottomInset(panelHeight: panelHeight))
             }
             .sheet(isPresented: $isShowingMapModes) {
                 MapModesSheet()
@@ -176,6 +184,14 @@ struct ViewerScreen: View {
                     .presentationDetents(panelDetents, selection: panelDetentBinding)
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDragIndicator(.hidden)
+                    // Not dismissible by swipe. A swiped-away panel left the
+                    // rails and the legend standing where the sheet had been —
+                    // floating over the map with no figures and nothing to put
+                    // them back — and taking it down is something only this app
+                    // should do (navigation, below, which brings it back on the
+                    // way out). Collapsing to the short detent is still what the
+                    // drag is for, so the map can be got out of the way.
+                    .interactiveDismissDisabled(true)
                     // No `presentationCornerRadius`. A sheet's own corner radius is
                     // derived from the display's, and there is no public API to read
                     // the display's — `UIListContentConfiguration.cornerRadius` and
@@ -217,6 +233,17 @@ struct ViewerScreen: View {
                 .environmentObject(workspace)
                 .environmentObject(location)
                 .environmentObject(services)
+            }
+            .onChange(of: isNavigating) {
+                // Live guidance is the one thing that takes the figures sheet
+                // down (a cover will not present over a sheet from the same
+                // hierarchy — see `beginNavigation`), and nothing used to bring
+                // it back: the viewer returned with its rails floating over a
+                // bare map and no way to summon the figures again. The sheet
+                // comes back with the screen it left.
+                if !isNavigating {
+                    isPanelPresented = true
+                }
             }
             .onChange(of: styleGeneration) {
                 Task { await packs.estimate(for: route) }
