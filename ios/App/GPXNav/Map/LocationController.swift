@@ -20,9 +20,30 @@ final class LocationController: NSObject, ObservableObject {
 
     @Published private(set) var status: Status = .idle
     @Published private(set) var fix: LocationFix?
+    /// The last bearing off the device or a debug injection, before the
+    /// simulator stand-in is applied.
+    @Published private var headingValue: CLLocationDirection?
     /// Direction of travel in degrees, true-north based, or nil before the
-    /// first heading. Drives the map's rotation when the locate button is used.
-    @Published private(set) var heading: CLLocationDirection?
+    /// first heading and while nothing has asked for one. Drives the map's
+    /// rotation and the direction beam when the locate button is used.
+    ///
+    /// On a simulator the real stream never runs — there is no magnetometer —
+    /// so a bearing stands in once a step of the cycle has asked for one, and
+    /// the beam and the rotation can be seen without a launch argument. An
+    /// injected `-simHeading` arrives as a real value and outranks it.
+    var heading: CLLocationDirection? {
+        headingValue ?? simulatorStandIn
+    }
+
+    /// The simulator's stand-in bearing: north-east, so both the rotation and
+    /// the beam are visibly off-axis rather than coinciding with the defaults.
+    private var simulatorStandIn: CLLocationDirection? {
+        #if targetEnvironment(simulator)
+        wantsHeading ? 45 : nil
+        #else
+        nil
+        #endif
+    }
     /// Ground speed of the last fix, metres per second. Zero when unknown.
     ///
     /// `OffCourseDetector` ignores fixes below a walking pace, because standing
@@ -45,8 +66,8 @@ final class LocationController: NSObject, ObservableObject {
     /// stops, so the direction beam needs to know whether the bearing is live
     /// before it points at anything. Set wherever the stream is started —
     /// including where the hardware cannot deliver (`headingAvailable()` false,
-    /// which is every simulator: a debug `-simHeading` bearing can still stand
-    /// in), cleared wherever it stops.
+    /// which is every simulator, where a fixed bearing stands in instead),
+    /// cleared wherever it stops.
     @Published private(set) var wantsHeading = false
 
     /// Whether iOS would still show the "Always" prompt if asked.
@@ -121,14 +142,15 @@ final class LocationController: NSObject, ObservableObject {
         // Debug launch arguments, for a simulator where the taps cannot be
         // driven by hand: `-simHeading <degrees>` injects a synthetic bearing
         // (the simulator has no magnetometer, so the real stream never runs
-        // there), and `-locateMode <myLocation|orientation>` starts the cycle
+        // there; without the argument `heading` itself stands one in), and
+        // `-locateMode <myLocation|orientation>` starts the cycle
         // at a step and asks for the fix, exactly as the tap would. A device
         // needs neither — the taps and the real heading are the test.
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "-simHeading"),
            arguments.count > index + 1,
            let degrees = Double(arguments[index + 1]) {
-            heading = degrees
+            headingValue = degrees
         }
         if let index = arguments.firstIndex(of: "-locateMode"),
            arguments.count > index + 1 {
@@ -427,7 +449,7 @@ extension LocationController: CLLocationManagerDelegate {
         let normalised = (value.truncatingRemainder(dividingBy: 360) + 360)
             .truncatingRemainder(dividingBy: 360)
         Task { @MainActor in
-            self.heading = normalised
+            self.headingValue = normalised
         }
     }
 

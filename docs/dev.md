@@ -156,7 +156,7 @@ xcrun simctl launch booted com.example.GPXNav
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
 | `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
-| `-simHeading <degrees>` | Injects a synthetic compass bearing — the simulator has no magnetometer, so this is the only way to see heading-up rotation and the blue dot's direction beam there. Debug aid. |
+| `-simHeading <degrees>` | Overrides the compass bearing. The simulator has no magnetometer, so `LocationController` stands a fixed 45° in by default while a step of the locate cycle has asked for one — the beam and the heading-up rotation are visible on a plain run, and a position from `simctl location set` puts the blue dot under them. This argument pins the bearing instead, for deterministic screenshots. |
 | `-locateMode <myLocation\|orientation>` | Starts the locate button's cycle at one of its steps (and asks for a fix, as the tap would). Debug aid for driving the cycle without a screen to tap. |
 
 ### Live Activity on a device

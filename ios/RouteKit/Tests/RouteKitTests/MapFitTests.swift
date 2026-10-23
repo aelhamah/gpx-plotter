@@ -3,9 +3,8 @@ import XCTest
 
 final class MapFitTests: XCTestCase {
     /// A whole-degree box on a 390×700 viewport: the span is 1/360 of the world
-    /// wide, so at zoom `z` one world pixel is 256×2^z px and the box is
-    /// (1/360)×256×2^z px across.
-    private let world: Double = 390
+    /// wide, so at zoom `z` one world point is 512×2^z points and the box is
+    /// (1/360)×512×2^z points across.
 
     private func bounds(
         west: Double = 0, south: Double = 0, east: Double = 1, north: Double = 1

@@ -1062,6 +1062,13 @@ struct MapView: UIViewRepresentable {
             // and a tap target answering `resetNorth` behind the SwiftUI buttons
             // rather than going through `LocationController`.
             mapView.showsCompassView = false
+            // The basemap's transit layer parks route shields over the city —
+            // a blue "110" circle in the corner of a hiking map, with nothing
+            // on screen to say what it routes between. Hiding it here, once,
+            // rather than patching the style: the identifier comes through the
+            // loopback untouched, and a style without the layer (satellite) is
+            // a no-op under the optional chain.
+            style.layer(withIdentifier: "Transport")?.isVisible = false
             parent.loadError = nil
             parent.onStyleLoaded?()
             parent.applyEverything(to: mapView, styleLoaded: styleLoaded, coordinator: self)

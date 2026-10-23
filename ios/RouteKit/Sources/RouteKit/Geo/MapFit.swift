@@ -42,18 +42,24 @@ public enum MapFit {
         guard available.width > 0, available.height > 0 else { return nil }
 
         // Normalised Mercator spans: the whole world is 1×1, so a span multiplied
-        // by 256 is the number of world pixels it occupies at zoom 0, and by
-        // 256×2^z at zoom z. Setting that equal to the space available gives the
-        // fit — the viewport in the numerator, because a bigger box has to be
-        // zoomed *out* to fit. The vertical span is negated because `mercatorY`
-        // counts downward from the north edge, so the box's north edge is always
-        // the smaller of the two.
+        // by 512 is the number of world points it occupies at zoom 0, and by
+        // 512×2^z at zoom z. The 512 is MapLibre's own unit — both Native and GL
+        // JS build their transform on a 512-point tile, which is why measuring a
+        // rendered map against a 256-based formula comes out two-to-one: the
+        // Maroon Bells loop fitted to z14.27 rendered at 3.07 m/pt where the
+        // 256-world predicts 6.18, i.e. every fit was a zoom level too deep and
+        // only small routes — which pin against the tileset's ceiling with room
+        // to spare — failed to show it. Setting the span equal to the space
+        // available gives the fit — the viewport in the numerator, because a
+        // bigger box has to be zoomed *out* to fit. The vertical span is
+        // negated because `mercatorY` counts downward from the north edge, so
+        // the box's north edge is always the smaller of the two.
         let spanX = abs(bounds.east - bounds.west) / 360
         let spanY = abs(mercatorY(bounds.north) - mercatorY(bounds.south))
         guard spanX > 0, spanY > 0 else { return nil }
 
-        let zoomX = log2(available.width / (spanX * 256))
-        let zoomY = log2(available.height / (spanY * 256))
+        let zoomX = log2(available.width / (spanX * 512))
+        let zoomY = log2(available.height / (spanY * 512))
         return min(zoomX, zoomY)
     }
 

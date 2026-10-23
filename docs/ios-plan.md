@@ -918,6 +918,37 @@ M0 defects the simulator surfaced, all fixed:
 | 3D terrain toggle | **Built, not yet verified on the map.** The map now loads its style from the loopback endpoint with `?terrain=1`, and the toggle forces a style reload because that is the only way to add or drop the block. Needs a look at a pitched camera before it is called done. |
 | Style builder | **Built.** `StyleBuilder` fetches MapTiler's hosted style, adds a `raster-dem` source named `terrain` with an inline `tiles` template, and writes `"terrain": { "source": "terrain", "exaggeration": 1.15 }` — the same source name and exaggeration the web app's `setTerrain` call uses. The basemap is still MapTiler's own; only the terrain block is added. Served from the existing loopback listener at `/style.json?style=…&terrain=…`, cached per variant. |
 
+Three findings from the review pass after M2, each of which looks cosmetic and
+is not:
+
+- **`MapFit` computed every fit against a 256-point world, and MapLibre's zoom
+  is a 512-point one** — both Native and GL JS build their transform on a
+  512-pixel tile. Every fit therefore came out about a zoom level too deep,
+  which small routes never showed: they pin against the tileset's ceiling with
+  margins to spare. The Maroon Bells loop did — clipped on every edge at once
+  while the camera reported exactly the zoom it had been asked for (alt
+  `MLNAltitudeForZoomLevel` and all). Measured off the rendered frame the map
+  drew at 3.07 m/pt where the 256-world predicts 6.18, which is also what
+  identified it: the transform was self-consistent, the constant in the fit
+  formula was not. The span is now `512×2^z`; the tests' comparative
+  assertions were unaffected, only their comments were wrong.
+- **The basemap's `Transport` layer parked a transit route shield — a blue
+  "110" — over the top-left corner of a hiking map.** The loopback style is
+  MapTiler's own and arrives with it; a dump of all 114 layers in
+  `didFinishLoading` is what identified the id. It is now hidden there,
+  optional-chained, so a style without the layer (satellite) is a no-op. Bus
+  stops and the transit line colouring are separate layers and were left
+  alone: only the number was complained about.
+- **The simulator has no magnetometer, so `heading` was nil there for good**
+  and the beam gate (`followMode != .nothing && wantsHeading &&
+  heading != nil`) kept the direction cone — the exact thing that was reported
+  missing — invisible on every plain simulator run. `LocationController` now
+  stands a fixed 45° in while a step of the locate cycle has asked for a
+  heading and the real stream never arrives; `-simHeading` still pins the
+  bearing for screenshots and outranks it. The blue dot itself only ever
+  needed a position, which `simctl location set` supplies — together the two
+  make the whole locate feature legible on a machine with no compass.
+
 Two MapLibre Native constraints cost rework here, both found by compiling
 against the real headers rather than by reading docs:
 
