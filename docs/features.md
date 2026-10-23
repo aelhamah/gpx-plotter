@@ -6,8 +6,10 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 
 - **Outdoor basemap** rendered by MapLibre GL JS, served by MapTiler.
 - **Satellite basemap** toggle. The camera (center/zoom/bearing/pitch) is
-  preserved across the style swap, and all custom layers + 3D terrain are
-  re-applied after the new style loads.
+  saved before the swap and restored once the new style has loaded, and
+  everything the old style carried — custom layers, 3D terrain at the
+  exaggeration it was already showing, the globe projection and the sky — is
+  re-applied on every `style.load`.
 - **3D terrain** toggle using MapTiler Terrain-RGB with a 1.15× exaggeration,
   plus ⌘/Ctrl-drag to tilt and rotate the camera. The relief and the tilt move
   together in one eased move, so the ground rises out of the flat map instead of

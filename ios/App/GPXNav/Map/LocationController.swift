@@ -20,9 +20,30 @@ final class LocationController: NSObject, ObservableObject {
 
     @Published private(set) var status: Status = .idle
     @Published private(set) var fix: LocationFix?
+    /// The last bearing off the device or a debug injection, before the
+    /// simulator stand-in is applied.
+    @Published private var headingValue: CLLocationDirection?
     /// Direction of travel in degrees, true-north based, or nil before the
-    /// first heading. Drives the map's rotation when the locate button is used.
-    @Published private(set) var heading: CLLocationDirection?
+    /// first heading and while nothing has asked for one. Drives the map's
+    /// rotation and the direction beam when the locate button is used.
+    ///
+    /// On a simulator the real stream never runs — there is no magnetometer —
+    /// so a bearing stands in once a step of the cycle has asked for one, and
+    /// the beam and the rotation can be seen without a launch argument. An
+    /// injected `-simHeading` arrives as a real value and outranks it.
+    var heading: CLLocationDirection? {
+        headingValue ?? simulatorStandIn
+    }
+
+    /// The simulator's stand-in bearing: north-east, so both the rotation and
+    /// the beam are visibly off-axis rather than coinciding with the defaults.
+    private var simulatorStandIn: CLLocationDirection? {
+        #if targetEnvironment(simulator)
+        wantsHeading ? 45 : nil
+        #else
+        nil
+        #endif
+    }
     /// Ground speed of the last fix, metres per second. Zero when unknown.
     ///
     /// `OffCourseDetector` ignores fixes below a walking pace, because standing
@@ -39,6 +60,16 @@ final class LocationController: NSObject, ObservableObject {
     /// pretending the hike is still being tracked.
     @Published private(set) var runsInBackground = false
 
+    /// True while heading updates are running, or have been asked for.
+    ///
+    /// `heading` is only the *last* value and goes stale the moment the stream
+    /// stops, so the direction beam needs to know whether the bearing is live
+    /// before it points at anything. Set wherever the stream is started —
+    /// including where the hardware cannot deliver (`headingAvailable()` false,
+    /// which is every simulator, where a fixed bearing stands in instead),
+    /// cleared wherever it stops.
+    @Published private(set) var wantsHeading = false
+
     /// Whether iOS would still show the "Always" prompt if asked.
     ///
     /// True only under when-in-use authorisation. Once Always is granted the
@@ -47,9 +78,24 @@ final class LocationController: NSObject, ObservableObject {
     /// advertising a button that would do nothing.
     @Published private(set) var canRequestBackground = false
 
-    /// Whether the map is currently following the direction of travel. Tapping
-    /// locate again snaps back to north, the way a compass button behaves.
-    @Published var followsHeading = false
+    /// The locate button's cycle: nothing → my location → location orientation
+    /// → my location → … The first tap always lands on *my location*, even when
+    /// a fix already exists ("if not on my location already, then start at my
+    /// location"), so orientation is never the first thing a tap does; after
+    /// that it alternates between centred-north-up and facing the way the
+    /// device faces, the way Apple Maps' locate button behaves.
+    enum FollowMode: Equatable {
+        case nothing
+        case myLocation
+        case orientation
+    }
+
+    @Published var followMode: FollowMode = .nothing
+
+    /// Heading-follow is exactly the orientation step of the cycle. Computed so
+    /// the map and the needle keep reading one source of truth, while the mode
+    /// itself carries the rest of the cycle.
+    var followsHeading: Bool { followMode == .orientation }
 
     /// Set when the user has asked to be moved to their position, and cleared once
     /// the map has done it.
@@ -92,6 +138,33 @@ final class LocationController: NSObject, ObservableObject {
                 MainActor.assumeIsolated { self?.applyHeadingOrientation() }
             }
         }
+
+        // Debug launch arguments, for a simulator where the taps cannot be
+        // driven by hand: `-simHeading <degrees>` injects a synthetic bearing
+        // (the simulator has no magnetometer, so the real stream never runs
+        // there; without the argument `heading` itself stands one in), and
+        // `-locateMode <myLocation|orientation>` starts the cycle
+        // at a step and asks for the fix, exactly as the tap would. A device
+        // needs neither — the taps and the real heading are the test.
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-simHeading"),
+           arguments.count > index + 1,
+           let degrees = Double(arguments[index + 1]) {
+            headingValue = degrees
+        }
+        if let index = arguments.firstIndex(of: "-locateMode"),
+           arguments.count > index + 1 {
+            switch arguments[index + 1] {
+            case "myLocation":
+                followMode = .myLocation
+                locate()
+            case "orientation":
+                followMode = .orientation
+                locate()
+            default:
+                break
+            }
+        }
     }
 
     deinit {
@@ -129,6 +202,9 @@ final class LocationController: NSObject, ObservableObject {
         case .authorizedWhenInUse, .authorizedAlways:
             status = .locating
             manager.requestLocation()
+            // Wanted even when the hardware cannot deliver: the beam's gate is
+            // the intent, so a simulator's injected bearing still shows.
+            wantsHeading = true
             if CLLocationManager.headingAvailable() {
                 manager.startUpdatingHeading()
             }
@@ -175,6 +251,7 @@ final class LocationController: NSObject, ObservableObject {
         // together than this, and each one wakes the process.
         manager.distanceFilter = 5
         manager.startUpdatingLocation()
+        wantsHeading = true
         if CLLocationManager.headingAvailable() {
             manager.startUpdatingHeading()
         }
@@ -188,6 +265,7 @@ final class LocationController: NSObject, ObservableObject {
         guard isStreaming else { return }
         manager.stopUpdatingLocation()
         manager.stopUpdatingHeading()
+        wantsHeading = false
         manager.allowsBackgroundLocationUpdates = false
         isStreaming = false
         runsInBackground = false
@@ -201,6 +279,7 @@ final class LocationController: NSObject, ObservableObject {
     /// locate button stops it when it goes away, which is where it was started.
     func stopHeading() {
         manager.stopUpdatingHeading()
+        wantsHeading = false
     }
 
     /// Ask for "Always" so a hike keeps being tracked with the screen locked.
@@ -225,19 +304,49 @@ final class LocationController: NSObject, ObservableObject {
         canRequestBackground = status == .authorizedWhenInUse
     }
 
-    /// Cycle the map between facing the direction of travel and facing north.
+    /// Advance the locate cycle one step: nothing → my location → location
+    /// orientation → my location → …
     ///
-    /// Also a recentre request: switching between north and the direction of
-    /// travel only makes sense relative to where the user is standing.
-    /// No guard on `heading`. It used to return early when none had arrived, so
-    /// on hardware that never reports one -- a simulator, or anything without a
-    /// magnetometer -- the tap did nothing at all: no toggle, no recentre, no
-    /// change in the icon, and nothing to say why. Toggling anyway means the mode
-    /// the user asked for is the mode they get; the map simply stays north-up
-    /// until a heading turns up, which is the honest outcome.
-    func toggleHeading() {
-        followsHeading.toggle()
-        recentreRequested = true
+    /// Every step is also a recentre request: which way the map points only
+    /// makes sense relative to where the user is standing, so each tap recentres
+    /// as well as changes mode — including the step back from orientation to
+    /// north-up, which used to be where the map stayed rotated.
+    ///
+    /// From *nothing* the step is `locate()` itself rather than a bare recentre:
+    /// the fix may not exist yet (no permission, first ever tap), and `locate()`
+    /// handles the permission flow, the one-shot fix and the recentre together.
+    /// That is the "if not on my location already, start at my location" rule —
+    /// orientation can never be the first thing a tap does, even when a fix from
+    /// an earlier session is already sitting there.
+    ///
+    /// Into orientation the heading stream is (re)started here, not only in
+    /// `locate()`: that one starts only on the branch where authorisation is
+    /// already granted, and the button's `onDisappear` stops it — so a tap that
+    /// asked the map to face the way the device does could find the stream dead
+    /// and the map sat north-up forever. `startUpdatingHeading()` is idempotent
+    /// for the case where `locate()` already began it.
+    ///
+    /// Out of orientation the stream *stays running* while the mode is anything
+    /// but nothing: the direction beam on the blue dot reads `heading`, and a
+    /// beam that froze the moment you left orientation would be pointing the
+    /// wrong way while claiming not to. The magnetometer goes back to sleep in
+    /// `onDisappear`, which is where the cycle itself ends too.
+    func cycleLocateMode() {
+        switch followMode {
+        case .nothing:
+            followMode = .myLocation
+            locate()
+        case .myLocation:
+            followMode = .orientation
+            recentreRequested = true
+            wantsHeading = true
+            if CLLocationManager.headingAvailable() {
+                manager.startUpdatingHeading()
+            }
+        case .orientation:
+            followMode = .myLocation
+            recentreRequested = true
+        }
     }
 
     /// Take the pending recentre request, if there is one.
@@ -270,6 +379,19 @@ extension LocationController: CLLocationManagerDelegate {
             case .authorizedWhenInUse, .authorizedAlways:
                 self.status = .locating
                 self.manager.requestLocation()
+                // Headings too: this callback is how a first-ever grant answers,
+                // and `locate()`'s own heading start only covers the branch where
+                // authorisation already existed. Without it the cycle's first
+                // grant lands with the stream dead — no beam, and an orientation
+                // tap waiting on a magnetometer nobody started. Gated on the
+                // cycle having started, so a grant from anywhere else does not
+                // leave the magnetometer running for nothing.
+                if self.followMode != .nothing {
+                    self.wantsHeading = true
+                    if CLLocationManager.headingAvailable() {
+                        self.manager.startUpdatingHeading()
+                    }
+                }
             case .denied, .restricted:
                 self.status = .denied
             default:
@@ -327,7 +449,7 @@ extension LocationController: CLLocationManagerDelegate {
         let normalised = (value.truncatingRemainder(dividingBy: 360) + 360)
             .truncatingRemainder(dividingBy: 360)
         Task { @MainActor in
-            self.heading = normalised
+            self.headingValue = normalised
         }
     }
 

@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import UIKit
 import RouteKit
 
 /// Elevation profile for a route, drawn with Swift Charts.
@@ -16,13 +17,20 @@ struct RouteProfileChart: View {
     /// trace. Nil when nothing is scrubbed.
     @Binding var scrubbedDistance: Double?
 
+    /// The impact generator for the scrub tick, kept across frames so the first
+    /// tick after a touch is not paying for the generator's warm-up.
+    @State private var scrubHaptics = UIImpactFeedbackGenerator(style: .light)
+    /// Where the last scrub impact fired, so a drag does not buzz on every frame.
+    @State private var lastHapticDistance: Double?
+
     /// How many samples the chart draws.
     ///
-    /// Each sample is two `Mark`s, and scrubbing re-renders every one of them on
-    /// every frame of the drag, so this is the dominant cost of the gesture. The
-    /// plot is about 340 pt wide and 130 pt tall, so 200 points is already more
-    /// than one per device pixel across and the curve is indistinguishable from
-    /// 600 — which was what made scrubbing stutter.
+    /// Each sample contributes several `Mark`s — a casing point, and a band
+    /// fill plus colour for its segment — and scrubbing re-renders every one of
+    /// them on every frame of the drag, so this is the dominant cost of the
+    /// gesture. The plot is about 340 pt wide and 130 pt tall, so 200 points is
+    /// already more than one per device pixel across and the curve is
+    /// indistinguishable from 600 — which was what made scrubbing stutter.
     ///
     /// The stats bar is unaffected: it reads the profile, not these samples.
     private static let chartSamples = 200
@@ -33,9 +41,30 @@ struct RouteProfileChart: View {
             if samples.count < 2 {
                 unavailable
             } else {
+                // The web app's `#profile-readout`: a small light box above the
+                // chart rather than a dark capsule pinned to the rule, shown
+                // only while a scrub is on — the web readout is hidden the same
+                // way whenever the pointer leaves the canvas.
+                if let scrubbedDistance {
+                    readout(at: scrubbedDistance, in: samples)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 8)
+                }
                 chart(samples)
-                    // The chart used to fill this frame, so the x-axis labels
-                    // and the area fill collided with the bottom edge.
+                    // The web app's canvas is a translucent white card with a
+                    // hairline border; the panel material behind it is the
+                    // "map shows through" half. The chart used to fill this
+                    // frame, so the x-axis labels and the area fill collided
+                    // with the bottom edge — hence the padding, which sits
+                    // outside the card.
+                    .background {
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(Color.white.opacity(0.72))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(Color.black.opacity(0.1), lineWidth: 1)
+                    }
                     .padding(.bottom, 14)
                     .padding(.top, 4)
             }
@@ -51,57 +80,86 @@ struct RouteProfileChart: View {
     private func chart(_ samples: [ProfileSample]) -> some View {
         let domain = elevationDomain(samples)
         let points = ProfilePoint.pairs(from: samples)
+        // The web app's hover snaps to a sample; the dot and the readout both
+        // speak in that sample's distance rather than the raw touch position.
+        let scrubSample = scrubbedDistance.flatMap { distance in
+            samples.min { abs($0.distance - distance) < abs($1.distance - distance) }
+        }
         return Chart {
-            // The baseline is stated rather than left implicit. An `AreaMark`
-            // with a single `y` fills down to zero, and zero is *below* this
-            // chart's y domain — a hiking route starts around 3,000 m — so the
-            // fill was drawn hundreds of points under the plot area, unclipped,
-            // as a pink slab over the rest of the panel. Anchoring it to the
-            // domain's floor fills to the axis, which is what was wanted.
+            // The casing first: one continuous polyline in the web app's
+            // `#f8fafc` at 6 px, stroked under everything else so the coloured
+            // line sits on a white halo. The area fill is drawn over its lower
+            // half, exactly as the web canvas draws it, which is what leaves the
+            // halo visible above the line.
             ForEach(samples) { sample in
-                AreaMark(
+                LineMark(
                     x: .value("Distance", sample.distance),
-                    yStart: .value("Base", domain.lowerBound),
-                    yEnd: .value("Elevation", sample.elevation)
+                    y: .value("Elevation", sample.elevation),
+                    series: .value("Series", "Profile")
                 )
-                .foregroundStyle(
-                    .linearGradient(
-                        colors: [Color(hex: route.color).opacity(0.45), Color(hex: route.color).opacity(0.05)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .interpolationMethod(.monotone)
+                .foregroundStyle(Color(hex: "#f8fafc"))
+                .lineStyle(StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
             }
 
-            // One line per segment, coloured by the avalanche slope band it falls
-            // in — the same six bands as the on-map slope shading, so the chart
+            // One segment at a time — fill then line, the web canvas's own
+            // order — coloured by the avalanche slope band the segment falls
+            // in: the same six bands as the on-map slope shading, so the chart
             // and the terrain agree about where the ground is steep. A single
-            // `LineMark` in the route colour cannot show hazard at all.
+            // `LineMark` in the route colour cannot show hazard at all, and the
+            // pink route-colour gradient the fill used to have is the web app's
+            // biggest visual difference from this chart: the web fill is the
+            // segment's band colour at a flat 0.22 alpha, down to the axis.
             //
             // Collected into `points` first because `ChartContentBuilder` accepts
             // neither control flow nor `ForEach(_, id:)`; the trailing-closure
             // spelling is the one that binds to Charts' `ForEach`.
             ForEach(points) { point in
+                AreaMark(
+                    x: .value("Distance", point.sample.distance),
+                    yStart: .value("Base", domain.lowerBound),
+                    yEnd: .value("Elevation", point.sample.elevation),
+                    series: .value("Segment", point.series)
+                )
+                .foregroundStyle(Color(hex: point.hex).opacity(0.22))
+
                 LineMark(
                     x: .value("Distance", point.sample.distance),
                     y: .value("Elevation", point.sample.elevation),
                     series: .value("Segment", point.series)
                 )
                 .foregroundStyle(Color(hex: point.hex))
-                .lineStyle(StrokeStyle(lineWidth: 2))
+                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
             }
 
             if let scrubbedDistance {
-                RuleMark(x: .value("Scrubbed", scrubbedDistance))
-                    .foregroundStyle(Color(hex: route.color).opacity(0.9))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
-                    // `y: .fit` so the readout flips below the rule near the top of
-                    // the profile instead of escaping the plot and landing on the
-                    // stats bar, which is what `y: .disabled` did.
-                    .annotation(position: .top, overflowResolution: .init(x: .fit, y: .fit)) {
-                        readout(at: scrubbedDistance)
-                    }
+                // The web hover's dashed cursor: `rgba(15,23,42,.45)`, 1 px,
+                // [3, 3] — a neutral slate rather than the route colour, which
+                // is what it was before. Its x is the snapped sample's distance
+                // whenever there is one, the same sample the dot and the readout
+                // speak for: drawing the rule at the raw scrub position put it
+                // tens of pixels from the dot whenever the two differed, and the
+                // web cursor never separates from its dot either.
+                RuleMark(x: .value("Scrubbed", scrubSample?.distance ?? scrubbedDistance))
+                    .foregroundStyle(Color(hex: "#0f172a").opacity(0.45))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+
+            if let scrubSample {
+                // The web hover's dot: a white disc with a dark ring, r 5 with
+                // a 2 px `#111827` stroke. Two stacked point marks, since a
+                // single mark cannot be filled and stroked in different colours.
+                PointMark(
+                    x: .value("Scrubbed", scrubSample.distance),
+                    y: .value("Elevation", scrubSample.elevation)
+                )
+                .foregroundStyle(Color(hex: "#111827"))
+                .symbolSize(CGSize(width: 14, height: 14))
+                PointMark(
+                    x: .value("Scrubbed", scrubSample.distance),
+                    y: .value("Elevation", scrubSample.elevation)
+                )
+                .foregroundStyle(.white)
+                .symbolSize(CGSize(width: 10, height: 10))
             }
         }
         // The axes carry raw metres; only the labels are converted, so the
@@ -122,7 +180,25 @@ struct RouteProfileChart: View {
                                 let origin = geometry[proxy.plotAreaFrame].origin
                                 let x = value.location.x - origin.x
                                 guard let distance: Double = proxy.value(atX: x) else { return }
-                                scrubbedDistance = min(max(distance, 0), analysis.totalDistance)
+                                let clamped = min(max(distance, 0), analysis.totalDistance)
+                                // Snap to the nearest chart sample, as the web
+                                // app's hover does: the cursor, the readout and
+                                // the map trace all speak in samples rather
+                                // than a raw pointer position, so the number in
+                                // the box is a distance the profile actually
+                                // has a point at.
+                                let snapped = samples
+                                    .min { abs($0.distance - clamped) < abs($1.distance - clamped) }?
+                                    .distance ?? clamped
+                                scrubbedDistance = snapped
+                                // One tick per ~25 m of travel: enough for the
+                                // gesture to feel it is going somewhere, sparse
+                                // enough not to buzz continuously under a finger
+                                // held still while the drag jitters a point.
+                                if lastHapticDistance.map({ abs(snapped - $0) >= 25 }) ?? true {
+                                    lastHapticDistance = snapped
+                                    scrubHaptics.impactOccurred()
+                                }
                             }
                     )
             }
@@ -130,28 +206,50 @@ struct RouteProfileChart: View {
         .chartXAxis {
             // Round distances, including the end of the route. Swift Charts' own
             // automatic ticks over a 3.42 mi profile gave 0.0 / 1.2 / 2.5 and
-            // stopped well short of the finish.
+            // stopped well short of the finish. The web canvas labels the origin
+            // "0" with no unit and no gridline, and gives the unit only to the
+            // last tick ("3.4 mi") — matching it here keeps the axis readable
+            // without repeating the unit on every label.
             AxisMarks(values: xTicks) { value in
                 AxisGridLine()
+                    .foregroundStyle(value.as(Double.self) == 0 ? Color.clear : Color(hex: "#f1f5f9"))
                 AxisValueLabel {
                     if let meters = value.as(Double.self) {
-                        Text(Units.formatDistanceAxis(meters, system: system))
+                        Text(xAxisLabel(meters))
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color(hex: "#64748b"))
                     }
                 }
             }
         }
         .chartYAxis {
             // Round elevations. The same automatic pass produced 9,843 /
-            // 10,171 / 10,499 ft over a 450 m climb.
+            // 10,171 / 10,499 ft over a 450 m climb. Four gridlines, the count
+            // the web canvas draws, and labels without the unit — the web
+            // strips "ft"/"m" off its y labels too.
             AxisMarks(position: .leading, values: yTicks(samples)) { value in
                 AxisGridLine()
+                    .foregroundStyle(Color(hex: "#e2e8f0"))
                 AxisValueLabel {
                     if let meters = value.as(Double.self) {
-                        Text(Units.formatElevation(meters, system: system))
+                        Text(Units.formatElevation(meters, system: system)
+                            .replacingOccurrences(of: " ft", with: "")
+                            .replacingOccurrences(of: " m", with: ""))
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color(hex: "#64748b"))
                     }
                 }
             }
         }
+    }
+
+    /// A distance tick's label: plain numbers, "0" at the origin, and the unit
+    /// on the last tick only — the web canvas's convention.
+    private func xAxisLabel(_ meters: Double) -> String {
+        if meters == 0 { return "0" }
+        let value = Units.formatDistanceAxis(meters, system: system)
+        guard meters == xTicks.last else { return value }
+        return "\(value) \(system == .imperial ? "mi" : "km")"
     }
 
     /// Distance ticks in metres, round in the unit the labels use.
@@ -169,28 +267,56 @@ struct RouteProfileChart: View {
         )
     }
 
-    /// Elevation ticks in metres, round in the unit the labels use.
+    /// Elevation gridlines in metres: four of them, evenly spaced across the
+    /// padded domain — the web canvas's own loop (`gridCount = 3`, `value =
+    /// yMin + range * g / 3`), labels and all.
+    ///
+    /// Round ticks (`niceElevationTicks`) were tried here first and are what
+    /// put a label outside the card: a nice step starts at
+    /// `floor(low / step) * step`, so over a 3 ft route the first tick lands a
+    /// whole step below the domain and its label draws under the plot. Values
+    /// computed *from* the domain cannot leave it, which is also why the web
+    /// app — which the profile is meant to match — does it this way. The
+    /// printed numbers are still rounded by `formatElevation`.
     private func yTicks(_ samples: [ProfileSample]) -> [Double] {
         let elevations = samples.map(\.elevation)
         guard let low = elevations.min(), let high = elevations.max() else { return [] }
         let padding = ((high - low) == 0 ? 1 : high - low) * 0.08
-        return Units.niceElevationTicks(
-            inMeters: (low - padding)...(high + padding),
-            system: system,
-            targetCount: 5
-        )
+        let domainFloor = low - padding
+        let domainCeiling = high + padding
+        return (0..<4).map { domainFloor + (domainCeiling - domainFloor) * Double($0) / 3 }
     }
 
-    /// Distance, elevation, and grade at the scrubbed point.
-    private func readout(at distance: Double) -> some View {
-        let index = analysis.profile.index(nearestTo: distance)
-        let point = analysis.profile.points[min(max(index, 0), analysis.profile.points.count - 1)]
-        let elevation = Units.formatElevation(point.elevation, system: system)
-        return Text("\(Units.formatDistance(distance, system: system)) · \(elevation)")
-            .font(.caption2.monospacedDigit())
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.regularMaterial, in: Capsule())
+    /// Elevation and distance at the scrubbed point, for the readout box above
+    /// the chart.
+    ///
+    /// The elevation comes from the nearest *chart sample* rather than the raw
+    /// profile: the profile's nearest point can be one the thinning filtered
+    /// out for having no elevation, and `Units.formatElevation` then draws the
+    /// missing-value dash — a tooltip half full of `—`. Every sample has an
+    /// elevation by construction, and they are what the line under the readout
+    /// is drawn from. The distance is that same sample's, which is what the web
+    /// app prints: its readout is built from `cumulative[hoverIndex]`, not from
+    /// the raw pointer position.
+    ///
+    /// The box itself is the web app's `#profile-readout` rather than the dark
+    /// capsule that used to ride the rule: `#f5f5f2` on a hairline `#e4e4df`,
+    /// bold `#0f172a`, sitting above the chart's leading edge.
+    private func readout(at distance: Double, in samples: [ProfileSample]) -> some View {
+        let nearest = samples.min { abs($0.distance - distance) < abs($1.distance - distance) }
+        let elevation = Units.formatElevation(nearest?.elevation, system: system)
+        let along = Units.formatDistance(nearest?.distance ?? distance, system: system)
+        return Text("\(along) · \(elevation)")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(Color(hex: "#0f172a"))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(Color(hex: "#f5f5f2"), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color(hex: "#e4e4df"), lineWidth: 1)
+            }
+            .allowsHitTesting(false)
     }
 
     /// Why there is no line, and what is being done about it.
@@ -267,7 +393,10 @@ struct ProfilePoint: Identifiable {
         var points: [ProfilePoint] = []
         for index in 1..<samples.count {
             let series = index - 1
-            let hex = SlopeBands.slopeBandColorHex(samples[index].slopeDegrees ?? 0)
+            // The web canvas falls back to `#94a3b8` for a segment whose slope
+            // it cannot measure, rather than to the green "<20°" band, which
+            // would read as "this is fine" about ground it knows nothing about.
+            let hex = samples[index].slopeDegrees.map(SlopeBands.slopeBandColorHex) ?? "#94a3b8"
             for sample in [samples[index - 1], samples[index]] {
                 points.append(ProfilePoint(id: points.count, sample: sample, series: series, hex: hex))
             }
@@ -333,17 +462,36 @@ struct ProfileSample: Identifiable {
 
     /// Angle of each profile segment, in degrees, indexed with the profile.
     ///
-    /// `atan2(rise, run)` rather than a rise-over-run percentage so the value is
+    /// `atan2(|rise|, run)` rather than a rise-over-run percentage so the value is
     /// already in the units `SlopeBands.slopeBandColorHex` expects. A segment with
     /// no horizontal run is 90°, not a division by zero.
+    ///
+    /// The rise is absolute, matching `Haversine.degrees` and the web app's
+    /// `profileSlope`: a band says how steep the ground is, not which way it
+    /// points. Signed, every descent was a negative angle and `slopeBandColorHex`
+    /// sorts anything under 20° into the green band — so the steepest part of the
+    /// route, drawn as a visibly sharp line, came out uniformly green.
+    ///
+    /// The run spans back to the nearest earlier sample that **has** an
+    /// elevation, not merely to `index - 1`. Resampling leaves every sample
+    /// between the route's vertices at `nil` elevation, and the terrain fill that
+    /// would complete them is opt-in (`-fillElevation`), so with the default
+    /// settings adjacent samples are almost never both known — pairing `index`
+    /// with `index - 1` yielded a nil gradient for every segment and the whole
+    /// trace fell into the `?? 0` green band however steep the hill. Skipping the
+    /// nils computes the vertex-to-vertex angle, which is the same number the
+    /// stats bar's "Max slope" reports.
     private static func slopeDegrees(from profile: RouteProfile) -> [Double?] {
         var result = [Double?](repeating: nil, count: profile.points.count)
-        for index in 1..<profile.points.count {
-            guard let from = profile.points[index - 1].elevation,
-                  let to = profile.points[index].elevation
-            else { continue }
-            let run = profile.cumulativeDistances[index] - profile.cumulativeDistances[index - 1]
-            result[index] = atan2(to - from, run) * 180 / .pi
+        var previousKnown: Int?
+        for index in profile.points.indices {
+            guard let elevation = profile.points[index].elevation else { continue }
+            if let previous = previousKnown,
+               let previousElevation = profile.points[previous].elevation {
+                let run = profile.cumulativeDistances[index] - profile.cumulativeDistances[previous]
+                result[index] = atan2(abs(elevation - previousElevation), run) * 180 / .pi
+            }
+            previousKnown = index
         }
         return result
     }

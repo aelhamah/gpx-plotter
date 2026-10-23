@@ -156,6 +156,8 @@ xcrun simctl launch booted com.example.GPXNav
 | `-importGPX <name>` | Imports `<name>` from the app's Documents directory at launch. |
 | `-openSearch` | Opens the search sheet on the route screen. |
 | `-navigate` | Opens live guidance straight away. Pair with a simulated position to walk a route without leaving the desk (below). |
+| `-simHeading <degrees>` | Overrides the compass bearing. The simulator has no magnetometer, so `LocationController` stands a fixed 45° in by default while a step of the locate cycle has asked for one — the beam and the heading-up rotation are visible on a plain run, and a position from `simctl location set` puts the blue dot under them. This argument pins the bearing instead, for deterministic screenshots. |
+| `-locateMode <myLocation\|orientation>` | Starts the locate button's cycle at one of its steps (and asks for a fix, as the tap would). Debug aid for driving the cycle without a screen to tap. |
 
 ### Live Activity on a device
 
@@ -191,28 +193,6 @@ which one it was. See [device-troubleshooting.md](device-troubleshooting.md):
 explicitly trusted" is the certificate trust prompt, "requires a development
 team" is the extension not inheriting `Secrets.xcconfig`, and "Mismatched bundle
 IDs" is `PRODUCT_BUNDLE_IDENTIFIER` on the extension.
-
-### Search
-
-Both entry points take `-openSearch`: the map's floating button and the Create
-tab's "Search for a place".
-
-```bash
-xcrun simctl launch $D com.example.GPXNav -tab create -openSearch
-xcrun simctl launch $D com.example.GPXNav -tab navigate -openFirstRoute -openSearch
-```
-
-Without a MapTiler key both show **Search is unavailable**, which is the point:
-`geocodingClient` is nil, every search returned an empty list, and an empty list
-looks exactly like a search that found nothing. That is what #69 was — a working
-search with nothing to search, reported as a search that did not work. The viewer's
-button had a second problem on top: its figures sheet is presented for the whole
-life of the screen, and a sheet presented while another is up from the same host
-is dropped, so the button did nothing at all. Both are fixed and both are captured.
-
-The search sheet's `NavigationStack` puts its field at the *bottom* of the sheet
-on iOS 26 rather than in the navigation bar. That is how the system draws it, not
-something the app chose.
 
 ### The offline storage screen
 
@@ -291,9 +271,10 @@ This was pinned down on the simulator rather than assumed:
 - deferring the request by half a second, five seconds, or thirty-five seconds
   does not help, so it is not a matter of the map still loading.
 
-The search button on the map screen is presumably broken the same way, which
-would mean the sheet has never worked for anyone rather than only under `simctl`.
-Fixing it means giving the search a presentation host that is not already busy —
+The map screen's search button was presumably broken the same way — the sheet
+never worked for anyone rather than only under `simctl` — and it has been
+removed for now, so the Create tab is the only search entry point. Restoring it
+means giving the search a presentation host that is not already busy —
 most likely by making the figures panel an overlay in the view instead of a
 sheet, or by presenting search from `RootTabView`. Until then the capture leaves
 the scene out rather than publish a frame identical to the plain route screen.

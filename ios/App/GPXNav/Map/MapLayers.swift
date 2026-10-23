@@ -32,6 +32,10 @@ enum MapLayers {
     static let locationAccuracy = "location-accuracy"
     static let locationHalo = "location-halo"
     static let locationDot = "location-dot"
+    /// The direction beam: the translucent cone on the blue dot that points the
+    /// way the device faces, on the dot's own point source.
+    static let locationBeam = "location-beam"
+    static let locationBeamImage = "gpxnav-location-beam"
 
     // MARK: - Terrain
 
@@ -110,6 +114,58 @@ enum MapLayers {
         static let locationHaloOpacity: CGFloat = 0.85
         static let locationDotRadius: CGFloat = 5.5
         static let locationStrokeWidth: CGFloat = 1.5
+
+        /// The direction beam, in the same blue as the dot.
+        static let locationBeamLength: CGFloat = 110
+        static let locationBeamHalfAngle: CGFloat = 30
+        static let locationBeamOpacity: CGFloat = 0.55
+    }
+
+    /// The direction beam's icon: a cone with its apex at the image's centre,
+    /// so a `center`-anchored symbol pins the apex to the blue dot and
+    /// `icon-rotate` swings the cone to the bearing — screen-sized like the dot
+    /// itself (symbols do not scale with zoom), which is how Apple Maps'
+    /// direction field behaves.
+    ///
+    /// Radially graded from `locationFill` at the apex to nearly nothing at the
+    /// rim, so it reads as light cast forward rather than a wedge of plastic.
+    static func beamImage() -> UIImage {
+        let length = Paint.locationBeamLength
+        let size = CGSize(width: length, height: length)
+        let center = CGPoint(x: length / 2, y: length / 2)
+        let halfAngle = Paint.locationBeamHalfAngle * .pi / 180
+        // Up in UIKit's y-down coordinates is -π/2; the arc opens ±halfAngle
+        // around it, clockwise from the left edge to the right one.
+        let path = UIBezierPath()
+        path.move(to: center)
+        path.addArc(
+            withCenter: center,
+            radius: length / 2,
+            startAngle: -.pi / 2 - halfAngle,
+            endAngle: -.pi / 2 + halfAngle,
+            clockwise: true
+        )
+        path.close()
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let colors = [
+                Paint.locationFill.withAlphaComponent(0.6).cgColor,
+                Paint.locationFill.withAlphaComponent(0.06).cgColor,
+            ] as CFArray
+            guard let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: colors,
+                locations: [0, 1]
+            ) else { return }
+            path.addClip()
+            context.cgContext.drawRadialGradient(
+                gradient,
+                startCenter: center,
+                startRadius: 0,
+                endCenter: center,
+                endRadius: length / 2,
+                options: []
+            )
+        }
     }
 
     /// A `circle-radius` expression that grows with the zoom level.

@@ -105,24 +105,19 @@ trap 'cleanup; exit 130' INT TERM
 # `route` is the base: the Maps tab with the seeded demo route pushed. Every
 # route scene appends to it, so an overlay scene is that line plus a flag.
 #
-# `search` was missing from this table for a long time, and it was a real gap in
+# `-openSearch` is missing from this table on purpose, and it is a real gap in
 # the app rather than an oversight here. ViewerScreen keeps the figures sheet
 # presented for as long as the screen is up, and a presentation made while
 # another is already up from the same host is dropped rather than queued, so the
-# search sheet never appeared. It was worth pinning down: the arguments did reach
-# the app, `isSearching` really was set, and the sheet content was never even
+# search sheet never appears. It was worth pinning down: the arguments do reach
+# the app, `isSearching` really is set, and the sheet content is never even
 # evaluated — but neither moving it to a different view in the hierarchy nor
-# switching it to a fullScreenCover changed that, and neither did deferring the
-# request by anything from half a second to thirty-five seconds.
-#
-# The fix is the one navigation already used: dismiss the figures sheet, then ask
-# for the search on a later turn, and put the figures back when it closes. Both
-# search entry points are captured now.
-#
-# What these frames show is the *no key* state — "Search is unavailable" — because
-# the capture has no MapTiler key, and `geocodingClient` is nil without one. That
-# is the honest frame: before, the same situation showed an empty result list,
-# which is indistinguishable from a search that found nothing.
+# switching it to a fullScreenCover changes that, and neither does deferring the
+# request by anything from half a second to thirty-five seconds. The map
+# screen's search button was broken the same way and has been removed for now
+# (only the Create tab's search works). Until the presentation host is fixed,
+# capturing the flag would only put a copy of the plain route frame on the page.
+# See docs/dev.md.
 #
 # `nav` needs the `LOCATION` fix above more than any other scene does: the
 # readout projects the position onto the route, and the map draws it, so without
@@ -145,8 +140,6 @@ route-slope|Overlays|Slope bands|-tab navigate -openFirstRoute -showSlope
 route-terrain|Overlays|3D terrain|-tab navigate -openFirstRoute -terrain3D
 route-satellite|Overlays|Satellite basemap|-tab navigate -openFirstRoute -satellite
 nav|Navigation|Live guidance|-tab navigate -openFirstRoute -navigate
-search|Search|Place search, from the map|-tab navigate -openFirstRoute -openSearch
-search-create|Search|Place search, from Create|-tab create -openSearch
 storage|Offline|Offline storage screen|-tab settings -openStorage
 storage-sample|Offline|Offline storage screen, sample download|-tab settings -openStorage -seedStorageSample
 EOF
@@ -433,7 +426,13 @@ offset = struct.unpack_from("<I", data, 10)[0]
 width, height = struct.unpack_from("<ii", data, 18)
 bits = struct.unpack_from("<H", data, 28)[0]
 height = abs(height)                       # a negative height means rows run top-down
-stride = ((width * bits + 31) // 32) * 32
+# The row stride is a whole number of 32-bit words converted to *bytes*: sips
+# writes 32-bit BMPs, where a row of 1206 pixels is 4824 bytes, not the 38592
+# that rounding the bit-count and calling it a byte count would give. With the
+# wrong stride every row after the first few reads past the end of the file —
+# silently, because a slice that far out is just empty — and the sample came
+# from the status bar alone.
+stride = ((width * bits + 31) // 32) * 4
 step = 4 if bits == 32 else 3
 
 colours = set()
@@ -443,6 +442,195 @@ for y in range(0, height, 30):             # sampling is plenty to tell flat fro
         colours.add(data[row + x * step:row + x * step + step])
 print(len(colours))
 PY
+}
+
+# Which checks a scene's frame owes.
+#
+# A scene with a map on it owes three: the basemap must have drawn, the figures
+# sheet must be at its expected height, and the map chrome (the rails and pills
+# the map screen floats over the basemap) must be present. A tab or settings
+# screen owes none of that — there is no basemap to be blank.
+scene_class() {
+  case "$1" in
+    route|route-relief|route-slope|route-terrain|route-satellite) echo collapsed ;;
+    route-expanded|route-scrub) echo expanded ;;
+    nav)                              echo nav ;;
+    *)                                echo none ;;
+  esac
+}
+
+# Fail the run if a captured map scene is missing its basemap, its sheet, or its
+# map controls.
+#
+# ## What each check is for
+#
+# The blank-basemap check is the one that matters: a style build that never
+# finishes — a refused loopback, a cached style this process never rewrote, a
+# joiner that spins the style actor instead of waiting — photographs as a flat
+# panel with the route polyline floating on it, and the sheet and chrome are all
+# still drawn correctly around it, so nothing else here notices. Flatness is
+# measured over the map band only (the sheet below is flat white by design and
+# would drown the signal), and a frame fails only when it is *both* almost
+# entirely one colour *and* almost colourless: map content that happens to be
+# pale stays under the flat threshold, and UI chrome sitting on a genuinely
+# blank basemap stays under the colour one.
+#
+# The sheet check catches a panel that never rose to its detent. The probes
+# catch the rails and pills that float over the basemap being absent — they are
+# drawn outside the map's own view, so they survive a blank basemap, and a frame
+# can therefore be *both* drawn and chromeless.
+#
+# ## Thresholds, and where the numbers come from
+#
+# Calibrated against captured frames of every scene plus screen recordings of
+# the blank-basemap bug: good frames measure 0.06-0.48 flat, bad ones 0.83-0.96,
+# so 0.70 sits well clear of both. Colours are counted quantised to 5 bits per
+# channel, matching that calibration. Sheet heights (185pt collapsed, 497pt
+# expanded) and the probe centres are measured from the layout itself, in
+# points from the bottom/edges, so they hold on any device the picker chooses.
+#
+# PNG is compressed and a runner is not guaranteed an image library, so the
+# frame goes through sips into a BMP first, exactly as frame_colours does. The
+# checks themselves run only on real tile captures: with DEMO_TILES the
+# keyless demo basemap stands in, and its zoom and styling are different enough
+# that it is not the map this calibration was measured on.
+assert_frame() {
+  local png="$1" id="$2" class bmp
+  class="$(scene_class "$id")"
+  [ "$class" != "none" ] || return 0
+  [ "$DEMO_TILES" != "1" ] || return 0
+
+  bmp="$BUILD_DIR/assert.bmp"
+  sips -s format bmp "$png" --out "$bmp" >/dev/null 2>&1 ||
+    { warn "could not convert scene '$id' for frame assertions; skipping them"; return 0; }
+
+  local reasons
+  # Unquoted on purpose: bash 3.2 scan-checks a quoted heredoc body inside
+  # "$(...)" for quote balance, and the body's apostrophes then break parsing.
+  if ! reasons=$(python3 - "$bmp" "$class" <<'PY'
+import struct, sys
+
+path, mode = sys.argv[1], sys.argv[2]
+BANDS = {"collapsed": (0.17, 0.72), "expanded": (0.17, 0.36), "nav": (0.10, 0.62)}
+SHEET = {"collapsed": 185, "expanded": 497}          # pt from bottom, detent height
+PROBES = {                                            # rails from the left edge,
+    "collapsed": [("L", 270), ("R", 319), ("R", 270)],  # left rail is one circle
+    "expanded":  [("L", 594), ("R", 643), ("R", 594)],  # since the compass merged
+}                                                      # into the locate button
+PLAUSIBLE_W = {320, 375, 390, 393, 402, 414, 428, 430, 440}
+PLAUSIBLE_H = {568, 667, 736, 812, 844, 852, 874, 896, 926, 932}
+
+data = open(path, "rb").read()
+offset = struct.unpack_from("<I", data, 10)[0]
+width, height = struct.unpack_from("<ii", data, 18)
+bits = struct.unpack_from("<H", data, 28)[0]
+comp = struct.unpack_from("<I", data, 30)[0]
+bottom_up = height > 0               # positive height stores the bottom row first
+h = abs(height)
+# Whole 32-bit words in bytes, as in frame_colours: sips writes 32-bit BMPs.
+stride = ((width * bits + 31) // 32) * 4
+step = 4 if bits == 32 else 3
+
+# Channel order from the BITFIELDS masks when the header declares them, so a
+# future sips that writes RGBA rather than BGRA cannot silently turn the blue
+# navigate arrow into a missing control. Byte-aligned masks only; anything else
+# falls back to the BGRA that sips writes today.
+RI, GI, BI = 2, 1, 0
+if bits == 32 and comp == 3:
+    masks = struct.unpack_from("<3I", data, 54)
+    if all(m in (0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000) for m in masks):
+        RI, GI, BI = [((m & -m).bit_length() - 1) // 8 for m in masks]
+
+# Points per pixel: screenshots are @3x, an occasional runtime hands back @2x.
+scale = 3
+for d in (3, 2, 1):
+    if round(width/d) in PLAUSIBLE_W and round(height/d) in PLAUSIBLE_H:
+        scale = d
+        break
+wpt = round(width/scale)
+
+def rgb(x, y):
+    row = offset + ((h - 1 - y) if bottom_up else y) * stride
+    i = row + x * step
+    return data[i+RI], data[i+GI], data[i+BI]
+
+fails = []
+
+# 1. The basemap must have drawn.
+lo, hi = BANDS[mode]
+y0, y1 = int(lo*h), int(hi*h)
+flat = total = 0
+colours = set()
+for y in range(y0, y1, 30):
+    for x in range(0, width, 30):
+        r, g, b = rgb(x, y)
+        total += 1
+        if (max(r, g, b) - min(r, g, b) <= 16 and min(r, g, b) >= 226) or \
+           (max(r, g, b) <= 26 and max(r, g, b) - min(r, g, b) <= 6):
+            flat += 1
+        colours.add((r >> 3, g >> 3, b >> 3))
+flatfrac, distinct = flat/total, len(colours)
+if flatfrac > 0.70 and distinct < 250:
+    fails.append("blank basemap (flat=%.0f%%, colours=%d)" % (flatfrac*100, distinct))
+
+# 2. The figures sheet must sit at its detent.
+#
+# Its top edge is the topmost row that is nearly all white *and* stays mostly
+# white below it: the map above is speckled with white streets, and the chart
+# further down is not white at all, so neither can open the run.
+if mode in SHEET:
+    top = None
+    rows = []
+    for y in range(int(0.3*h), h - int(30*scale)):
+        c = 0
+        for x in range(0, width, 6):
+            r, g, b = rgb(x, y)
+            if r >= 246 and g >= 246 and b >= 246:
+                c += 1
+        rows.append((y, c/(width//6)))
+    for i, (y, f) in enumerate(rows):
+        if f >= 0.75:
+            nxt = rows[i+1:i+31]
+            if nxt and sum(v for _, v in nxt)/len(nxt) >= 0.50:
+                top = y
+                break
+    if top is None:
+        fails.append("sheet missing")
+    else:
+        got = (h - top)/scale
+        if abs(got - SHEET[mode]) > 8:
+            fails.append("sheet at %.0fpt, expected %dpt" % (got, SHEET[mode]))
+
+# 3. The map chrome must be present. A control glyph is a dark drawing on a
+# light circle, so a box around each centre is counted for dark pixels; the
+# white half of that pair is not counted because the circle's material is not
+# white on every appearance.
+if mode in PROBES:
+    half = int(16*scale)
+    for side, ypt in PROBES[mode]:
+        # 36pt in from the side the control is on. This used to read
+        # `width - (wpt-36)*scale` for the right side, which is algebraically
+        # just 36*scale — the LEFT edge — so every right-hand probe had been
+        # sampling the left rail, and passing only while the left rail had a
+        # control at the same heights. One left circle later, it did not.
+        cx = int(36*scale) if side == "L" else width - int(36*scale)
+        cy = h - int(ypt*scale)
+        dark = 0
+        for yy in range(max(0, cy-half), min(h, cy+half)):
+            for xx in range(max(0, cx-half), min(width, cx+half), 2):
+                r, g, b = rgb(xx, yy)
+                if (r*299 + g*587 + b*114)//1000 < 110:
+                    dark += 1
+        if dark < 6:
+            fails.append("missing control at %d,%dpt (dark=%d)" % (
+                36 if side == "L" else wpt-36, ypt, dark))
+
+print("; ".join(fails))
+sys.exit(1 if fails else 0)
+PY
+  ); then
+    die "scene '$id' failed its frame assertions: $reasons"
+  fi
 }
 
 # Photograph a scene once the screen has stopped changing.
@@ -515,6 +703,9 @@ while IFS='|' read -r id group label args; do
   launch "$args"
   raw="$SHOTS_DIR/$id.png"
   settle_and_shoot "$raw" || die "could not screenshot scene '$id'"
+  # Before the resize: the assertions are calibrated on the full-resolution
+  # frame, at the exact pixel scale the thresholds were measured on.
+  assert_frame "$raw" "$id"
   # A 2622px-tall PNG is a couple of megabytes; eleven of them is a lot of
   # gh-pages for a preview read at about 400px wide.
   sips -Z "$STILL_MAX_PX" "$raw" >/dev/null

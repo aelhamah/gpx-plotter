@@ -3,19 +3,98 @@ import RouteKit
 
 /// Screen furniture the map has to keep clear of, so nothing it draws lands
 /// under chrome the reader cannot see past.
+///
+/// ## The two rails
+///
+/// Apple's Maps puts its map controls in **two columns, both anchored to the
+/// sheet's top edge** — a rail of separate circles on the left, one capsule on
+/// the right — and nothing else. This file used to put four circles at the top of
+/// the map and two at the bottom, in two different corners, each positioned by its
+/// own padding.
+///
+/// That is not a style difference, it is a bug waiting to happen, and the bug
+/// happened: the bottom pair was inset by the sheet's height while the top group
+/// was pinned to the navigation bar, so raising the sheet drove the bottom pair
+/// up through the top one. On the device this was measured on there were 143pt
+/// between them and expanding the sheet moves it 324pt — an overlap of 98pt, with
+/// both buttons landing inside the other cluster.
+///
+/// One bottom-anchored band with a compile-time-constant height cannot do that.
+/// There is no second cluster to converge with, so the arithmetic cannot go wrong
+/// on a device whose insets differ from the one it was measured on.
 enum MapChrome {
-    /// The translucent navigation bar the map runs under.
-    static let topInset: CGFloat = 52
+    /// A map button's diameter. Apple's is 48; ours was 44.
+    static let controlSize: CGFloat = 48
+
+    /// Gap between one control and the next, within a rail.
+    static let controlSpacing: CGFloat = 10
+
+    /// Gap between the sheet's top edge and the rails sitting above it.
+    static let railInset: CGFloat = 12
+
+    /// The left rail's height: one circle.
+    ///
+    /// It was two — compass and fit — and the detent arithmetic above is why it
+    /// never became three: at the expanded detent the rail shares its band with
+    /// the top-leading chrome (the waypoint chip, and until recently the search
+    /// button). The compass is gone now (it duplicated what `LocateButton`
+    /// already does once the location is known; see `MapControlRail`), so the
+    /// rail is a single framing control with all of the clearance the
+    /// two-circle version had and more to spare.
+    static let railHeight = controlSize
+
+    /// The hairline between the two halves of the right capsule.
+    static let pillDivider: CGFloat = 1
+
+    /// Height of the right capsule: two targets and the divider between them.
+    static let pillHeight = controlSize * 2 + pillDivider
+
     /// Room for the bottom sheet at its shortest detent, plus a margin.
     ///
     /// Drives where the map's own buttons sit so they clear the sheet, which is
     /// why it follows the panel's height rather than being its own number.
     @MainActor
-    static var bottomInset: CGFloat {
-        AppConfig.collapsedPanelHeight(safeAreaBottom: Screen.safeAreaBottom) + 12
+    static func bottomInset(panelHeight: CGFloat) -> CGFloat {
+        panelHeight + railInset
     }
-    /// How far in from a screen edge a waypoint label is allowed to sit.
-    static let labelEdgeMargin: CGFloat = 68
+}
+
+/// Frames of the chrome drawn over the map, in screen coordinates, reported by
+/// the chrome itself.
+///
+/// The label layout needs to know where the controls are, and deriving that
+/// from detents, paddings, and safe-area constants meant every layer of the
+/// stack had to agree about them — when they did not, the obstacle rects
+/// landed in empty space, which is invisible until a label sits under a
+/// button. A frame measured by the view that draws the control cannot drift
+/// from where that control actually is.
+struct ChromeFramesPreference: PreferenceKey {
+    // `let`, not `var`: the protocol asks only for a getter, and a mutable
+    // static would be shared global state under the strict concurrency rules.
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+extension View {
+    /// Reports this view's frame under `name`, in screen coordinates, through
+    /// `ChromeFramesPreference`.
+    ///
+    /// Screen coordinates are the same space the map's own projection
+    /// (`MLNMapView.convert`) and the label overlay (which ignores the safe
+    /// area) both use, so the frames need no translation on the way in.
+    func chromeFrame(_ name: String) -> some View {
+        background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: ChromeFramesPreference.self,
+                    value: [name: geometry.frame(in: .global)]
+                )
+            }
+        }
+    }
 }
 
 /// Says which way the sheet drags, standing in for the system drag indicator.
@@ -48,6 +127,14 @@ struct PanelExpandChevron: View {
 ///
 /// Laid out in SwiftUI rather than as a MapLibre symbol layer — see the note on
 /// `MapView.waypointLabels` for why.
+///
+/// Positions arrive fully resolved from `MapView.refreshWaypointLabels`: each
+/// point is the centre of a capsule already clamped to the available area and
+/// checked against the chrome and the other labels. This view does no placement
+/// of its own, which is what keeps the drawn capsule and the rect that was
+/// collision-checked the same size — a renderer that re-measured or re-clamped
+/// would be re-solving a problem the layout already solved, with different
+/// inputs.
 struct WaypointLabelOverlay: View {
     let labels: [ProjectedWaypoint]
 
@@ -56,7 +143,10 @@ struct WaypointLabelOverlay: View {
         // map-view points rather than screen points — and the overlay has to
         // ignore the safe area too, or its origin sits below the status bar and
         // every label lands ~110 pt under its waypoint.
-        GeometryReader { geometry in
+        // GeometryReader rather than a bare ZStack: `.position` resolves against
+        // the space it is given, and only GeometryReader is guaranteed to take
+        // all of the space the overlay proposes.
+        GeometryReader { _ in
             ForEach(labels) { label in
                 Text(label.text)
                     .font(.caption2.weight(.medium))
@@ -65,14 +155,7 @@ struct WaypointLabelOverlay: View {
                     .padding(.vertical, 2)
                     .background(.regularMaterial, in: Capsule())
                     .fixedSize()
-                    .position(
-                        // Nudged in from the edge so a waypoint near the frame does
-                        // not get a half-clipped name. The margin is a guess at half
-                        // a label's width; without it the label simply runs off.
-                        x: min(max(label.point.x, MapChrome.labelEdgeMargin),
-                               max(MapChrome.labelEdgeMargin, geometry.size.width - MapChrome.labelEdgeMargin)),
-                        y: label.point.y - MapLayers.Paint.waypointLabelOffset
-                    )
+                    .position(x: label.point.x, y: label.point.y)
             }
         }
         .ignoresSafeArea()
@@ -80,56 +163,84 @@ struct WaypointLabelOverlay: View {
     }
 }
 
-/// The map's basemap and terrain toggles.
+/// The map's framing control, as a single circle.
 ///
-/// These used to live only in Settings, which made the slope and relief overlays
-/// undiscoverable from the map itself — the two places you would think to reach
-/// for them. Both screens bind to the same `WorkspaceStore` flags, so they cannot
-/// disagree.
+/// It used to hold the compass above the fit button, but the compass was a
+/// duplicate: `LocateButton` in `MapControlPill` already runs
+/// `location.cycleLocateMode()` — the same question of orientation and
+/// location, behind a different glyph. Orientation and location are one
+/// question, which is the capsule's whole reason to exist; the compass joined
+/// it by disappearing into the control that already answered it.
+struct MapControlRail: View {
+    let onFit: () -> Void
+
+    var body: some View {
+        FitButton(action: onFit)
+            .chromeFrame("rail")
+    }
+}
+
+/// The map-type and locate controls, as one capsule.
 ///
-/// A control the basemap cannot support is omitted rather than shown greyed: a
-/// permanently dead button on the map is worse than no button, and Settings still
-/// carries the explanation of *why* it is missing.
-struct MapLayerControls: View {
+/// ## Why these two share a container
+///
+/// This is the difference from the loose-column layout it replaces, and it is
+/// Apple's own: **a circle means one action, a capsule means a small family of
+/// them.** Map type and "where am I" are the same question asked about the same
+/// map, and on Apple Maps they are a single object with a hairline between them —
+/// which also means they cannot be drawn out of step with each other, because
+/// there is nothing to keep in step.
+///
+/// The hairline is the affordance: it says "these are separate controls" without
+/// spending a second border on a 48pt target.
+struct MapControlPill: View {
+    var onShowMapModes: () -> Void
+
     @EnvironmentObject private var workspace: WorkspaceStore
 
     var body: some View {
-        VStack(spacing: 8) {
-            if AppConfig.canSwitchBaseLayer {
-                Button {
-                    workspace.mapStyle = workspace.mapStyle == .outdoor ? .satellite : .outdoor
-                } label: {
-                    // The icon shows what a tap will give you, not what is already
-                    // on screen, which is the usual convention for a toggle and
-                    // the only one that works when the icons are this similar.
-                    Image(systemName: workspace.mapStyle == .outdoor
-                          ? "globe.americas.fill"
-                          : "square.3.layers.3d")
-                }
-                .accessibilityLabel(workspace.mapStyle == .outdoor
-                                    ? "Show satellite imagery"
-                                    : "Show the outdoor map")
+        VStack(spacing: 0) {
+            Button(action: onShowMapModes) {
+                Image(systemName: "globe.americas.fill")
             }
+            .accessibilityLabel("Map type and overlays")
 
-            if AppConfig.canShowTerrainOverlays {
-                toggle("square.3.layers.3d.top.filled", "Relief shading", isOn: $workspace.showHillshade)
-                toggle("mountain.2.fill", "Slope shading", isOn: $workspace.showSlope)
-            }
-            if AppConfig.canUseTerrain3D {
-                toggle("cube.transparent", "3D terrain", isOn: $workspace.showTerrain3D)
-            }
+            Rectangle()
+                .fill(.primary.opacity(0.12))
+                .frame(width: MapChrome.controlSize - 24, height: MapChrome.pillDivider)
+
+            LocateButton()
         }
-        .buttonStyle(MapChromeButtonStyle())
+        .buttonStyle(ChromeButtonStyle())
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: MapChrome.controlSize / 2))
+        .shadow(radius: 2, y: 1)
+        .frame(width: MapChrome.controlSize, height: MapChrome.pillHeight)
+        .chromeFrame("pill")
     }
+}
 
-    private func toggle(_ symbol: String, _ label: String, isOn: Binding<Bool>) -> some View {
+/// A toggle that shows whether it is on.
+///
+/// The old style only reacted to being pressed, so relief shading, slope shading
+/// and 3D terrain all looked exactly the same whichever way they were set — there
+/// was no way to tell from the map that slope shading was on at all. Apple's
+/// controls for the same thing ("3D", the map-type globe) fill in when selected,
+/// and that is the whole vocabulary of a toggle.
+struct ToggleChromeButton: View {
+    let symbol: String
+    let label: String
+    @Binding var isOn: Bool
+
+    var body: some View {
         Button {
-            isOn.wrappedValue.toggle()
+            isOn.toggle()
         } label: {
             Image(systemName: symbol)
         }
         .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "On" : "Off")
         .help(label)
+        .buttonStyle(ChromeButtonStyle(isOn: isOn))
     }
 }
 
@@ -139,19 +250,69 @@ struct FitButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "scope")
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 44, height: 44)
-                .background(.regularMaterial, in: Circle())
-                .shadow(radius: 2, y: 1)
+            FitGlyph()
+                .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                .frame(width: 17, height: 17)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChromeButtonStyle())
         .accessibilityLabel("Fit the route to the screen")
     }
 }
 
+/// The web app's fit glyph: four corner brackets, ported from the inline SVG on
+/// `#fit-route` (`M8 3H5a2 2 0 0 0-2 2v3…`, a 24×24 viewBox, stroke-width 2).
+///
+/// Not an SF Symbol: `scope` — the crosshair this used to draw — is a reticle
+/// with a centre mark, where the web control is corner brackets, and the two do
+/// not read as the same button. The bracket is drawn once and rotated four
+/// times about the centre, so the four corners cannot drift out of step.
+struct FitGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let side = min(rect.width, rect.height)
+        let scale = side / 24
+        // Centre-relative, so each rotation below is about the glyph's own
+        // centre and needs no translation of its own.
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: (x - 12) * scale, y: (y - 12) * scale)
+        }
+
+        // The top-left bracket of the web path: a horizontal arm, a round
+        // corner, a vertical arm. The corner is a true quarter arc of the
+        // 24-unit circle centred at (5,5), as the SVG's `a2 2 0 0 0-2 2` draws
+        // it, approximated by the standard circular cubic (k = 0.5523) — under
+        // 0.03% chord error, which is a rounding error at this size.
+        let k: CGFloat = 1.1046
+        var bracket = Path()
+        bracket.move(to: point(8, 3))
+        bracket.addLine(to: point(5, 3))
+        bracket.addCurve(to: point(3, 5), control1: point(5 - k, 3), control2: point(3, 5 - k))
+        bracket.addLine(to: point(3, 8))
+
+        var rotated = Path()
+        for quarter in 0..<4 {
+            rotated.addPath(
+                bracket,
+                transform: CGAffineTransform(rotationAngle: CGFloat(quarter) * .pi / 2)
+            )
+        }
+        var path = Path()
+        path.addPath(
+            rotated,
+            transform: CGAffineTransform(translationX: rect.midX, y: rect.midY)
+        )
+        return path
+    }
+}
+
 /// The six avalanche slope bands, matching `SlopeBands.slopeBandColorHex` and the
-/// web app's legend.
+/// web app's `#slope-legend`.
+///
+/// On the map at the web app's own corner — bottom-right, above the controls —
+/// shown with the shading it explains, rather than under the profile chart,
+/// which is where this used to sit: the web legend is an on-map overlay
+/// toggled with the slope layer (`main.ts` toggles `#slope-legend` with
+/// `slopeEnabled`), and the chart it appeared to explain is coloured the same
+/// way with or without it.
 ///
 /// The ranges are stated here rather than derived from the band edges so the
 /// labels read the way the web app's do (`20–30°`, not `20.0–29.9°`).
@@ -166,42 +327,64 @@ struct SlopeLegend: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Slope angle")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                ForEach(Self.bands, id: \.label) { band in
-                    HStack(spacing: 3) {
-                        Circle()
-                            .fill(Color(hex: band.hex))
-                            .frame(width: 8, height: 8)
-                        Text(band.label)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Slope \(band.label)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color(hex: "#0f172a"))
+            ForEach(Self.bands, id: \.label) { band in
+                HStack(spacing: 7) {
+                    Capsule()
+                        .fill(Color(hex: band.hex))
+                        .frame(width: 15, height: 6)
+                    Text(band.label)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(hex: "#0f172a"))
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Slope \(band.label)")
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: PanelMetrics.legendHeight)
+        // The web card: `rgba(255,255,255,.85)` over the map, a `rgba(0,0,0,.12)`
+        // hairline, 9pt corners, a soft shadow. A fixed white rather than the
+        // system material, because the legend's dark ink is part of the look —
+        // it is the same card the web app draws at `right: 18px; bottom: 28px`.
+        .padding(.horizontal, 13)
+        .padding(.vertical, 11)
+        .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
     }
 }
 
-/// Circular map button, matching `LocateButton`'s own framing so the two stacks
-/// read as one control column.
-struct MapChromeButtonStyle: ButtonStyle {
+/// Circular map button, matching `LocateButton`'s own framing so the rail and
+/// the capsule read as one control system.
+///
+/// `isOn` is what turns a row of identical grey discs into something you can
+/// read at a glance: a filled disc means the overlay is on. Without it, relief,
+/// slope and 3D terrain were three identical circles whose only difference was
+/// something you had to remember doing.
+struct ChromeButtonStyle: ButtonStyle {
+    var isOn = false
+    /// Overrides the glyph colour, for the one control whose colour means
+    /// something: locate goes dim when location access is off, which is the only
+    /// warning it gives before you tap it and learn why nothing happened.
+    var tint: Color?
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.primary)
-            .frame(width: 44, height: 44)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(glyphStyle)
+            .frame(width: MapChrome.controlSize, height: MapChrome.controlSize)
             .background(.regularMaterial, in: Circle())
             .shadow(radius: 2, y: 1)
             .opacity(configuration.isPressed ? 0.6 : 1)
+    }
+
+    private var glyphStyle: AnyShapeStyle {
+        if let tint { return AnyShapeStyle(tint) }
+        return isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary)
     }
 }

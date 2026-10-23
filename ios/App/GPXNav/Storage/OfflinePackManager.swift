@@ -481,12 +481,22 @@ final class OfflinePackManager: ObservableObject {
     var canFreeSpace: Bool { manifest.totalBytes > AppConfig.offlineByteBudget }
 
     /// Wipe every tile and every record.
+    ///
+    /// Also resets MapLibre's own cache, which this app cannot see into and
+    /// therefore used to leave alone. Leaving it is what made a stuck basemap
+    /// unrecoverable from inside the app: the tiles really were gone, the screen
+    /// reported an empty cache, and the map stayed blank. See `MapLibreCache`.
     func removeAllTiles() {
         isPruning = true
         Task {
             prefetchTask?.cancel()
             prefetchTask = nil
             await cache.clear()
+            do {
+                try await MapLibreCache.clear()
+            } catch {
+                print("[Cache] MapLibre cache reset failed: \(error)")
+            }
             manifest = OfflinePackManifest()
             manifestStore.clear()
             packs = []

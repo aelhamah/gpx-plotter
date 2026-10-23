@@ -15,6 +15,8 @@ struct ViewerScreen: View {
     @StateObject private var analysis: RouteAnalysis
     @State private var isPanelPresented = true
     @State private var isSearching = false
+    /// Base layer and overlay choice, behind the globe in the control pill.
+    @State private var isShowingMapModes = false
     @State private var scrubbedDistance: Double?
     /// Why the basemap is not showing, or nil when it loaded.
     @State private var mapError: String?
@@ -31,6 +33,13 @@ struct ViewerScreen: View {
     /// rather than once on appear — which always beat the style and left the
     /// estimate permanently at zero.
     @State private var styleGeneration = 0
+    /// The highest zoom the loaded basemap actually serves, read back from the
+    /// style once `StyleBuilder` has built it.
+    ///
+    /// The map needs this to keep the camera inside the tile ceiling — see
+    /// `StyleBuilder.maxZoom(for:)`, which is the long version of why an
+    /// uncapped fit turned the basemap into a blank canvas.
+    @State private var maxBasemapZoom: Double?
     /// Whether the sheet is showing its tall layout.
     ///
     /// A flag rather than a `PresentationDetent`, because the heights are now
@@ -41,6 +50,9 @@ struct ViewerScreen: View {
     /// did not match the one the height was measured on.
     @State private var isPanelExpanded: Bool = ProcessInfo.processInfo
         .arguments.contains("-expandedPanel")
+    /// Frames of the chrome drawn over the map, reported by the chrome itself
+    /// through `ChromeFramesPreference`; read by `mapInsets`.
+    @State private var chromeFrames: [String: CGRect] = [:]
 
     let route: Route
 
@@ -56,16 +68,36 @@ struct ViewerScreen: View {
     }
 
     /// Rebuilt with the shared cache the first time the environment provides it.
+    ///
+    /// The gate lives in `baseMap` rather than here: an `if` inside this
+    /// modifier chain stalls the type checker ("unable to type-check this
+    /// expression in reasonable time"), and splitting it costs nothing.
     @ViewBuilder
+    private var baseMap: some View {
+        // The map itself waits for the loopback to bind. MapLibre asks for
+        // `style.json` the moment the view exists, treats a refused ask as
+        // final, and a style this process never sees leaves every tile a 404
+        // it will not retry — the flat-grey basemap. The placeholder is the
+        // system background, which is also what the map paints before its
+        // first tile, so the swap is invisible in practice.
+        if services.serverReady {
+            MapView(
+                route: route,
+                scrubbedDistance: $scrubbedDistance,
+                loadError: $mapError,
+                onStyleLoaded: { styleGeneration += 1 },
+                waypointLabels: $waypointLabels,
+                fitToken: $fitToken,
+                maxBasemapZoom: maxBasemapZoom,
+                mapInsets: mapInsets
+            )
+        } else {
+            Color(.systemBackground)
+        }
+    }
+
     private var content: some View {
-        MapView(
-            route: route,
-            scrubbedDistance: $scrubbedDistance,
-            loadError: $mapError,
-            onStyleLoaded: { styleGeneration += 1 },
-            waypointLabels: $waypointLabels,
-            fitToken: $fitToken
-        )
+        baseMap
             .ignoresSafeArea()
             .overlay {
                 WaypointLabelOverlay(labels: waypointLabels)
@@ -81,41 +113,85 @@ struct ViewerScreen: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(.red, in: RoundedRectangle(cornerRadius: 10))
+                    // The banner is an obstacle while it is up, and its frame
+                    // has to be the red pill's — measured, so a label cannot
+                    // hide behind it, and gone the moment the error clears.
+                    .chromeFrame("errorBanner")
                     .padding(.top, 96)
                     .padding(.horizontal, 12)
                 }
             }
             .overlay(alignment: .topLeading) {
-                HStack(spacing: 8) {
-                    searchButton
-                    waypointCount
-                }
-                .padding(.leading, 12)
-                // Clear the translucent navigation bar, which the map now runs under.
-                .padding(.top, 52)
+                waypointCount
+                    .padding(.leading, 12)
+                    // Sits just under the navigation bar rather than 52pt below
+                    // it. The bar is 113pt on a notched device and the rails are
+                    // bottom-anchored, so every point this sits lower is a point
+                    // taken out of the space the rails need at the expanded
+                    // detent. See `MapChrome.railHeight`.
+                    .padding(.top, 12)
+                    // Its frame is the top edge the labels must clear — the
+                    // padded frame starts exactly at the content region's top,
+                    // which is where the navigation bar ends. The search button
+                    // that used to sit here is gone (it never worked while the
+                    // figures sheet is up — see docs/dev.md); the waypoint chip,
+                    // when there is one, still has to be avoided.
+                    .chromeFrame("topLeading")
             }
-            .overlay(alignment: .topTrailing) {
-                MapLayerControls()
-                    .padding(.trailing, 12)
-                    .padding(.top, 52)
-            }
+            // The slope legend, on the map at the web app's own corner: it
+            // explains the map's slope shading, so it belongs with the shading
+            // rather than under the profile chart, which is where it used to
+            // sit. Gated with the panel: it is sheet-anchored, and a legend
+            // standing over a dismissed sheet is the same orphanage as the rails.
             .overlay(alignment: .bottomTrailing) {
-                // Lifted clear of the sheet. The panel owns the bottom of the
-                // screen, so a flat 12pt inset put the locate button on top of
-                // the stats row — and its hit area swallowed taps meant for the
-                // figures underneath.
-                VStack(spacing: 10) {
-                    FitButton { fitToken += 1 }
-                    LocateButton()
+                if isPanelPresented, workspace.showSlope {
+                    SlopeLegend()
+                        .padding(.trailing, 12)
+                        .padding(.bottom, MapChrome.bottomInset(panelHeight: panelHeight)
+                            + MapChrome.pillHeight + MapChrome.railInset)
+                        .chromeFrame("slopeLegend")
                 }
-                .padding(.trailing, 12)
-                .padding(.bottom, panelHeight + 12)
+            }
+            // Both rails, anchored to the sheet rather than to opposite ends of
+            // the screen. They move with the sheet and share one band of known
+            // height, so they cannot converge — see `MapChrome` for the geometry
+            // that used to let them. And they stand only while the sheet does:
+            // `bottomInset(panelHeight:)` measures the *detent*, not the live
+            // sheet, so with the panel down the rails would sit at their old
+            // height over bare map — the floating icons. The panel is only ever
+            // down while navigation's cover is coming up or going away, so this
+            // is the gap between those, not a state anyone can park in.
+            .overlay(alignment: .bottom) {
+                if isPanelPresented {
+                    HStack(alignment: .bottom) {
+                        MapControlRail { fitToken += 1 }
+                        Spacer(minLength: 0)
+                        MapControlPill { isShowingMapModes = true }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, MapChrome.bottomInset(panelHeight: panelHeight))
+                }
+            }
+            .sheet(isPresented: $isShowingMapModes) {
+                MapModesSheet()
+                    .environmentObject(workspace)
             }
             .sheet(isPresented: $isPanelPresented) {
                 panel
+                    // The sheet's own top edge, measured: label layout needs it
+                    // and no amount of detent arithmetic stayed honest with it.
+                    .chromeFrame("panel")
                     .presentationDetents(panelDetents, selection: panelDetentBinding)
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDragIndicator(.hidden)
+                    // Not dismissible by swipe. A swiped-away panel left the
+                    // rails and the legend standing where the sheet had been —
+                    // floating over the map with no figures and nothing to put
+                    // them back — and taking it down is something only this app
+                    // should do (navigation, below, which brings it back on the
+                    // way out). Collapsing to the short detent is still what the
+                    // drag is for, so the map can be got out of the way.
+                    .interactiveDismissDisabled(true)
                     // No `presentationCornerRadius`. A sheet's own corner radius is
                     // derived from the display's, and there is no public API to read
                     // the display's — `UIListContentConfiguration.cornerRadius` and
@@ -156,9 +232,41 @@ struct ViewerScreen: View {
                 )
                 .environmentObject(workspace)
                 .environmentObject(location)
+                .environmentObject(services)
+            }
+            .onChange(of: isNavigating) {
+                // Live guidance is the one thing that takes the figures sheet
+                // down (a cover will not present over a sheet from the same
+                // hierarchy — see `beginNavigation`), and nothing used to bring
+                // it back: the viewer returned with its rails floating over a
+                // bare map and no way to summon the figures again. The sheet
+                // comes back with the screen it left.
+                if !isNavigating {
+                    isPanelPresented = true
+                }
             }
             .onChange(of: styleGeneration) {
                 Task { await packs.estimate(for: route) }
+                // Re-read on every style load, not once on appear: the ceiling is
+                // a property of the style that just loaded, so it changes with the
+                // base layer, and reading it before the first build would pin the
+                // map to the fallback for the whole session.
+                let style = workspace.mapStyle
+                Task {
+                    let ceiling = await services.styleBuilder.maxZoom(for: style)
+                    if workspace.mapStyle == style {
+                        maxBasemapZoom = ceiling
+                    }
+                }
+            }
+            .onChange(of: workspace.mapStyle) {
+                // Until the new style reports, hold the ceiling at *its*
+                // fallback rather than the previous style's number — a camera
+                // carried across the swap is clamped against this in
+                // `applyZoomCeiling`, and clamping a satellite camera against
+                // outdoor's ceiling (or the reverse) is the wrong figure either
+                // way for as long as the fetch takes.
+                maxBasemapZoom = nil
             }
             .task {
                 workspace.selectedRouteId = route.id
@@ -181,11 +289,7 @@ struct ViewerScreen: View {
                     analysis.fillMissingElevations()
                 }
                 if ProcessInfo.processInfo.arguments.contains("-openSearch") {
-                    // Through `openSearch()`, not straight to `isSearching`: the
-                    // panel has to come away first or the sheet is dropped, and a
-                    // capture that set the flag directly would photograph the
-                    // broken path and call it fixed.
-                    openSearch()
+                    isSearching = true
                 }
                 // `-scrub 0.4` seeds the profile scrub at a fraction of the
                 // route. `simctl` cannot drag, so this is how the map trace gets
@@ -203,13 +307,17 @@ struct ViewerScreen: View {
                     packs.download(for: route)
                 }
             }
-            .sheet(isPresented: $isSearching, onDismiss: {
-                // Put the figures back: `openSearch` took them away to make room,
-                // and a map that loses its statistics because you looked a peak
-                // up is its own small wrongness.
-                isPanelPresented = true
-            }) {
+            .sheet(isPresented: $isSearching) {
                 SearchView(proximity: route.points.first?.coordinate)
+            }
+            // The chrome reports where it drew itself; `mapInsets` turns those
+            // frames into the region the waypoint labels may use. Guarded on
+            // equality because preferences can re-fire with the same value, and
+            // every firing would otherwise re-run the label layout.
+            .onPreferenceChange(ChromeFramesPreference.self) { frames in
+                if frames != chromeFrames {
+                    chromeFrames = frames
+                }
             }
     }
 
@@ -267,10 +375,6 @@ struct ViewerScreen: View {
                 // has gone after the first drag — shows more profile instead.
                 .frame(height: chartRowHeight)
 
-                // The chart is coloured by these bands, so it is explained whether
-                // or not the on-map slope overlay happens to be switched on.
-                SlopeLegend()
-
                 OfflinePackBar(route: route, packs: packs)
             }
         }
@@ -315,24 +419,6 @@ struct ViewerScreen: View {
     /// hierarchy is still up — the flag flips and nothing appears. Dropping the
     /// panel first also means the readout is not competing with the stats for the
     /// screen.
-    /// Open the search sheet, which means putting the figures sheet away first.
-    ///
-    /// The viewer's figures sheet is presented for as long as the screen is up,
-    /// and a presentation made while another from the same host is already up is
-    /// dropped rather than queued — so the search button did nothing, with no
-    /// error and nothing to explain it. The recipe is `beginNavigation`'s:
-    /// dismiss, then ask on a later turn, because setting both in the same
-    /// transaction is what loses one of them.
-    ///
-    /// The figures come back when the search closes, so looking something up costs
-    /// a swipe of the panel rather than losing it.
-    private func openSearch() {
-        isPanelPresented = false
-        Task { @MainActor in
-            isSearching = true
-        }
-    }
-
     private func beginNavigation() {
         isPanelPresented = false
         // One runloop later, so the sheet's dismissal has been committed before
@@ -355,9 +441,13 @@ struct ViewerScreen: View {
         let fixed = PanelMetrics.expandChevronHeight
             + PanelMetrics.statsBlockHeight
             + PanelMetrics.chartSpacing
-            + PanelMetrics.legendHeight
             + PanelMetrics.offlineRowHeight
             + (AppConfig.keyProblemDescription == nil ? 0 : PanelMetrics.keyWarningHeight)
+        // No `legendHeight`: the slope legend moved to the map (see its overlay
+        // above), so the chart absorbs the row it used to sit in, exactly as it
+        // absorbs the key warning when there is none. The detent itself is
+        // unchanged — `AppConfig.expandedPanelHeight` still counts the row, and
+        // the chart is what takes up the slack.
         let available = panelHeight - Screen.safeAreaBottom - fixed
         return max(PanelMetrics.chartMinimumHeight, available)
     }
@@ -370,33 +460,55 @@ struct ViewerScreen: View {
             : AppConfig.collapsedPanelHeight(safeAreaBottom: Screen.safeAreaBottom)
     }
 
-    @ViewBuilder
-    private var searchButton: some View {
-        if let limitation = AppConfig.searchLimitation {
-            // Tappable even with no geocoder, because the sheet explains itself
-            // and a control that silently refuses to respond is the thing this was
-            // reported as. A greyed glyph with the reason hidden in a tooltip
-            // told the user nothing on a phone, where there is no hover.
-            Button {
-                openSearch()
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .frame(width: 40, height: 40)
-                    .background(.regularMaterial, in: Circle())
+    /// What the map has to keep clear of, in its own coordinates.
+    ///
+    /// Every edge and obstacle comes from a frame the chrome measured about
+    /// itself (`ChromeFramesPreference`), in screen coordinates — the same
+    /// space the map's projection and the label overlay use. Deriving these
+    /// from detents, paddings and safe-area constants meant every layer of the
+    /// stack had to agree about them; when the rails' derived band came out
+    /// 49pt below where the buttons actually sat, nothing in the app could
+    /// tell — the labels just went under the buttons.
+    ///
+    /// The rails, the waypoint chip's band and the slope legend are obstacles
+    /// rather than edge insets because they are columns, not borders: an inset
+    /// along an edge would cost every label near it, where an obstacle costs
+    /// only the ones that would have landed under a button.
+    private var mapInsets: MapInsets {
+        let screen = UIScreen.main.bounds
+        // A little slack, so a label beside a button does not look glued to it
+        // rather than merely clear of it.
+        let slack: CGFloat = 4
+
+        let topLeading = chromeFrames["topLeading"]
+        let rail = chromeFrames["rail"]
+        let pill = chromeFrames["pill"]
+        let legend = chromeFrames["slopeLegend"]
+        // The sheet runs to the screen's edge and its detent is measured above
+        // the home indicator, so the sheet is `safeAreaBottom` taller than
+        // `panelHeight`. Used only until the sheet has reported its own frame.
+        let panelTop = chromeFrames["panel"]?.minY
+            ?? (screen.height - panelHeight - Screen.safeAreaBottom)
+
+        var obstacles: [CGRect] = []
+        for frame in [topLeading, rail, pill, legend] {
+            if let frame {
+                obstacles.append(frame.insetBy(dx: -slack, dy: -slack))
             }
-            .buttonStyle(MapChromeButtonStyle())
-            .accessibilityLabel("Search")
-            .accessibilityHint(limitation)
-        } else {
-            Button {
-                openSearch()
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .frame(width: 40, height: 40)
-                    .background(.regularMaterial, in: Circle())
-            }
-            .accessibilityLabel("Search for a place")
         }
+        if let errorBanner = chromeFrames["errorBanner"] {
+            obstacles.append(errorBanner.insetBy(dx: -slack, dy: -slack))
+        }
+
+        return MapInsets(
+            // Below the navigation bar: the top-leading row's top edge is
+            // exactly where the content region starts.
+            top: topLeading?.minY ?? Screen.topChrome,
+            // Up to the sheet's top edge — the rails sit inside that band and
+            // are avoided as obstacles rather than by lifting this further.
+            bottom: screen.height - panelTop,
+            obstacles: obstacles
+        )
     }
 
     @ViewBuilder

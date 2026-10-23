@@ -87,9 +87,25 @@ make it happen.
 6. Leave navigation. The viewer should return to whatever mode it was in before —
    **unless** you tapped the compass during the hike, which is a choice and should
    survive.
+7. In the viewer, on a **fresh install** (delete the app first, so location
+   permission is asked again): tap **Locate** once to centre on yourself, then tap
+   it again. The second tap should rotate the map to face your direction of
+   travel, and it should keep following as you turn. A fresh grant is the path
+   where authorisation returns through the callback that does not start heading
+   updates — it is where the second tap used to find a dead stream and leave the
+   map north-up forever.
+8. Switch to another tab and back, then tap **Locate** twice again. Same rotation:
+   the button stops its heading stream when it disappears, so this covers the
+   other way the stream arrives dead.
+9. While the map is facing your direction — and again after one more tap brings
+   it back to north-up — look at the blue dot itself: a translucent cone should
+   fan out of it, pointing the way you face. Switch tabs and back (the cycle
+   resets), and it should be gone until you tap Locate again.
 
 **Pass:** step 2 tracks rotation without movement, step 3 is a true 0° (not
-"approximately up"), and step 6 respects a tap.
+"approximately up"), step 6 respects a tap, both viewer taps in steps 7-8
+end up heading-up on a device — not merely centred — and the step 9 cone is
+live wherever there is a heading to point with.
 
 **Why here:** the first heading is the one that matters and it cannot be tested
 without a magnetometer. The device is also the only place a genuine 0° reset is
@@ -102,7 +118,12 @@ distinguishable from one that is nearly-north.
 Visual pass, no pass/fail logic. Confirm these are distinct at arm's length:
 
 - **Start navigation** (`figure.hiking`) in the toolbar
-- **Locate** (`location.fill`) directly below it — the two used to be identical
+- **Locate** directly below it — three glyphs now, one per cycle step: the
+  outlined pin while the map is free, the solid one once it has centred on
+  you, the north needle once it is facing your direction (and the two used to
+  be identical to Navigate's)
+- **Fit** (four corner brackets, the web app's glyph — was the `scope` reticle)
+  in the left rail
 - **Following / Pan freely** (`viewfinder.circle.fill` / `hand.raised.fill`) in the
   nav HUD
 - **Missing key** (`key.slash.fill`), orange, when no key is configured
@@ -114,16 +135,19 @@ Visual pass, no pass/fail logic. Confirm these are distinct at arm's length:
 Everything up to here works with no key. This and §5 do not, and both are the
 first things in this list that cannot be verified at all without one.
 
-1. Configure a key. With no key, both entry points say **Search is unavailable**
-   and that is correct — not a bug to file.
-2. Search "Maroon Bells" from the map's search button. The sheet must appear.
-3. Close it, and search the same term from the **Create** tab. Both must work.
-4. Confirm results arrive, and that the profile chart's slope legend is correct for
-   the result you pick.
+1. Configure a key. With no key, search says **Search is unavailable** and that
+   is correct — not a bug to file.
+2. Search "Maroon Bells" from the **Create** tab. The sheet must appear. (The map
+   screen's search button is gone for now: it never worked while the figures
+   sheet is up — see [dev.md](dev.md).)
+3. Confirm results arrive.
+4. Turn **Slope shading** on from the map-type sheet and check the legend at the
+   map's bottom right: the six bands, right colours, readable over the map.
 5. Turn off location permission and search again. It should say so rather than
    return nothing.
 
-**Pass:** both entry points present, and results actually arrive.
+**Pass:** the Create entry point presents, results actually arrive, and the
+map's slope legend is correct with the shading on.
 
 **Why here:** mostly because a key is needed — but note that "the sheet presents"
 was also verified on the simulator. The part that needs a device is the real

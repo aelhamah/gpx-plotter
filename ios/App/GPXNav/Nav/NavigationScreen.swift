@@ -16,10 +16,16 @@ import RouteKit
 struct NavigationScreen: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
+    @EnvironmentObject private var services: AppServices
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var session: NavigationSession
     @State private var elapsed: TimeInterval = 0
+    /// Pause bookkeeping for the clock. The hiker paused the hike, not time, so
+    /// the elapsed figure freezes while paused and excludes the paused span when
+    /// it resumes — the stopwatch rule, and the same truth the footer states.
+    @State private var pausedAt: Date?
+    @State private var pausedSeconds: TimeInterval = 0
     /// Mirrors the session's covered distance into `MapView`, which draws it as a
     /// trace over the route. Bound because the map is a separate view.
     @State private var coveredDistance: Double?
@@ -54,16 +60,24 @@ struct NavigationScreen: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            MapView(
-                route: session.route,
-                // The walked portion of the route. Same mechanism the profile
-                // chart's scrub uses, and it means the same thing here: how far
-                // along the route you have got.
-                scrubbedDistance: $coveredDistance,
-                onStyleLoaded: { },
-                followsUserLocation: $followsUser
-            )
-            .ignoresSafeArea()
+            // Same gate as the viewer: the map waits for the loopback to bind,
+            // because MapLibre never repeats a refused `style.json` ask and a
+            // style this process never built 404s every tile for the session.
+            if services.serverReady {
+                MapView(
+                    route: session.route,
+                    // The walked portion of the route. Same mechanism the profile
+                    // chart's scrub uses, and it means the same thing here: how far
+                    // along the route you have got.
+                    scrubbedDistance: $coveredDistance,
+                    onStyleLoaded: { },
+                    followsUserLocation: $followsUser
+                )
+                .ignoresSafeArea()
+            } else {
+                Color(.systemBackground)
+                    .ignoresSafeArea()
+            }
 
             VStack(spacing: 8) {
                 if session.isOffCourse {
@@ -77,12 +91,13 @@ struct NavigationScreen: View {
             session.start()
             location.startStreaming()
             // Facing the direction of travel, which is the point of navigating:
-            // the map was north-up because `followsHeading` lived on the locate
-            // button, and that button is not on this screen, so there was no way
-            // to reach it from here at all. Reset rather than assign, so coming
-            // back from the viewer with it turned off does not quietly re-enable
-            // a mode the user turned off there.
-            location.followsHeading = true
+            // the map was north-up because heading-follow lived on the locate
+            // button's cycle, and that button is not on this screen, so there
+            // was no way to reach it from here at all. `followsHeadingDefaulted`
+            // makes the exit *reset* rather than assign back, so coming
+            // from the viewer with the cycle not running does not quietly
+            // re-enable a mode the user turned off there.
+            location.followMode = .orientation
             followsHeadingDefaulted = true
             // Navigation is the one moment the "Always" prompt has context: the
             // user has just chosen to walk a route, and it is the only
@@ -104,9 +119,11 @@ struct NavigationScreen: View {
             location.stopStreaming()
             NavigationCommandBus.shared.setObserved(false)
             // Only undo the default: a compass tapped here is a choice, and
-            // re-setting it on the way out would discard it.
+            // re-setting it on the way out would discard it. Undo is *nothing*
+            // rather than a remembered mode, so the viewer's first tap starts
+            // the cycle at "my location", the same rule as a fresh launch.
             if followsHeadingDefaulted {
-                location.followsHeading = false
+                location.followMode = .nothing
                 followsHeadingDefaulted = false
             }
             // Ending here unconditionally was the first attempt and it is wrong:
@@ -138,7 +155,7 @@ struct NavigationScreen: View {
             // the elapsed time never leaves 0:00. A task survives re-renders.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
-                elapsed = session.elapsed() ?? 0
+                refreshElapsed()
             }
         }
         .onChange(of: session.hasArrived) { _, arrived in
@@ -228,6 +245,7 @@ struct NavigationScreen: View {
         case .pause:
             location.stopStreaming()
             isPaused = true
+            if pausedAt == nil { pausedAt = Date() }
             // Immediately: a pause the lock screen does not show is a pause the
             // hiker cannot confirm, and the tile would keep offering "Pause"
             // forever.
@@ -235,6 +253,11 @@ struct NavigationScreen: View {
         case .resume:
             location.startStreaming()
             isPaused = false
+            if let began = pausedAt {
+                pausedSeconds += Date().timeIntervalSince(began)
+                pausedAt = nil
+            }
+            refreshElapsed()
             Task { if let readout = session.readout { await updateActivity(readout, isPaused: false, immediately: true) } }
         case .end:
             endNavigation()
@@ -254,6 +277,14 @@ struct NavigationScreen: View {
         location.stopStreaming()
         Task { await LiveActivityController.shared.end(dismissal: .immediate) }
         dismiss()
+    }
+
+    /// Recompute the clock, subtracting any paused span so the figure counts
+    /// walking time only.
+    private func refreshElapsed() {
+        let now = Date()
+        let paused = pausedSeconds + (pausedAt.map { now.timeIntervalSince($0) } ?? 0)
+        elapsed = max(0, (session.elapsed(at: now) ?? 0) - paused)
     }
 
     /// Fold a fix into the session and mirror it onto the map. The covered
@@ -312,7 +343,7 @@ struct NavigationScreen: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                statColumn("Progress", "\(Int((session.readout?.fraction ?? 0) * 100))%")
+                statColumn("Progress", "\(Int(((session.readout?.fraction ?? 0) * 100).rounded()))%")
                 statColumn("Elevation", Units.formatElevation(session.readout?.elevation, system: workspace.unitSystem))
                 statColumn("Ahead", gradeAheadText)
                 statColumn("Elapsed", elapsedText)
@@ -414,10 +445,12 @@ struct NavigationScreen: View {
             Spacer()
 
             Button {
-                // Same two states as the viewer's locate button: facing the way
-                // you are going, or facing north. A third tap is back where it
-                // started, which is the compass behaviour people already expect.
-                location.toggleHeading()
+                // The same cycle as the viewer's locate button, seen from
+                // inside it: orientation → north-up → orientation, which from
+                // here is the two states people expect from a compass button
+                // (the cycle's first step, centring, has already happened —
+                // this screen starts every hike on the user).
+                location.cycleLocateMode()
                 // The button is a choice now, so it is no longer the default we
                 // put there. Without this the exit code below reads the flag as
                 // "we set this" and switches it back off anyway, discarding what
@@ -450,17 +483,11 @@ struct NavigationScreen: View {
         .padding(.vertical, 10)
     }
 
-    /// Grade as a climb-or-descend arrow, because "8%" on its own does not say
-    /// whether the hill is going up.
-    ///
-    /// `gradeAheadPercent` is a rise-over-run *percentage*, while the arrow bands
-    /// and `Units.formatSlope` both want degrees, so it converts rather than
-    /// labelling a percentage with a degree sign.
+    /// Grade through the shared formatter, so the HUD and the lock screen print
+    /// the same number the same way — which is the whole reason `HikeFormat`
+    /// exists.
     private var gradeAheadText: String {
-        guard let grade = session.readout?.gradeAhead else { return Units.missingValue }
-        let degrees = atan(grade / 100) * 180 / .pi
-        let arrow = degrees > 1 ? "▲" : (degrees < -1 ? "▼" : "▬")
-        return "\(arrow) \(Int(degrees.rounded()))°"
+        HikeFormat.grade(session.readout?.gradeAhead) ?? Units.missingValue
     }
 
     private var elapsedText: String {

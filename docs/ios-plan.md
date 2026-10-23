@@ -295,7 +295,7 @@ same `terrain` source — about five lines. On MapKit this was a whole hand-roll
 `LineMark(xStart:xEnd:yStart:yEnd:)` inside a `Chart` plot, foreground-styled
 with the exact `slopeBandColorHex` colours, translucent `AreaMark` fill at 0.22
 alpha to match. A `RuleMark` selection drives the profile-trace overlay. The
-six-band slope legend is unchanged.
+six-band slope legend now sits on the map, beside the shading it explains.
 
 **Search** is a direct port of `geocode.ts`: debounced, six results, `proximity`
 = current map centre rounded to five decimals, same `Peak` / `Trailhead` /
@@ -363,11 +363,22 @@ makes the profile-trace interaction (§ below) possible.
 over the map rather than in a `VStack` beside it.
 
 The sheet has two detents: collapsed it is **just the figures**, expanded it
-carries the figures, the profile, the slope legend, and the offline row. The
+carries the figures, the profile, and the offline row — plus the slope legend's
+old row, which stays in the height (the capture pins the sheet's size) though
+the legend itself now sits on the map. The
 expanded detent is a `.height(_:)` — the content's own height, not `.large`. A
 profile is for scrubbing, and scrubbing traces the position on the map, so the map
 has to stay visible while the sheet is up; `.large` covered nearly the whole
 display and left a sliver to look at.
+
+**The sheet cannot be dragged away, and navigation gives it back.** A swipe was
+able to dismiss it outright — and navigation's start dismisses it on purpose,
+for the fullScreenCover noted below — but nothing ever brought it back, and the
+map's rails and slope legend draw only while the panel is up, so either path
+left the map without its own chrome. The sheet now carries
+`.interactiveDismissDisabled`, and ending navigation re-presents the panel
+through the cover's `onChange` (a `fullScreenCover` has no `onDismiss` to do
+it with).
 
 **The heights are computed, not written down.** `PanelMetrics` holds one number
 per row, each applied as an explicit `.frame(height:)` by the view that draws it,
@@ -431,7 +442,10 @@ usable once the profile is an overlay rather than a sibling of the map.
   the map to the current heading, then tapping again snaps back to north, the way
   a compass button behaves. `MLNMapCamera` calls the rotation `heading`, not
   `direction`. *This entry was written as though it were true and, for the
-  second half, it was not — see #66 below.*
+  second half, it was not — see #66 below. The button has since become a
+  three-step cycle — nothing, my location, device orientation, then alternating
+  between the last two — whose first tap from a fresh launch always starts at
+  my location; the Locate row below is the current truth.*
 - **The title bar is slightly translucent**, so the map reads as continuing under
   the navigation bar rather than stopping at it. The map ignores *all* safe
   areas for this to have anything to show through; the search control sits below
@@ -601,6 +615,22 @@ out at z14 (`outdoor` z5–14, `contours` z9–14), so z15–z16 would only ever
 produce empty tiles. `AppConfig.offlineZoomRange` is capped accordingly. The
 satellite raster goes to z22, so nothing caps it, but nothing needs it to.
 
+The live camera is capped by the same fact, separately enforced. The ceiling is
+read back from the style that loaded — the highest `maxzoom` over its vector and
+raster sources, `raster-dem` excluded because an elevation model's depth is not
+imagery depth (`StyleBuilder.styleZoomCeiling`) — and lands on the map three
+ways: as `MapView.maximumZoomLevel`, which is the only thing that reaches
+MapLibre's own pinch pipeline; as a clamp on a camera carried across a style
+swap, since the old style may have allowed a zoom the new one has fewer tiles
+for; and as the `maxZoom` of a fit, so the fit targets the ceiling rather than
+being dragged down to it afterwards. Outdoor reports 15 — `outdoor-v2`'s base
+geometry is the planet tileset, which runs to z15 even though the trails source
+stops at z14 — satellite 22, and `AppConfig.fallbackMaxZoom` stands in until
+the style has answered. MapTiler returns 502 past a tileset's maxzoom rather
+than overzooming, so an unclamped zoom does not get soft parent tiles: it gets
+the blank canvas this clamp exists to prevent, which is the same failure the
+offline cap is dodging from the other side.
+
 The plan originally said to test each tile centre against distance-to-route. As
 written that selects **nothing at low zoom**, because a z12 tile is ~9.8 km across
 while the buffer is ~1 km, so every tile centre falls outside the corridor. The
@@ -689,7 +719,17 @@ Three findings from building it, all of which look like details and are not:
   world view: the route and the dot were on screen, but on a continent. The first
   fix now asks for `AccuracyHalo.zoom(forAccuracyMeters:latitude:)` (the same
   zoom the locate button uses, one level closer) and lets MapLibre convert it to
-  an altitude. After that the user's own zoom is left alone.
+  an altitude. After that   the user's own zoom is left alone.
+- **A locate request has to outlive the style's first fit — and the state that
+  guards it has to outlive SwiftUI's rebuilds.** `mapView.style != nil` goes true
+  while the style's resources are still streaming, so a request spent before
+  `didFinishLoading` came back to find the route fitted on top of it; the request
+  now waits for that callback to finish. And the camera's follow box, stored on
+  the `MapView` struct, was recreated — and emptied — on every SwiftUI update:
+  `lastHeading` read nil one update after `applyCamera` set it, and every update
+  eased a fresh rotation that cancelled the recentre mid-flight, freezing the
+  camera a third of the way to the dot. The box now lives on the coordinator,
+  where `lastFitToken` already lived for exactly this reason.
 - **A `Timer.publish` stored on a view is rebuilt with the view.** The nav screen
   ticks once a second to show elapsed time, and every fix re-evaluates that body,
   which built a fresh publisher and resubscribed. With one-second fixes against a
@@ -700,7 +740,8 @@ Three findings from building it, all of which look like details and are not:
 - **A `fullScreenCover` will not present while a `.sheet` from the same hierarchy
   is up.** The figures sheet is presented by the same view, so the flag flipped and
   nothing appeared — with no error and no crash to explain it. Navigation now
-  dismisses the panel first, which is what you want anyway.
+  dismisses the panel first, which is what you want anyway — and ending
+  navigation brings the panel back, which it did not before (see §7).
 - **`LocationFix.timestamp` defaulted to the epoch** and `LocationController`
   never set it. Harmless while nothing timed off a fix; not harmless once the
   off-course detector times its 8s window off exactly that, because a batch
@@ -871,11 +912,42 @@ M0 defects the simulator surfaced, all fixed:
 | Full layer stack | **Done.** `route-casing` / `route-line` / `route-points` per route, waypoint circles, `location-accuracy` / `location-halo` / `location-dot`, relief, and slope, with the web app's paint values ported into `MapLayers.swift`. Route vertices are circle layers rather than annotations, for the same reason the web app moved them off DOM markers. |
 | Multi-route | **Done.** Every visible route is drawn, not only the selected one; the selected route's vertices get the larger radius and dark stroke. Deleting or hiding a route removes its layers and sources. |
 | Waypoints | **Done.** Drawn as a circle layer; they arrive from a GPX's `<wpt>` elements via `RouteKit.parseGPX` and persist with the workspace. |
-| Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`. |
-| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. Heading-follow now *tracks* the bearing rather than stamping it once, and the glyph is a needle that turns with the device (#48, #66). |
+| Fit | **Done.** Fit-to-bounds on the selected route, with the padding in `AppConfig`, and the zoom clamped to the style's ceiling so the fit cannot ask for tiles MapTiler will not serve (§9). |
+| Locate | **Done.** `CLLocationManager` behind `LocationController`, with the same states the web app's `locate.ts` distinguishes. The accuracy disc is a polygon, so it stays glued to the ground. Heading-follow now *tracks* the bearing rather than stamping it once, and the glyph is a needle that turns with the device (#48, #66). The button cycles rather than toggles: nothing → my location → device orientation → alternating between the last two, with a glyph per step (outlined pin, solid pin, north needle) and a translucent cone off the blue dot pointing the way the heading says for as long as a cycle is running. The recentre waits for the style to *finish* loading, and the camera's follow state lives on the map's coordinator — see the findings below. |
 | Search | **Done, but neither entry point actually worked until a device found it (#69).** Debounced 300 ms, six results, proximity biased to the route, and the Peak / Trailhead / Trail / Street badges from `RouteKit`. Tapping a result adds it as a waypoint. Verified against the live endpoint: names, peak detection, and summit elevations all arrive. Two bugs sat on top of that: the viewer's figures sheet is presented for the screen's whole life, so a search sheet presented while another is up from the same host was dropped and the button did nothing; and with no key `geocodingClient` is nil, so every query returned an empty list — indistinguishable from a place that does not exist, which is what "search doesn't work" turned out to be. Both fixed; both screens now say **Search is unavailable** before anyone types. |
 | 3D terrain toggle | **Built, not yet verified on the map.** The map now loads its style from the loopback endpoint with `?terrain=1`, and the toggle forces a style reload because that is the only way to add or drop the block. Needs a look at a pitched camera before it is called done. |
 | Style builder | **Built.** `StyleBuilder` fetches MapTiler's hosted style, adds a `raster-dem` source named `terrain` with an inline `tiles` template, and writes `"terrain": { "source": "terrain", "exaggeration": 1.15 }` — the same source name and exaggeration the web app's `setTerrain` call uses. The basemap is still MapTiler's own; only the terrain block is added. Served from the existing loopback listener at `/style.json?style=…&terrain=…`, cached per variant. |
+
+Three findings from the review pass after M2, each of which looks cosmetic and
+is not:
+
+- **`MapFit` computed every fit against a 256-point world, and MapLibre's zoom
+  is a 512-point one** — both Native and GL JS build their transform on a
+  512-pixel tile. Every fit therefore came out about a zoom level too deep,
+  which small routes never showed: they pin against the tileset's ceiling with
+  margins to spare. The Maroon Bells loop did — clipped on every edge at once
+  while the camera reported exactly the zoom it had been asked for (alt
+  `MLNAltitudeForZoomLevel` and all). Measured off the rendered frame the map
+  drew at 3.07 m/pt where the 256-world predicts 6.18, which is also what
+  identified it: the transform was self-consistent, the constant in the fit
+  formula was not. The span is now `512×2^z`; the tests' comparative
+  assertions were unaffected, only their comments were wrong.
+- **The basemap's `Transport` layer parked a transit route shield — a blue
+  "110" — over the top-left corner of a hiking map.** The loopback style is
+  MapTiler's own and arrives with it; a dump of all 114 layers in
+  `didFinishLoading` is what identified the id. It is now hidden there,
+  optional-chained, so a style without the layer (satellite) is a no-op. Bus
+  stops and the transit line colouring are separate layers and were left
+  alone: only the number was complained about.
+- **The simulator has no magnetometer, so `heading` was nil there for good**
+  and the beam gate (`followMode != .nothing && wantsHeading &&
+  heading != nil`) kept the direction cone — the exact thing that was reported
+  missing — invisible on every plain simulator run. `LocationController` now
+  stands a fixed 45° in while a step of the locate cycle has asked for a
+  heading and the real stream never arrives; `-simHeading` still pins the
+  bearing for screenshots and outranks it. The blue dot itself only ever
+  needed a position, which `simctl location set` supplies — together the two
+  make the whole locate feature legible on a machine with no compass.
 
 Two MapLibre Native constraints cost rework here, both found by compiling
 against the real headers rather than by reading docs:
@@ -1083,7 +1155,7 @@ crosshair.
 | Where | Glyph | Why |
 | --- | --- | --- |
 | Start navigation | `figure.hiking` | The Live Activity's own glyph for a hike in progress, so the button that starts one and the activity it starts are the same picture. It used to be `location.fill`, identical to the locate button directly below it. |
-| Locate / recentre | `location.fill` | Unchanged, and the reason nothing else may use it. |
+| Locate / recentre | cycle's own glyph | Three steps, three glyphs: `location` (outlined) while the cycle is off, `location.fill` once it has centred on you, `location.north.line.fill` when it is facing your direction. The reason nothing else may claim `location.fill` still stands. |
 | Heading-up mode | `location.north.line.fill`, rotating | A needle that points where the map is pointing, animated by the real heading rather than a spinner. |
 | Following | `viewfinder.circle.fill` | Asks "is the camera tracking me", which is what the button answers. `location.fill` said "where I am", which is the dot underneath it. |
 | Pan freely | `hand.raised.fill` | An open hand is a mode you are in, not a gesture being made — `hand.tap` read as a one-off action. |

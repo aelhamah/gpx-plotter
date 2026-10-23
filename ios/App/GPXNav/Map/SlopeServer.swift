@@ -19,35 +19,121 @@ import UniformTypeIdentifiers
 ///
 /// All three ride the one listener rather than opening a second port.
 final class SlopeServer: @unchecked Sendable {
-    private let listener: NWListener
     private let styleBuilder: StyleBuilder
     private let tileCache: TileCache
     private let port: NWEndpoint.Port
+    private let parameters: NWParameters
+    /// Recreated on every bind attempt: a listener that has failed cannot be
+    /// restarted, so retrying means a fresh one.
+    private var listener: NWListener?
+    private var bindAttempts = 0
+    private let maxBindAttempts = 8
 
     init(
         styleBuilder: StyleBuilder,
         tileCache: TileCache,
         port: UInt16
-    ) throws {
+    ) {
         self.styleBuilder = styleBuilder
         self.tileCache = tileCache
         self.port = NWEndpoint.Port(rawValue: port) ?? 8080
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
-        self.listener = try NWListener(using: parameters, on: self.port)
+        self.parameters = parameters
     }
 
     func start() {
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.handle(connection)
-            connection.start(queue: .global(qos: .utility))
-        }
-        listener.start(queue: .global(qos: .utility))
-        print("SlopeServer listening on http://127.0.0.1:\(port.rawValue)")
+        bind()
     }
 
+    /// Create the listener and start it. `start()` is really "try again":
+    /// `simctl` relaunches (and any OS relaunch) can start the new process
+    /// while the old one is still tearing its own listener down, which holds
+    /// the port for a fraction of a second — and the realistic failure here,
+    /// EADDRINUSE, is otherwise permanent for the session: `NWListener` does
+    /// not retry, MapLibre does not repeat a refused `style.json` ask, and
+    /// without that ask this process never builds a style, so every tile 404s
+    /// and the map stays blank until the next launch. See `onReady`.
+    private func bind() {
+        let url = "http://127.0.0.1:\(port.rawValue)"
+        do {
+            // `NWListener.start` reports bind failures only through the state
+            // handler; without it a loopback that never comes up is
+            // indistinguishable from broken tiles — flat background, route on
+            // top, nothing else. `.ready` is the other half of that signal,
+            // and the one the map waits on: binding is asynchronous, so
+            // `start()` returning says nothing about whether the port accepts
+            // yet.
+            let listener = try NWListener(using: parameters, on: port)
+            listener.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready:
+                    print("SlopeServer bound to \(url)")
+                    self?.bindAttempts = 0
+                    self?.onReady?()
+                case .failed(let error):
+                    self?.bindFailed(error, url: url)
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.handle(connection)
+                connection.start(queue: .global(qos: .utility))
+            }
+            listener.start(queue: .global(qos: .utility))
+            self.listener = listener
+            print("SlopeServer listening on \(url)")
+        } catch {
+            bindFailed(error, url: url)
+        }
+    }
+
+    /// Release the spent listener and schedule another attempt.
+    ///
+    /// The first eight attempts are for ordinary teardown overlap — 0.25s
+    /// backing off to 2s each, about twelve seconds in total, which is orders
+    /// of magnitude longer than a port takes to clear. Past that the port is
+    /// being held by something else entirely: a sibling simulator on the same
+    /// host's network stack, or a relaunch that wedged rather than tore down.
+    /// The original code gave up there, and giving up is permanent — nothing
+    /// else retries, `onReady` never fires, `serverReady` never publishes, and
+    /// the map sits white until the next launch. So the ladder ends in a slow
+    /// steady retry instead: the views are already waiting on this bind, and a
+    /// reattempt every few seconds costs nothing but a log line until the port
+    /// comes back.
+    private func bindFailed(_ error: Error, url: String) {
+        listener = nil
+        let delay: Double
+        if bindAttempts < maxBindAttempts {
+            bindAttempts += 1
+            delay = min(0.25 * pow(2.0, Double(bindAttempts - 1)), 2.0)
+            print("SlopeServer bind attempt \(bindAttempts) failed (\(error)); retrying in \(String(format: "%.2f", delay))s")
+        } else {
+            delay = 5.0
+            print("SlopeServer still cannot bind (\(error)); retrying every \(Int(delay))s until the port frees")
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.bind()
+        }
+    }
+
+    /// Called on the listener's queue once the port actually accepts.
+    ///
+    /// The gap between `start()` and `.ready` is real, and a `style.json`
+    /// asked for inside it comes back refused — which MapLibre treats as
+    /// final: it never re-asks, and its resource cache can paper over the
+    /// failure with a copy from an earlier launch, so this session's
+    /// `StyleBuilder` never runs, `upstreamTemplates` stays empty, and every
+    /// tile answers 404 "no basemap" while the server looks healthy.
+    /// `AppServices.serverReady` publishes this to the views, which hold the
+    /// map back until it fires instead of guessing at a delay.
+    var onReady: (() -> Void)?
+
     func stop() {
-        listener.cancel()
+        listener?.cancel()
+        listener = nil
+        bindAttempts = 0
     }
 
     // MARK: - Request handling
@@ -109,6 +195,10 @@ final class SlopeServer: @unchecked Sendable {
     /// and looking at an area warms the cache as a side effect.
     private func serveTile(_ key: TileCacheKey, to connection: NWConnection) async {
         guard let template = await styleBuilder.upstreamTemplate(forSource: key.source) else {
+            // Reached only when a style build genuinely finished without this
+            // source — its own failure prints first. See `onReady` for the
+            // refused-first-request version.
+            print("SlopeServer: no upstream for \(key.source)")
             respond(to: connection, status: 404, type: "text/plain", body: Data("no basemap".utf8))
             return
         }
@@ -134,7 +224,7 @@ final class SlopeServer: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.setValue(MapNetworkIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(MapNetworkIdentity.versionHeader, forHTTPHeaderField: "X-GPXNav-Version")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await BoundedFetch.data(request, session: .shared)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw TileCache.CacheError.upstreamFailed(http.statusCode)
         }
@@ -160,6 +250,7 @@ final class SlopeServer: @unchecked Sendable {
         }
         let style: MapStyle = value("style") == "satellite" ? .satellite : .outdoor
         let terrain = value("terrain") == "1"
+        print("SlopeServer: style request \(style.rawValue) terrain=\(terrain)")
 
         guard let json = await styleBuilder.style(for: style, terrain: terrain) else {
             respond(to: connection, status: 502, type: "text/plain", body: Data("no style".utf8))
@@ -197,8 +288,15 @@ final class SlopeServer: @unchecked Sendable {
     }
 
     private func respond(to connection: NWConnection, status: Int, type: String, body: Data) {
+        // `no-store` is load-bearing, not tidy. MapLibre keeps its own copy of
+        // every response in `.mapbox/cache.db`, and a style cached by an
+        // earlier launch skips `StyleBuilder.style()` here — the only place
+        // `upstreamTemplates` gets filled — so every tile in this session
+        // answers 404 "no basemap" while the server itself looks fine. Tiles
+        // persist through `TileCache` instead, by explicit key, so this layer
+        // never needs to store anything.
         let reason = status == 200 ? "OK" : "Error"
-        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nCache-Control: max-age=3600\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         var payload = Data(header.utf8)
         payload.append(body)
         connection.send(content: payload, completion: .contentProcessed { _ in
