@@ -1,10 +1,10 @@
 window.GPXNAV_PREVIEW = {
-  "commit": "93115a1",
+  "commit": "6902d6d",
   "branch": "fix/ios-blank-basemap",
   "device": "iPhone 17 Pro Max",
   "runtime": "iOS 26.2",
   "xcode": "Xcode 26.2",
-  "capturedAt": "2026-10-22T21:39:29Z",
+  "capturedAt": "2026-10-23T01:22:28Z",
   "demoTiles": false,
   "width": 828,
   "height": 1800,
