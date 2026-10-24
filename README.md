@@ -65,9 +65,11 @@ docs/    Architecture, features, dev guide, and the iOS plan
    browser downloads it.
 6. **Search** — typing in the map search bar forwards the query to MapTiler
    geocoding (filtered to municipalities, towns, POIs, landforms, and
-   streets/trails), biased by the current map center so local results rank
-   first; picking a result fits the camera and drops a temporary marker. Named
-   trails and trailheads are badged **Trail** / **Trailhead**.
+   streets/trails), scored as a whole query and biased by the current map
+   center, with relevance ties broken by distance from the map center and
+   indistinguishable namesakes collapsed; picking a result fits the camera and
+   drops a temporary marker. Named trails and trailheads are badged
+   **Trail** / **Trailhead**.
 
 **State & undo/redo** live in `main.ts` as plain module variables. `snapshot()`
 deep-clones `{ routes, waypoints }`; `commitSnapshot()` pushes onto a bounded

@@ -67,9 +67,21 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 - **Type-ahead results** appear as you type (debounced). Pick with a click,
   the ↑/↓ arrow keys, or press Enter for the highlighted (first) match; Esc
   or clicking elsewhere closes the list.
-- **Ranked by map position**: the current map center is sent to the API as a
-  `proximity` bias, so nearby peaks/places rank higher than far-flung
-  namesakes.
+- **The whole query is what is scored.** Each request posts the completed query
+  with `autocomplete=false` rather than MapTiler's default, which assumes the
+  query is still being typed letter by letter. Scoring a completed query
+  matters for real names: "Rock Creek National Park" used to come back as
+  National Zoo parking lots — autocomplete matched their loose words better
+  than a park that has no answer to "National" — where whole-query scoring
+  finds Rock Creek itself.
+- **Ranked from the map's point of view.** The current map center is sent to
+  the API as a `proximity` bias, and equal-relevance results are then sorted by
+  distance from that center, so when a name exists in several places the
+  instance nearest what is on screen comes first. Higher relevance still beats
+  mere closeness: an exact far match outranks a fuzzy near one. Namesakes that
+  are indistinguishable in the list — same name and same badge — collapse into
+  one row (the one closest to the view), since whole-query scoring would
+  otherwise fill the results with exact matches that all look identical.
 - **Peak detection**: genuine peaks are detected from the data
   (`natural=peak` / `peak` category) and labeled **Peak** rather than the
   generic "Point of interest", with their summit elevation shown next to the

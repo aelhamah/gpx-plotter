@@ -1,5 +1,6 @@
 import { TILE_PROXY_BASE_URL } from './config';
 import { reportServiceFailure } from './serviceStatus';
+import { haversineMeters } from './geo';
 
 /**
  * Place types the app surfaces in search: municipalities, towns, peaks/POIs,
@@ -9,7 +10,14 @@ import { reportServiceFailure } from './serviceStatus';
  * searchable. Named trails are relabeled "Trail" in `normalizeFeature`.
  */
 export const GEOCODE_TYPES = 'municipality,place,locality,poi,major_landform,address';
-const DEFAULT_LIMIT = 6;
+
+/**
+ * The API's maximum. A whole-query search (see `geocodeUrl`) rings the limit
+ * with exact matches — "Grand Canyon" returns nine near-identical POIs — and
+ * `rankSearchResults` needs that pool both to collapse duplicates and to pick
+ * the instance nearest the map, so the API is asked for everything it can give.
+ */
+const DEFAULT_LIMIT = 10;
 
 export interface GeocodeOptions {
   limit?: number;
@@ -22,6 +30,8 @@ export interface GeocodeResult {
   name: string;
   region: string;
   typeLabel: string;
+  /** MapTiler's score for how well the name matches the query, when it sent one. */
+  relevance?: number;
   /** Peak summit elevation in meters, when the feature is a peak. */
   elevation?: number;
   center: { lon: number; lat: number };
@@ -41,6 +51,8 @@ interface RawFeature {
   place_name?: string;
   place_formatted?: string;
   place_type?: string[];
+  /** MapTiler's whole-query match score, 0–1; absent on some failures. */
+  relevance?: number;
   properties?: RawProperties;
   context?: RawContext[];
   geometry?: { type?: string; coordinates?: unknown };
@@ -141,6 +153,7 @@ export function normalizeFeature(feature: RawFeature): GeocodeResult | null {
     name,
     region,
     typeLabel,
+    relevance: Number.isFinite(feature.relevance) ? feature.relevance : undefined,
     elevation,
     center: { lon, lat },
     bbox,
@@ -162,13 +175,65 @@ const round5 = (value: number) => Number(value.toFixed(5));
  * No `key=` parameter: the proxy adds it upstream. A key in a query string ends
  * up in the proxy's access logs, in anything else that logs URLs, and in this
  * page's history entry.
+ *
+ * `autocomplete=false` scores the *whole* query. MapTiler's default is
+ * autocomplete mode, which assumes the query is still being typed letter by
+ * letter — the right assumption for a keystroke-driven box, the wrong one here,
+ * where a 250 ms debounce sends completed words only. The difference is not
+ * cosmetic: typed whole, "Rock Creek National Park" scored National Zoo parking
+ * lots above Rock Creek Park, because autocomplete matched the loose words
+ * "National" and "Park" against them while the park itself never had a word to
+ * answer to. Whole-query scoring finds it.
  */
 export function geocodeUrl(query: string, options: GeocodeOptions = {}): string {
   const { limit = DEFAULT_LIMIT, proximity } = options;
-  const params = [`limit=${limit}`, `types=${GEOCODE_TYPES}`];
+  const params = [`limit=${limit}`, `types=${GEOCODE_TYPES}`, 'autocomplete=false'];
   if (proximity) params.push(`proximity=${round5(proximity.lon)},${round5(proximity.lat)}`);
   const base = TILE_PROXY_BASE_URL.replace(/\/+$/, '');
   return `${base}/geocoding/${encodeURIComponent(query.trim())}.json?${params.join('&')}`;
+}
+
+/**
+ * Order results for display, from the map's point of view.
+ *
+ * The API already biases by `proximity`, but softly — equal-relevance results
+ * come back in whatever order the index happens to hold them. What the issue
+ * calls for is nearer-wins *within* a relevance tier: several features share a
+ * name ("Rock Creek Park" exists as a landform here, a place there), and the
+ * one nearest what is on screen is the one the user means. Higher relevance
+ * still outranks mere closeness — an exact far match beats a fuzzy near one —
+ * so this only settles ties the API leaves open.
+ *
+ * Whole-query scoring also rings the limit with exact matches — "Grand Canyon"
+ * returns nine near-identical POIs — and duplicates only push useful rows off
+ * a fixed-sized list. Rows are collapsed on what the user can tell apart,
+ * name and badge, keeping the best-ranked instance: for a sprawling feature
+ * that is the occurrence closest to the map center.
+ */
+export function rankSearchResults(
+  results: GeocodeResult[],
+  center?: { lon: number; lat: number },
+): GeocodeResult[] {
+  const distanceFromCenter = center
+    ? new Map<GeocodeResult, number>(results.map((result) => [
+        result,
+        haversineMeters({ lat: center.lat, lon: center.lon }, { lat: result.center.lat, lon: result.center.lon }),
+      ]))
+    : undefined;
+
+  const ranked = distanceFromCenter
+    ? [...results].sort((a, b) =>
+        (b.relevance ?? Number.NEGATIVE_INFINITY) - (a.relevance ?? Number.NEGATIVE_INFINITY)
+        || distanceFromCenter.get(a)! - distanceFromCenter.get(b)!)
+    : [...results];
+
+  const seen = new Set<string>();
+  return ranked.filter((result) => {
+    const key = `${result.name}\u0000${result.typeLabel}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Forward-geocode a query; returns [] on empty input, HTTP errors, or network failure. */
