@@ -1,5 +1,5 @@
 import { DEFAULT_CENTER, DEFAULT_ZOOM, TILE_PROXY_BASE_URL } from './config';
-import { loadCachedFix, type CachedFix } from './storage';
+import { loadCachedFix, saveCachedFix, LOCATION_MAX_ACCURACY_METERS, type CachedFix } from './storage';
 
 /**
  * Choosing what the map opens on.
@@ -19,6 +19,12 @@ import { loadCachedFix, type CachedFix } from './storage';
  * a viewport of vector tiles is far bigger than one small JSON response. So the
  * wait is bounded: {@link GEO_TIMEOUT_MS}, after which the default is used and
  * the app is no slower than it was before any of this existed.
+ *
+ * On a visit with nothing remembered — no saved view, no cached fix — the browser
+ * is asked for a real position too, which is what raises the permission prompt.
+ * That wait is bounded by {@link STARTUP_FIX_TIMEOUT_MS} for the same reason: an
+ * ignored dialog must cost a moment, not the load. The estimate runs alongside,
+ * so the two waits overlap rather than stack.
  *
  * It is also skipped entirely when no proxy is configured, since there is then no
  * `/geo` to ask — an unconfigured build pays nothing rather than paying for a
@@ -51,6 +57,32 @@ export interface StartupCenter {
  * rather than the load it was meant to save.
  */
 export const GEO_TIMEOUT_MS = 1_500;
+
+/**
+ * How long to wait for the browser's position before opening without it.
+ *
+ * The browser shows its permission dialog while this clock runs, so this is also
+ * how long an ignored dialog holds the map hostage. Long enough that reading the
+ * dialog and clicking "Allow" still lands this load on a real fix — a granted
+ * position that arrives in time is the whole point of asking. Short enough that
+ * someone who ignores it sees the map (on the estimate) rather than a blank page.
+ *
+ * A grant that arrives *after* this budget is not wasted: it is written to
+ * storage, so the next load opens on it without asking again.
+ */
+export const STARTUP_FIX_TIMEOUT_MS = 3_000;
+
+/**
+ * How stale a browser-cached position may be and still be returned without a
+ * fresh lookup.
+ *
+ * Only matters when permission is already granted and no dialog appears — the
+ * rare visit where our own cached fix aged out but the browser still remembers
+ * one. A minute old is recent enough to be the right valley, and old enough that
+ * the common just-granted case answers instantly instead of waiting on the
+ * network or GPS.
+ */
+export const STARTUP_FIX_MAX_AGE_MS = 60_000;
 
 /**
  * Zoom for a position we know precisely, when the user has not said otherwise.
@@ -162,18 +194,118 @@ export function parseEstimate(body: unknown): GeoEstimate | null {
   };
 }
 
+/** The slice of `GeolocationPosition` the startup fix uses, structurally. */
+export interface StartupFixPosition {
+  coords: { latitude: number; longitude: number; accuracy: number };
+  timestamp: number;
+}
+
+/** The slice of `navigator.geolocation` the startup fix uses, structurally. */
+export interface StartupGeolocation {
+  getCurrentPosition(
+    success: (position: StartupFixPosition) => void,
+    error?: (error: unknown) => void,
+    options?: { enableHighAccuracy?: boolean; timeout?: number; maximumAge?: number },
+  ): void;
+}
+
 /**
- * Resolve the opening camera, asking for an estimate only if it would be used.
+ * The browser's position as a `CachedFix`, or null when it is not one worth
+ * keeping. Mirrors the bar `loadCachedFix` applies on the way back out, so a fix
+ * is never stored only to be rejected on the next load.
+ */
+export function normalizeStartupFix(position: StartupFixPosition | null | undefined): CachedFix | null {
+  const coords = position?.coords;
+  if (!coords) return null;
+  const lat = Number(coords.latitude);
+  const lon = Number(coords.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  // A fix with kilometres of accuracy is no better than the IP centroid it would
+  // outrank — the same reasoning `LOCATION_MAX_ACCURACY_METERS` encodes for the
+  // cached fix, applied here so a coarse network answer falls through to the
+  // estimate rather than replacing it.
+  const accuracy = Number(coords.accuracy);
+  if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > LOCATION_MAX_ACCURACY_METERS) return null;
+  const at = Number(position?.timestamp);
+  return { lon, lat, at: Number.isFinite(at) ? at : Date.now(), accuracyMeters: accuracy };
+}
+
+/**
+ * Ask the browser for a position — which is what raises the permission prompt on
+ * a first visit — or give up.
  *
- * Kept separate from `chooseStartupCenter` so the network call is skipped
- * entirely when a saved view or a cached fix already answers the question —
- * otherwise the common case of returning to your own map would pay a round trip
- * on every load for a value it was never going to read.
+ * The dialog is user-paced, so the wait is bounded: an ignored prompt resolves as
+ * null after {@link STARTUP_FIX_TIMEOUT_MS} and the caller opens on the estimate
+ * instead. A grant that lands *after* that budget still writes itself to storage:
+ * this load has already opened elsewhere, but the next one opens right, and the
+ * question is never asked again.
+ *
+ * Every failure resolves as null rather than throwing — denied, unsupported,
+ * insecure context, timeout. None are worth surfacing: falling back to the
+ * estimate is exactly where the app would have opened without any of this.
+ */
+export async function requestStartupFix(options: {
+  geolocation?: StartupGeolocation | null;
+  timeoutMs?: number;
+} = {}): Promise<CachedFix | null> {
+  const geo = options.geolocation
+    ?? (typeof navigator !== 'undefined' && 'geolocation' in navigator
+      ? navigator.geolocation as StartupGeolocation
+      : null);
+  // No geolocation — plain HTTP, or a browser without it. Nothing to prompt with.
+  if (!geo) return null;
+
+  const timeoutMs = options.timeoutMs ?? STARTUP_FIX_TIMEOUT_MS;
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value: CachedFix | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const timer = setTimeout(() => settle(null), timeoutMs);
+    try {
+      geo.getCurrentPosition(
+        (position) => {
+          clearTimeout(timer);
+          const fix = normalizeStartupFix(position);
+          // Remember a fix worth keeping even when this load can no longer use it.
+          // A grant answers the prompt; storage is what makes that a one-time act.
+          if (fix) saveCachedFix(fix);
+          settle(fix);
+        },
+        () => {
+          clearTimeout(timer);
+          settle(null);
+        },
+        { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: STARTUP_FIX_MAX_AGE_MS },
+      );
+    } catch {
+      // Some engines throw synchronously on a refused call (no secure context).
+      clearTimeout(timer);
+      settle(null);
+    }
+  });
+}
+
+/**
+ * Resolve the opening camera, asking for a position and an estimate only if
+ * either would be used.
+ *
+ * Kept separate from `chooseStartupCenter` so the prompt and the network call are
+ * skipped entirely when a saved view or a cached fix already answers the question —
+ * otherwise the common case of returning to your own map would pay a round trip,
+ * and a permission prompt, on every load for a value it was never going to read.
+ *
+ * The two requests run in parallel rather than in sequence: the dialog is paced by
+ * the user and the estimate by the network, so overlapping them means the map
+ * waits for whichever takes longest only when *both* are slow.
  */
 export async function resolveStartupCenter(saved?: StartupInput['saved']): Promise<StartupCenter> {
   if (saved) return chooseStartupCenter({ saved });
-  const fix = loadCachedFix();
-  if (fix) return chooseStartupCenter({ cachedFix: fix });
-  const estimate = await fetchGeoEstimate();
-  return chooseStartupCenter({ cachedFix: null, estimate });
+  const cached = loadCachedFix();
+  if (cached) return chooseStartupCenter({ cachedFix: cached });
+  const [fix, estimate] = await Promise.all([requestStartupFix(), fetchGeoEstimate()]);
+  return chooseStartupCenter({ cachedFix: fix, estimate });
 }
