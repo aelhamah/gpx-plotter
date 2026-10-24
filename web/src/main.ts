@@ -4,7 +4,7 @@ import type { GeoJSONSource, LngLatBoundsLike } from 'maplibre-gl';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { MAP_STYLE_URL, SATELLITE_STYLE_URL, TERRAIN_URL, TILE_PROXY_BASE_URL } from './config';
 import { blendTerrainElevations, colorToAlpha, haversineMeters, nearestProfileSample, profileAxisStep, profileNeedsTerrain, routeDistanceMeters, routeProfilePoints, segmentSlopeDegrees, summarizeProfile, terrainSamplesNeeded, type UnitSystem } from './geo';
-import { geocode, rankSearchResults, type GeocodeResult } from './geocode';
+import { geocodeWithFallback, rankSearchResults, type GeocodeResult } from './geocode';
 import { exportGPX, parseGPX, type ParsedGPX, type Route, type RoutePoint, type Waypoint } from './gpx';
 import { PERMISSION_DENIED, locateButtonLabel, locateErrorMessage, locateUnavailableMessage, locationGeoJSON, zoomForAccuracy, type LocatePermission, type LocateUnavailable, type LocationFix } from './locate';
 import { mergeRoutePoints } from './merge';
@@ -1493,7 +1493,7 @@ async function runSearch(query: string) {
   // One read: the same position both biases the API and breaks the ranking's
   // ties, so the list cannot disagree about what "nearby" meant.
   const center = map.getCenter();
-  const results = await geocode(query, { proximity: { lon: center.lng, lat: center.lat } });
+  const results = await geocodeWithFallback(query, { proximity: { lon: center.lng, lat: center.lat } });
   if (token !== searchToken) return;
   searchItems = rankSearchResults(results, { lon: center.lng, lat: center.lat });
   searchIndex = 0;

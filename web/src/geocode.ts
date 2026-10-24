@@ -170,6 +170,86 @@ function parseElevation(ele: string | undefined): number | undefined {
 const round5 = (value: number) => Number(value.toFixed(5));
 
 /**
+ * Relevance the API gives an exact name match. Legit matches ("Half Dome",
+ * "Appalachian Trail", "Death Valley National Park") score 0.96 or 1.0; loose
+ * word matches — the parking lots and same-name creeks a decorated query
+ * attracts — land well below. Anything under this is worth one more try.
+ */
+export const STRONG_MATCH_RELEVANCE = 0.9;
+
+/**
+ * Words that decorate a park or land designation without naming it.
+ *
+ * OSM — MapTiler's source — names "Rock Creek National Park" "Rock Creek
+ * Park": the user's "National" sits outside the indexed name, and a whole-query
+ * score reflects that. Dropping one such word is what nudges the query onto the
+ * name the index actually has.
+ */
+const DECORATIVE_WORDS = new Set([
+  'national', 'state', 'provincial', 'regional', 'county',
+  'recreation', 'conservation', 'wilderness', 'wildlife',
+  'monument', 'memorial', 'historic', 'historical',
+  'park', 'parks', 'forest', 'forests', 'preserve', 'refuge', 'reserve', 'reserves',
+  'area', 'areas',
+]);
+
+/**
+ * The query with its first decorative word dropped, or null when there is
+ * nothing left to ask — no decorative word, or nothing but decoration after
+ * dropping one ("National Park" asks no place in particular).
+ */
+export function relaxedQuery(query: string): string | null {
+  const words = query.trim().split(/\s+/);
+  const index = words.findIndex((word) => DECORATIVE_WORDS.has(word.toLowerCase()));
+  if (index < 0) return null;
+  const relaxed = [...words.slice(0, index), ...words.slice(index + 1)];
+  const asksSomething = relaxed.some((word) => !DECORATIVE_WORDS.has(word.toLowerCase()));
+  return asksSomething ? relaxed.join(' ') : null;
+}
+
+/** The API's score for its best answer in a result set, 0 when it had none. */
+function topRelevance(results: GeocodeResult[]): number {
+  return Math.max(0, ...results.map((result) => result.relevance ?? 0));
+}
+
+/**
+ * Forward-geocode a query, and if the API's best answer is loose, ask again
+ * without the query's decoration.
+ *
+ * Whole-query scoring (see `geocodeUrl`) finds an exact indexed name, but users
+ * type official designations — "Rock Creek National Park" — that the index
+ * does not carry ("Rock Creek Park"). Without a word to answer to, the query
+ * scores 0.69 and attracts parking lots, while dropping the stray "National"
+ * scores 1.0 and finds the park first. So: score as asked; if the best match
+ * is weak and the query has a decorative word, drop the first one and score
+ * again — twice — and keep whichever set the API matched more strongly. The
+ * replacement is deliberate rather than interleaved: a weaker set from the
+ * decorated query is noise around the answer the relaxed query already gives.
+ *
+ * At most two retries, so a miss costs at most three requests behind the same
+ * debounce keystroke; anything already scoring STRONG_MATCH_RELEVANCE or
+ * better is returned untouched, and unchanged.
+ */
+export async function geocodeWithFallback(query: string, options: GeocodeOptions = {}): Promise<GeocodeResult[]> {
+  if (!query.trim()) return [];
+  let asked = query;
+  let best = await geocode(query, options);
+  let bestScore = topRelevance(best);
+  for (let attempt = 0; attempt < 2 && bestScore < STRONG_MATCH_RELEVANCE; attempt++) {
+    const relaxed = relaxedQuery(asked);
+    if (!relaxed || relaxed === asked) break;
+    asked = relaxed;
+    const retry = await geocode(relaxed, options);
+    const retryScore = topRelevance(retry);
+    if (retryScore > bestScore) {
+      best = retry;
+      bestScore = retryScore;
+    }
+  }
+  return best;
+}
+
+/**
  * Goes to the tile proxy, which holds the key — see `config.ts`.
  *
  * No `key=` parameter: the proxy adds it upstream. A key in a query string ends

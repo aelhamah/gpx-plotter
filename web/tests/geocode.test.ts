@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { geocode, geocodeUrl, GEOCODE_TYPES, normalizeFeature, placeTypeLabel, rankSearchResults, type GeocodeResult } from '../src/geocode';
+import { geocode, geocodeWithFallback, geocodeUrl, GEOCODE_TYPES, normalizeFeature, placeTypeLabel, rankSearchResults, relaxedQuery, STRONG_MATCH_RELEVANCE, type GeocodeResult } from '../src/geocode';
 
 const townFeature = {
   id: 'municipality.46425',
@@ -307,5 +307,137 @@ describe('geocode', () => {
     vi.stubGlobal('fetch', fetchMock);
     expect(await geocode('   ')).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('relaxedQuery', () => {
+  /** The reported case: the official name carries a word the index does not. */
+  it('drops the first decorative word', () => {
+    expect(relaxedQuery('Rock Creek National Park')).toBe('Rock Creek Park');
+  });
+
+  it('does not care where the decoration sits', () => {
+    expect(relaxedQuery('National Mining Memorial Rock')).toBe('Mining Memorial Rock');
+  });
+
+  it('is case-insensitive about the decoration itself', () => {
+    expect(relaxedQuery('Rock Creek NATIONAL Park')).toBe('Rock Creek Park');
+  });
+
+  it('returns null when there is no decoration to relax away', () => {
+    expect(relaxedQuery('Rock Creek')).toBeNull();
+    expect(relaxedQuery('Half Dome')).toBeNull();
+  });
+
+  it('returns null when relaxation would ask a question with no words in it', () => {
+    expect(relaxedQuery('National Park')).toBeNull();
+    expect(relaxedQuery('park')).toBeNull();
+  });
+
+  it('leaves non-decorative words alone even when they look close', () => {
+    expect(relaxedQuery('Sparkle Parklight')).toBeNull();
+  });
+});
+
+describe('geocodeWithFallback', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const feature = (name: string, relevance: number) => ({
+    text: name,
+    place_type: ['poi'],
+    relevance,
+    geometry: { type: 'Point', coordinates: [-77.046, 38.963] },
+  });
+
+  const DC = { proximity: { lon: -77.0369, lat: 38.9097 } };
+
+  /** A `fetch` that answers with different features per query in the URL. */
+  function fetchPerQuery(byQuery: Record<string, unknown[]>) {
+    return vi.fn(async (url: string | URL | Request) => {
+      const requested = decodeURIComponent(String(url).replace(/^.*\/geocoding\//, '').replace(/\.json.*$/, ''));
+      const features = byQuery[requested] ?? [];
+      return { ok: true, json: () => Promise.resolve({ features }) } as Response;
+    });
+  }
+
+  it('asks once when the API already found the name', async () => {
+    const impl = fetchPerQuery({ 'Half Dome': [feature('Half Dome', 0.96)] });
+    vi.stubGlobal('fetch', impl);
+
+    const results = await geocodeWithFallback('Half Dome', DC);
+
+    expect(results[0]?.name).toBe('Half Dome');
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The reported scenario, exactly as the API answered it on the day: the
+   * decorated query scores 0.69 and never contains the park; dropping the
+   * stray "National" scores 1.0 and finds it first.
+   */
+  it('retries without the decoration when the whole query is matched loosely', async () => {
+    const impl = fetchPerQuery({
+      // Whole query as asked: the best it has is a zoo and a same-named Colorado
+      // creek. The park is not in this answer at all.
+      'Rock Creek National Park': [feature('National Zoological Park', 0.69), feature('Rock Creek', 0.69)],
+      'Rock Creek Park': [feature('Rock Creek Park', 1)],
+    });
+    vi.stubGlobal('fetch', impl);
+
+    const results = await geocodeWithFallback('Rock Creek National Park', DC);
+
+    expect(results[0]?.name).toBe('Rock Creek Park');
+    expect(impl).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the original when the relaxed query matches more loosely', async () => {
+    const impl = fetchPerQuery({
+      'Rock Creek National Park': [feature('National Zoological Park', 0.69)],
+      // A weaker answer: it isn't enough to just relax, the relaxer only swaps
+      // for a match the API believes more strongly.
+      'Rock Creek Park': [feature('Rose Park', 0.5)],
+    });
+    vi.stubGlobal('fetch', impl);
+
+    const results = await geocodeWithFallback('Rock Creek National Park', DC);
+
+    expect(results[0]?.name).toBe('National Zoological Park');
+  });
+
+  it('does not retry when the query carries no decoration to drop', async () => {
+    const impl = fetchPerQuery({ 'Rock Creek': [feature('Rock Creek', 0.7)] });
+    vi.stubGlobal('fetch', impl);
+
+    await geocodeWithFallback('Rock Creek', DC);
+
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it('relaxes again while the answer stays loose, at most twice', async () => {
+    const impl = fetchPerQuery({
+      'Fancy State Forest National Memorial Area': [feature('Noise', 0.3)],
+      'Fancy Forest National Memorial Area': [feature('Noise', 0.4)],
+      'Fancy National Memorial Area': [feature('Noise', 0.5)],
+    });
+    vi.stubGlobal('fetch', impl);
+
+    await geocodeWithFallback('Fancy State Forest National Memorial Area', DC);
+
+    // The as-asked round plus the two relaxed rounds; the cap is what keeps a
+    // decoration-dense miss from turning into an unbounded row of requests.
+    expect(impl).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns [] for a blank query without fetching', async () => {
+    const impl = vi.fn();
+    vi.stubGlobal('fetch', impl);
+    expect(await geocodeWithFallback('   ', DC)).toEqual([]);
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  /** The floor sits between loose (0.69-type) and exact (0.96-type) answers. */
+  it('declares strong matches at the seam the API actually exhibits', () => {
+    expect(STRONG_MATCH_RELEVANCE).toBeGreaterThanOrEqual(0.85);
+    expect(STRONG_MATCH_RELEVANCE).toBeLessThanOrEqual(0.93);
   });
 });

@@ -74,6 +74,15 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
   National Zoo parking lots — autocomplete matched their loose words better
   than a park that has no answer to "National" — where whole-query scoring
   finds Rock Creek itself.
+- **Names the index does not carry are found anyway.** OpenStreetMap — the
+  data the search queries — indexes the park in question as "Rock Creek
+  Park", not "Rock Creek National Park", so even a scored-whole query comes
+  back loose (0.69) when the user types the official designation. When a
+  query's best answer is below 0.9 relevance — every exact match scores 0.96
+  or better — it is asked again without its first decorative word
+  ("National", "State", "Park", "Forest", and kin), up to twice, keeping
+  whichever ask the API matched more strongly. Dropping the stray "National"
+  is what puts "Rock Creek Park" itself at the top of the list.
 - **Ranked from the map's point of view.** The current map center is sent to
   the API as a `proximity` bias, and equal-relevance results are then sorted by
   distance from that center, so when a name exists in several places the

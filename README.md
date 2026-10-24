@@ -66,10 +66,12 @@ docs/    Architecture, features, dev guide, and the iOS plan
 6. **Search** — typing in the map search bar forwards the query to MapTiler
    geocoding (filtered to municipalities, towns, POIs, landforms, and
    streets/trails), scored as a whole query and biased by the current map
-   center, with relevance ties broken by distance from the map center and
-   indistinguishable namesakes collapsed; picking a result fits the camera and
-   drops a temporary marker. Named trails and trailheads are badged
-   **Trail** / **Trailhead**.
+   center; an official name the index does not carry ("Rock Creek National
+   Park" — indexed as "Rock Creek Park") is retried without its first
+   decorative word, keeping the stronger match. Relevance ties are broken by
+   distance from the map center and indistinguishable namesakes collapsed;
+   picking a result fits the camera and drops a temporary marker. Named
+   trails and trailheads are badged **Trail** / **Trailhead**.
 
 **State & undo/redo** live in `main.ts` as plain module variables. `snapshot()`
 deep-clones `{ routes, waypoints }`; `commitSnapshot()` pushes onto a bounded
