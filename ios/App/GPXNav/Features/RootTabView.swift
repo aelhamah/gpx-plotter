@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import RouteKit
+import UIKit
 
 /// The three tabs: Create, Navigate, Settings.
 ///
@@ -50,7 +51,14 @@ struct RootTabView: View {
                 .tabItem { Label("Settings", systemImage: "gear") }
                 .tag(Tab.settings)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .switchToCreate)) { _ in
+            selection = .create
+        }
     }
+}
+
+extension Notification.Name {
+    static let switchToCreate = Notification.Name("switchToCreate")
 }
 
 /// The list of maps, titled "Maps": a map is what the user is picking, and the
@@ -59,6 +67,8 @@ struct MapsListView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @State private var path: [Route] = []
     @State private var isImporting = false
+    @State private var isExporting = false
+    @State private var exportURL: URL?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -105,8 +115,14 @@ struct MapsListView: View {
             .navigationTitle("Maps")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Import", systemImage: "square.and.arrow.down") {
-                        isImporting = true
+                    HStack {
+                        Button("Export", systemImage: "square.and.arrow.up") {
+                            prepareExport()
+                        }
+                        .disabled(workspace.routes.isEmpty && workspace.waypoints.isEmpty)
+                        Button("Import", systemImage: "square.and.arrow.down") {
+                            isImporting = true
+                        }
                     }
                 }
             }
@@ -116,6 +132,11 @@ struct MapsListView: View {
                 allowsMultipleSelection: false
             ) { result in
                 importGPX(result)
+            }
+            .sheet(isPresented: $isExporting) {
+                if let exportURL {
+                    ActivityView(url: exportURL)
+                }
             }
             .navigationDestination(for: Route.self) { route in
                 ViewerScreen(route: route)
@@ -132,6 +153,15 @@ struct MapsListView: View {
                 path.append(route)
             }
         }
+    }
+
+    private func prepareExport() {
+        let gpx = GPXWriter.export(routes: workspace.routes, waypoints: workspace.waypoints, name: workspace.documentName)
+        let base = (workspace.documentName ?? "route").replacingOccurrences(of: ".gpx", with: "")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(base).gpx")
+        try? gpx.write(to: url, atomically: true, encoding: .utf8)
+        exportURL = url
+        isExporting = true
     }
 
     private func importGPX(_ result: Result<[URL], any Error>) {
@@ -154,4 +184,14 @@ struct MapsListView: View {
             }
         }
     }
+}
+
+struct ActivityView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

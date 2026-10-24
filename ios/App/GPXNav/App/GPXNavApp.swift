@@ -34,8 +34,9 @@ struct GPXNavApp: App {
 
 @MainActor
 final class WorkspaceStore: ObservableObject {
-    @Published var routes: [Route]
-    @Published var waypoints: [Waypoint] = []
+@Published var routes: [Route]
+@Published var draft: Route? = nil
+@Published var waypoints: [Waypoint] = []
     @Published var selectedRouteId: Int? = nil
     @Published var unitSystem: UnitSystem = Units.defaultUnitSystem()
     @Published var mapStyle: MapStyle = ProcessInfo.processInfo.arguments.contains("-satellite")
@@ -70,6 +71,7 @@ final class WorkspaceStore: ObservableObject {
     init() {
         if let restored = Self.loadPersisted() {
             routes = restored.routes
+            draft = restored.draft
             waypoints = restored.waypoints
             selectedRouteId = restored.selectedRouteId
             if let system = restored.unitSystem { unitSystem = system }
@@ -106,7 +108,13 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    // MARK: - GPX import
+    /// Allocate a fresh route id for an in-progress (draft) route.
+    func allocateRouteId() -> Int {
+        let id = nextRouteId
+        nextRouteId += 1
+        return id
+    }
+
 
     /// Parse `text` and add its routes and waypoints to the workspace.
     ///
@@ -182,6 +190,7 @@ final class WorkspaceStore: ObservableObject {
         let workspace = PersistedWorkspace(
             routes: routes,
             waypoints: waypoints,
+            draft: draft,
             nextRouteId: nextRouteId,
             documentName: documentName,
             selectedRouteId: selectedRouteId,
@@ -197,6 +206,7 @@ final class WorkspaceStore: ObservableObject {
     /// Wipe the library and the saved file, e.g. from Settings.
     func clearAll() {
         routes = []
+        draft = nil
         waypoints = []
         selectedRouteId = nil
         documentName = nil
