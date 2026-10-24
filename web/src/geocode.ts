@@ -94,9 +94,9 @@ function regionText(name: string, placeName: string): string {
   if (!placeName) return '';
   if (name && placeName.startsWith(name)) {
     const rest = placeName.slice(name.length).replace(/^,\s*/, '');
-    return rest || placeName;
+    return (rest || placeName).replace(/^Columbia(,|$)/, 'District of Columbia$1');
   }
-  return placeName;
+  return placeName.replace(/^Columbia(,|$)/, 'District of Columbia$1');
 }
 
 /** Compact country label, e.g. "United States" → "USA". */
@@ -111,9 +111,17 @@ function countryLabel(context: RawContext | undefined): string {
  * States"), so rebuild it from the county/region/country context instead →
  * "Alamosa, Colorado, USA".
  */
+function countryIsUs(regionContext: RawContext, context: RawContext[]): boolean {
+  const country = context.find((entry) => entry.id?.startsWith('country.'));
+  return country?.text === 'United States';
+}
+
 function regionFromContext(context: RawContext[] = []): string {
   const county = context.find((entry) => entry.id?.startsWith('county.'))?.text;
-  const region = context.find((entry) => entry.id?.startsWith('region.'))?.text;
+  const regionContext = context.find((entry) => entry.id?.startsWith('region.'));
+  // OpenStreetMap names D.C.'s region "Columbia" — show it the way everyone
+  // calls it instead of the bare region text.
+  const region = regionContext?.text === 'Columbia' && countryIsUs(regionContext, context) ? 'District of Columbia' : regionContext?.text;
   const country = context.find((entry) => entry.id?.startsWith('country.'));
   const parts = [county, region, country ? countryLabel(country) : ''].filter(Boolean);
   return parts.join(', ');
