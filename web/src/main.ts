@@ -130,11 +130,12 @@ const savedWorkspace = loadWorkspace();
  * Open somewhere useful rather than on a hardcoded default.
  *
  * Awaited deliberately. The alternative — construct the Map on the default and
- * jump once the estimate lands — is faster to first *pixel* and slower to first
+ * jump once an answer lands — is faster to first *pixel* and slower to first
  * *useful* map, because the tiles it fetches while waiting are the ones it throws
- * away. Bounded by `GEO_TIMEOUT_MS`, and skipped outright when there is a saved
- * view or a cached fix to use instead, so the common return-to-your-own-map case
- * pays nothing.
+ * away. Bounded by `GEO_TIMEOUT_MS` for the estimate and `STARTUP_FIX_TIMEOUT_MS`
+ * for the browser's position (asked for in parallel, on a visit with nothing
+ * remembered), and skipped outright when there is a saved view or a cached fix to
+ * use instead, so the common return-to-your-own-map case pays nothing.
  */
 const startup = await resolveStartupCenter(savedWorkspace?.view);
 
@@ -1346,8 +1347,11 @@ function commitRouteName(index: number, raw: string) {
 $('fit-route').addEventListener('click', fitAll);
 
 // --- My location -------------------------------------------------------------
-// The permission is only ever requested from a click on the button, so the app
-// never asks for the user's position until they ask for it themselves.
+// A first visit with nothing to open on has already been asked for a position by
+// `resolveStartupCenter` — that prompt is what centres the opening camera. This
+// button is the deliberate way to ask again, and the only one that drops a dot,
+// frames the accuracy halo, and follows a fresh fix. When the startup prompt was
+// granted, the permission state below reflects it without another dialog.
 const locateButton = $('locate-me');
 const locateTooltip = locateButton.nextElementSibling as HTMLElement;
 const LOCATE_TIMEOUT_MS = 15000;

@@ -5,11 +5,17 @@ import {
   fetchGeoEstimate,
   FIX_ZOOM,
   GEO_TIMEOUT_MS,
+  normalizeStartupFix,
   parseEstimate,
+  requestStartupFix,
   resolveStartupCenter,
+  STARTUP_FIX_MAX_AGE_MS,
+  STARTUP_FIX_TIMEOUT_MS,
   type GeoEstimate,
+  type StartupFixPosition,
+  type StartupGeolocation,
 } from '../src/startup';
-import { LOCATION_KEY, saveCachedFix, type CachedFix } from '../src/storage';
+import { LOCATION_KEY, LOCATION_MAX_ACCURACY_METERS, saveCachedFix, type CachedFix } from '../src/storage';
 
 const ANN_ARBOR: GeoEstimate = { lat: 42.2808, lon: -83.743, city: 'Ann Arbor', country: 'US', precision: 'city' };
 
@@ -20,6 +26,37 @@ const fix = (over: Partial<CachedFix> = {}): CachedFix => ({
   accuracyMeters: 30,
   ...over,
 });
+
+/** What a phone's network/GPS fix looks like coming out of `getCurrentPosition`. */
+const phonePosition = (over: Partial<StartupFixPosition> = {}): StartupFixPosition => ({
+  coords: { latitude: 42.2808, longitude: -83.743, accuracy: 30 },
+  timestamp: Date.now(),
+  ...over,
+});
+
+/**
+ * Install a `navigator.geolocation` stand-in. The test decides whether the
+ * "browser" grants, denies, or leaves the dialog open; `calls` records the
+ * options each request was made with.
+ */
+function stubGeolocation(answer: 'grant' | 'deny' | 'ignore', position = phonePosition()) {
+  const calls: Array<{ options?: { enableHighAccuracy?: boolean; timeout?: number; maximumAge?: number } }> = [];
+  const pending: Array<{ success: (position: StartupFixPosition) => void }> = [];
+  const geo: StartupGeolocation = {
+    getCurrentPosition(success, error, options) {
+      calls.push({ options });
+      if (answer === 'grant') success(position);
+      else if (answer === 'deny') error?.({ code: 1 });
+      else pending.push({ success });
+    },
+  };
+  Object.defineProperty(navigator, 'geolocation', { value: geo, configurable: true });
+  return { calls, pending };
+}
+
+function clearGeolocation() {
+  Object.defineProperty(navigator, 'geolocation', { value: undefined, configurable: true });
+}
 
 /** A `fetch` that answers once, and records how it was called. */
 function fetchReturning(body: unknown, init: { status?: number; ok?: boolean } = {}) {
@@ -219,6 +256,169 @@ describe('fetchGeoEstimate', () => {
   });
 });
 
+describe('normalizeStartupFix', () => {
+  it('accepts a well-formed position', () => {
+    const position = phonePosition();
+    expect(normalizeStartupFix(position)).toEqual({
+      lon: -83.743,
+      lat: 42.2808,
+      at: position.timestamp,
+      accuracyMeters: 30,
+    });
+  });
+
+  it('rejects a coordinate off the planet', () => {
+    expect(normalizeStartupFix(phonePosition({ coords: { latitude: 91, longitude: 0, accuracy: 30 } }))).toBeNull();
+    expect(normalizeStartupFix(phonePosition({ coords: { latitude: 0, longitude: 181, accuracy: 30 } }))).toBeNull();
+    expect(normalizeStartupFix(phonePosition({ coords: { latitude: Number.NaN, longitude: 0, accuracy: 30 } }))).toBeNull();
+  });
+
+  /**
+   * Same bar, and the same reasoning, as `loadCachedFix` on the way back out: a
+   * fix with kilometres of accuracy is no better than the IP centroid it would
+   * outrank, so it must not displace the estimate *nor* be stored only to be
+   * rejected next load.
+   */
+  it('rejects an accuracy coarser than a cached fix may be', () => {
+    const coarse = LOCATION_MAX_ACCURACY_METERS + 1;
+    expect(normalizeStartupFix(phonePosition({ coords: { latitude: 42.2808, longitude: -83.743, accuracy: coarse } }))).toBeNull();
+  });
+
+  it('rejects a missing or negative accuracy', () => {
+    expect(normalizeStartupFix(phonePosition({ coords: { latitude: 42.2808, longitude: -83.743, accuracy: Number.NaN } }))).toBeNull();
+    expect(normalizeStartupFix(phonePosition({ coords: { latitude: 42.2808, longitude: -83.743, accuracy: -1 } }))).toBeNull();
+  });
+
+  it('stamps an absent timestamp with now, so the fix is not born stale', () => {
+    const at = normalizeStartupFix(phonePosition({ timestamp: Number.NaN }))?.at;
+    expect(at).toBeGreaterThan(Date.now() - 5_000);
+    expect(at).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('rejects a missing position', () => {
+    expect(normalizeStartupFix(null)).toBeNull();
+    expect(normalizeStartupFix(undefined)).toBeNull();
+    expect(normalizeStartupFix({} as StartupFixPosition)).toBeNull();
+  });
+});
+
+describe('requestStartupFix', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearGeolocation();
+  });
+
+  it('resolves the browser’s fix and remembers it for the next load', async () => {
+    stubGeolocation('grant');
+
+    const fixFromBrowser = await requestStartupFix();
+
+    expect(fixFromBrowser).toMatchObject({ lon: -83.743, lat: 42.2808, accuracyMeters: 30 });
+    // Stored, because a grant that has been asked for once should never be
+    // asked for again — the prompt is the cost, not the position.
+    expect(localStorage.getItem(LOCATION_KEY)).not.toBeNull();
+  });
+
+  it('asks without high accuracy: the opening frame needs a valley, not a GPS fix', async () => {
+    const { calls } = stubGeolocation('grant');
+
+    await requestStartupFix();
+
+    expect(calls[0]?.options).toMatchObject({
+      enableHighAccuracy: false,
+      timeout: STARTUP_FIX_TIMEOUT_MS,
+      maximumAge: STARTUP_FIX_MAX_AGE_MS,
+    });
+  });
+
+  it('resolves null when permission is denied, and stores nothing', async () => {
+    stubGeolocation('deny');
+
+    expect(await requestStartupFix()).toBeNull();
+    expect(localStorage.getItem(LOCATION_KEY)).toBeNull();
+  });
+
+  it('resolves null when the dialog is left open, without holding the map', async () => {
+    vi.useFakeTimers();
+    stubGeolocation('ignore');
+
+    const pending = requestStartupFix();
+    await vi.advanceTimersByTimeAsync(STARTUP_FIX_TIMEOUT_MS);
+
+    expect(await pending).toBeNull();
+  });
+
+  it('remembers a grant that lands after the wait, so the next load opens right', async () => {
+    vi.useFakeTimers();
+    const { pending: unanswered } = stubGeolocation('ignore');
+
+    const settled = await (async () => {
+      const pending = requestStartupFix();
+      await vi.advanceTimersByTimeAsync(STARTUP_FIX_TIMEOUT_MS);
+      return pending;
+    })();
+    expect(settled).toBeNull();
+
+    // The dialog was answered "Allow" only after the map had opened on the
+    // estimate. This load lets it go; the next one does not ask again.
+    unanswered[0]?.success(phonePosition());
+    expect(localStorage.getItem(LOCATION_KEY)).not.toBeNull();
+  });
+
+  it('resolves null when there is no geolocation to ask — HTTP, or an old browser', async () => {
+    clearGeolocation();
+    expect(await requestStartupFix({ geolocation: null })).toBeNull();
+    expect(localStorage.getItem(LOCATION_KEY)).toBeNull();
+  });
+
+  it('resolves null when the engine throws instead of prompting', async () => {
+    stubGeolocation('ignore');
+    const throwing: StartupGeolocation = {
+      getCurrentPosition() {
+        throw new Error('geolocation requires a secure context');
+      },
+    };
+
+    expect(await requestStartupFix({ geolocation: throwing })).toBeNull();
+  });
+
+  it('does not store a fix too coarse to be worth the name', async () => {
+    stubGeolocation('grant', phonePosition({
+      coords: { latitude: 42.2808, longitude: -83.743, accuracy: LOCATION_MAX_ACCURACY_METERS + 1 },
+    }));
+
+    expect(await requestStartupFix()).toBeNull();
+    expect(localStorage.getItem(LOCATION_KEY)).toBeNull();
+  });
+
+  it('gives up in seconds, not tens: an ignored dialog costs a moment, not the load', () => {
+    expect(STARTUP_FIX_TIMEOUT_MS).toBeGreaterThanOrEqual(1_000);
+    expect(STARTUP_FIX_TIMEOUT_MS).toBeLessThanOrEqual(5_000);
+    // The estimate runs in parallel, so this budget is also the most the two
+    // waits can stack to.
+    expect(STARTUP_FIX_TIMEOUT_MS).toBeGreaterThanOrEqual(GEO_TIMEOUT_MS);
+  });
+
+  /** An early answer must not leave a timer running against a dead prompt. */
+  it('clears its timer once the answer arrives', async () => {
+    vi.useFakeTimers();
+    // Primed with the fix the grant is about to write, because jsdom defers
+    // storage notifications behind a timer of its own: counted now, it is part
+    // of the baseline rather than of what this asserts — that requestStartupFix
+    // clears its *own* watchdog when the answer beats the budget.
+    const position = phonePosition();
+    stubGeolocation('grant', position);
+    saveCachedFix(normalizeStartupFix(position)!);
+    const before = vi.getTimerCount();
+    await requestStartupFix();
+    expect(vi.getTimerCount()).toBe(before);
+  });
+});
+
 describe('resolveStartupCenter', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -226,6 +426,8 @@ describe('resolveStartupCenter', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    clearGeolocation();
+    vi.unstubAllGlobals();
   });
 
   /**
@@ -237,11 +439,14 @@ describe('resolveStartupCenter', () => {
       throw new Error('the network must not be touched');
     }) as unknown as typeof fetch;
     vi.stubGlobal('fetch', impl);
+    // Nor the browser: the saved view outranks a fix, so asking would be a
+    // prompt the answer is never read from.
+    const { calls } = stubGeolocation('grant');
 
     const chosen = await resolveStartupCenter({ center: { lng: -105.5, lat: 39.1 }, zoom: 9.5 });
 
     expect(chosen.source).toBe('saved');
-    vi.unstubAllGlobals();
+    expect(calls).toHaveLength(0);
   });
 
   it('does not reach the network when a cached fix answers the question', async () => {
@@ -250,11 +455,69 @@ describe('resolveStartupCenter', () => {
       throw new Error('the network must not be touched');
     }) as unknown as typeof fetch;
     vi.stubGlobal('fetch', impl);
+    const { calls } = stubGeolocation('grant');
 
     const chosen = await resolveStartupCenter(undefined);
 
     expect(chosen.source).toBe('fix');
+    expect(calls).toHaveLength(0);
+  });
+
+  /**
+   * The issue asks for the prompt outright: a first visit with nothing to open
+   * on asks the browser for a position, and the answer — not the estimate —
+   * decides the opening frame. The fix is remembered, so the prompt is a
+   * one-time cost in practice.
+   */
+  it('opens on a granted position rather than the estimate, and keeps it', async () => {
+    stubGeolocation('grant', phonePosition());
+    vi.stubGlobal('fetch', fetchReturning(ANN_ARBOR).impl);
+
+    const chosen = await resolveStartupCenter(undefined);
+
+    expect(chosen.source).toBe('fix');
+    expect(chosen.center).toEqual([-83.743, 42.2808]);
+    expect(chosen.zoom).toBe(FIX_ZOOM);
+    expect(localStorage.getItem(LOCATION_KEY)).not.toBeNull();
+  });
+
+  it('falls back to the estimate when permission is denied', async () => {
+    stubGeolocation('deny');
+    vi.stubGlobal('fetch', fetchReturning(ANN_ARBOR).impl);
+
+    const chosen = await resolveStartupCenter(undefined);
+
+    expect(chosen.source).toBe('estimate');
+    expect(localStorage.getItem(LOCATION_KEY)).toBeNull();
+  });
+
+  it('falls back to the estimate when the dialog is ignored past the budget', async () => {
+    vi.useFakeTimers();
+    stubGeolocation('ignore');
+    vi.stubGlobal('fetch', fetchReturning(ANN_ARBOR).impl);
+
+    const pending = resolveStartupCenter(undefined);
+    await vi.advanceTimersByTimeAsync(STARTUP_FIX_TIMEOUT_MS);
+
+    expect((await pending).source).toBe('estimate');
+  });
+
+  it('does not ask a second time once the first grant is remembered', async () => {
+    stubGeolocation('grant');
+    vi.stubGlobal('fetch', fetchReturning(ANN_ARBOR).impl);
+
+    await resolveStartupCenter(undefined);
     vi.unstubAllGlobals();
+
+    const { calls } = stubGeolocation('grant');
+    vi.stubGlobal('fetch', (() => {
+      throw new Error('the network must not be touched');
+    }) as unknown as typeof fetch);
+
+    const chosen = await resolveStartupCenter(undefined);
+
+    expect(chosen.source).toBe('fix');
+    expect(calls).toHaveLength(0);
   });
 
   it('falls through to the default when there is no proxy to ask', async () => {

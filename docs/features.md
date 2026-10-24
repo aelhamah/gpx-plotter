@@ -31,21 +31,33 @@ Everything currently implemented in the GPX Route Plotter, grouped by area.
 
 ## My location
 
+- **Asked at startup, once.** On a visit with nothing remembered — no saved
+  view from a previous session and no cached position — the app asks the browser
+  for a position as it opens, and the map opens on the answer at a terrain-wide
+  zoom. That is what raises the permission prompt. The wait is bounded (3 s), so
+  an ignored dialog falls back to the IP-derived estimate rather than holding the
+  map blank; a grant that arrives late is still remembered for the next visit.
+  Returning visits never ask again: a remembered position opens the map directly,
+  and the browser itself suppresses the dialog once permission has been decided.
 - **Locate-me button** directly under the fit control. Pressing it asks the
   browser for a position, drops a blue dot on the map with a translucent halo
   sized to the reported accuracy, and eases the camera to the fix — the zoom is
   picked so the accuracy halo is about 60 px wide (a tight GPS fix zooms in, a
-  coarse one zooms out), capped at zoom 15.
-- **Permission is only requested on click**, never on page load, and the
-  permission state is watched with the Permissions API. The button explains
+  coarse one zooms out), capped at zoom 15. It is the precise answer, and the
+  only path that draws the dot.
+- The permission state is watched with the Permissions API. The button explains
   itself: it turns red with a “location blocked — allow it in your browser
   settings” tooltip once access is denied (a denied site is never re-prompted by
   the browser), and greys out over plain HTTP or on browsers without geolocation.
   Failures — denied, unavailable, timeout — explain themselves on the status
   line instead of failing silently; a successful fix says nothing, since the
   dot, the halo, and the camera move are the feedback.
-- **Nothing is stored**: the position lives in memory only, is never written to
-  the workspace in `localStorage`, and is dropped by *Clear workspace*.
+- **The last position is remembered** under its own `localStorage` key, so the
+  next visit opens there without asking. It is deliberately *not* part of the
+  workspace: *Clear workspace* clears the user's routes and waypoints, not where
+  their device happens to be. A remembered position that is stale (older than
+  half a year) or too coarse (worse than 5 km accuracy) is ignored in favour of
+  the estimate, which at least follows the user to the right continent.
 - The fix survives basemap swaps (satellite ↔ outdoor) and 3D terrain, since it
   is re-applied with the rest of the custom layers.
 
