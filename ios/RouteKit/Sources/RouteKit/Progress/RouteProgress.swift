@@ -21,6 +21,9 @@ public struct RouteProfile: Equatable, Sendable {
     /// Resample a route and accumulate distances along it.
     public static func make(from points: [RoutePoint], stepMeters: Double = 30) -> RouteProfile {
         let samples = Profile.routeSamples(points, stepMeters: stepMeters)
+        guard samples.count > 1 else {
+            return RouteProfile(points: samples, cumulativeDistances: Array(repeating: 0, count: samples.count), totalDistance: 0)
+        }
         var cumulative = [Double](repeating: 0, count: samples.count)
         for index in 1..<samples.count {
             cumulative[index] = cumulative[index - 1] + Haversine.meters(from: samples[index - 1], to: samples[index])
