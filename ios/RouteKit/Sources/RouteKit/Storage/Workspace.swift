@@ -20,6 +20,7 @@ public struct PersistedWorkspace: Equatable, Sendable, Codable {
     public var version: Int
     public var routes: [Route]
     public var waypoints: [Waypoint]
+    public var draft: Route?
     public var nextRouteId: Int
     public var documentName: String?
     public var selectedRouteId: Int?
@@ -30,6 +31,7 @@ public struct PersistedWorkspace: Equatable, Sendable, Codable {
         version: Int = 1,
         routes: [Route] = [],
         waypoints: [Waypoint] = [],
+        draft: Route? = nil,
         nextRouteId: Int = 1,
         documentName: String? = nil,
         selectedRouteId: Int? = nil,
@@ -39,6 +41,7 @@ public struct PersistedWorkspace: Equatable, Sendable, Codable {
         self.version = version
         self.routes = routes
         self.waypoints = waypoints
+        self.draft = draft
         self.nextRouteId = nextRouteId
         self.documentName = documentName
         self.selectedRouteId = selectedRouteId
@@ -78,6 +81,7 @@ public enum WorkspaceCodec {
             version: storageVersion,
             routes: routes,
             waypoints: waypoints,
+            draft: raw.draft,
             nextRouteId: nextRouteId,
             documentName: documentName,
             selectedRouteId: selectedRouteId,
@@ -91,6 +95,7 @@ public enum WorkspaceCodec {
         var version: Int
         var routes: [Route]?
         var waypoints: [Waypoint]?
+        var draft: Route?
         var nextRouteId: Int?
         var documentName: String?
         var selectedRouteId: Int?

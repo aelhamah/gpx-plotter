@@ -25,7 +25,12 @@ enum MapLayers {
     static let waypointSource = "waypoints"
     static let waypointLayer = "waypoint-points"
 
-    // MARK: - Location
+    // MARK: - Draft route (Create)
+    static let draftRouteSource = "draft-route"
+    static let draftRouteCasing = "draft-route-casing"
+    static let draftRouteLine = "draft-route-line"
+    static let draftPointsSource = "draft-points"
+    static let draftPointsLayer = "draft-points"
 
     static let locationPointSource = "location-point"
     static let locationAccuracySource = "location-accuracy-ring"

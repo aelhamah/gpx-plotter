@@ -15,6 +15,12 @@ import UIKit
 /// See docs/ios-plan.md §6.
 struct MapView: UIViewRepresentable {
     let route: Route
+    /// In-progress route drawn on the Create screen, or nil elsewhere.
+    var draftRoute: Route? = nil
+    /// Called with the coordinate of a tap on the bare map (not on chrome).
+    var onMapTap: ((Coordinate, Double) -> Void)? = nil
+    var onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil
+    var onDraftVertexEnded: (() -> Void)? = nil
     /// Distance along the route the profile is scrubbed to. The map draws the
     /// covered portion as a trace, the way the web app's `profile-trace` layer
     /// does. Nil hides it.
@@ -78,6 +84,10 @@ struct MapView: UIViewRepresentable {
 
     init(
         route: Route,
+        draftRoute: Route? = nil,
+        onMapTap: ((Coordinate, Double) -> Void)? = nil,
+        onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil,
+        onDraftVertexEnded: (() -> Void)? = nil,
         scrubbedDistance: Binding<Double?> = .constant(nil),
         loadError: Binding<String?> = .constant(nil),
         onStyleLoaded: (() -> Void)? = nil,
@@ -88,6 +98,10 @@ struct MapView: UIViewRepresentable {
         mapInsets: MapInsets = MapInsets()
     ) {
         self.route = route
+        self.draftRoute = draftRoute
+        self.onMapTap = onMapTap
+        self.onDraftVertexMoved = onDraftVertexMoved
+        self.onDraftVertexEnded = onDraftVertexEnded
         self._scrubbedDistance = scrubbedDistance
         self._loadError = loadError
         self.onStyleLoaded = onStyleLoaded
@@ -101,7 +115,11 @@ struct MapView: UIViewRepresentable {
     func makeUIView(context: Context) -> MLNMapView {
         let mapView = MLNMapView(frame: .zero, styleURL: styleURL(for: workspace.mapStyle))
         mapView.delegate = context.coordinator
-        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
+        mapView.addGestureRecognizer(tap)
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleVertexPan(_:)))
+        pan.delegate = context.coordinator
+        mapView.addGestureRecognizer(pan)
         mapView.logoView.isHidden = true
         mapView.attributionButton.isHidden = true
         // The app draws its own compass, in the rail with the rest of the map
@@ -119,6 +137,7 @@ struct MapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MLNMapView, context: Context) {
+        context.coordinator.parent = self
         let desired = styleURL(for: workspace.mapStyle)
         if mapView.styleURL != desired {
             // A style swap drops every custom source/layer; the coordinator
@@ -199,6 +218,161 @@ struct MapView: UIViewRepresentable {
             guard let id = numericSuffix(of: source.identifier), !visibleIDs.contains(id) else { continue }
             style.removeSource(source)
         }
+    }
+
+    private func applyDraftRoute(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        guard let draft = draftRoute, !draft.points.isEmpty else {
+            for id in [MapLayers.draftRouteCasing, MapLayers.draftRouteLine, MapLayers.draftPointsLayer] {
+                if let layer = style.layer(withIdentifier: id) { style.removeLayer(layer) }
+            }
+            for id in [MapLayers.draftRouteSource, MapLayers.draftPointsSource] {
+                if let source = style.source(withIdentifier: id) { style.removeSource(source) }
+            }
+            return
+        }
+        let coordinates = draft.points.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        let line = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
+        if style.source(withIdentifier: MapLayers.draftRouteSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.draftRouteSource, shape: line, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.draftRouteSource) as? MLNShapeSource {
+            existing.shape = line
+        }
+        guard let source = style.source(withIdentifier: MapLayers.draftRouteSource) as? MLNSource else { return }
+        if style.layer(withIdentifier: MapLayers.draftRouteCasing) == nil {
+            let casing = MLNLineStyleLayer(identifier: MapLayers.draftRouteCasing, source: source)
+            casing.lineColor = NSExpression(forConstantValue: UIColor.white)
+            casing.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.routeCasingWidth)
+            casing.lineOpacity = NSExpression(forConstantValue: MapLayers.Paint.routeCasingOpacity)
+            MapLayers.applyRoundCaps(to: casing)
+            style.addLayer(casing)
+        }
+        if style.layer(withIdentifier: MapLayers.draftRouteLine) == nil {
+            let lineLayer = MLNLineStyleLayer(identifier: MapLayers.draftRouteLine, source: source)
+            lineLayer.lineColor = NSExpression(forConstantValue: UIColor(draft.color))
+            lineLayer.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.routeLineWidth)
+            MapLayers.applyRoundCaps(to: lineLayer)
+            style.addLayer(lineLayer)
+        }
+
+        // Vertices
+        let features: [MLNPointFeature] = draft.points.enumerated().map { index, point in
+            let feature = MLNPointFeature()
+            feature.coordinate = CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
+            feature.attributes = ["pointIndex": index]
+            return feature
+        }
+        if style.source(withIdentifier: MapLayers.draftPointsSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.draftPointsSource, features: features, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.draftPointsSource) as? MLNShapeSource {
+            existing.shape = MLNShapeCollection(shapes: features)
+        }
+        guard let pointsSource = style.source(withIdentifier: MapLayers.draftPointsSource) as? MLNSource else { return }
+        if style.layer(withIdentifier: MapLayers.draftPointsLayer) == nil {
+            let layer = MLNCircleStyleLayer(identifier: MapLayers.draftPointsLayer, source: pointsSource)
+            layer.circleRadius = MapLayers.markerRadiusExpression(boost: MapLayers.Paint.selectedMarkerBoost)
+            layer.circleColor = NSExpression(forConstantValue: UIColor(draft.color))
+            layer.circleStrokeColor = NSExpression(forConstantValue: MapLayers.Paint.markerStrokeColor)
+            layer.circleStrokeWidth = MapLayers.markerStrokeExpression()
+            style.addLayer(layer)
+        }
+    }
+
+    private func applyArrows(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        let zoom = mapView.zoomLevel
+        let visible = workspace.routes.filter { ($0.visible ?? true) && $0.points.count >= 2 }
+        let selectedRouteId = route.id
+        // Register arrow images per color.
+        for route in visible {
+            let color = UIColor(route.color)
+            let id = "route-arrow-\(route.color)"
+            if style.image(forName: id) == nil {
+                style.setImage(arrowImage(color: color), forName: id)
+            }
+        }
+        // Build point features.
+        var features: [MLNPointFeature] = []
+        let ordered = visible.filter { $0.id != route.id } + visible.filter { $0.id == route.id }
+        for route in ordered {
+            let active = route.id == selectedRouteId
+            for arrow in segmentArrows(points: route.points, minPixels: 64, zoom: zoom) {
+                let feature = MLNPointFeature()
+                feature.coordinate = CLLocationCoordinate2D(latitude: arrow.lat, longitude: arrow.lon)
+                feature.attributes = [
+                    "bearing": arrow.bearing,
+                    "icon": "route-arrow-\(route.color)",
+                    "active": active,
+                ]
+                features.append(feature)
+            }
+        }
+
+        // Replace source.
+        if let layer = style.layer(withIdentifier: "route-arrows") {
+            style.removeLayer(layer)
+        }
+        if let source = style.source(withIdentifier: "route-arrows") {
+            style.removeSource(source)
+        }
+        guard !features.isEmpty else { return }
+        let source = MLNShapeSource(identifier: "route-arrows", features: features, options: nil)
+        style.addSource(source)
+        guard let src = style.source(withIdentifier: "route-arrows") as? MLNSource else { return }
+        let layer = MLNSymbolStyleLayer(identifier: "route-arrows", source: src)
+        layer.iconImageName = NSExpression(forKeyPath: "icon")
+        layer.iconRotation = NSExpression(forKeyPath: "bearing")
+        layer.iconRotationAlignment = NSExpression(forConstantValue: "map")
+        layer.iconPitchAlignment = NSExpression(forConstantValue: "map")
+        layer.iconAllowsOverlap = NSExpression(forConstantValue: true)
+        layer.iconIgnoresPlacement = NSExpression(forConstantValue: true)
+        layer.iconScale = NSExpression(forConstantValue: 0.5)
+        style.addLayer(layer)
+    }
+
+    private func arrowImage(color: UIColor) -> UIImage {
+        let size: CGFloat = 44
+        return UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
+            let ctx = UIGraphicsGetCurrentContext()!
+            ctx.translateBy(x: size / 2, y: size / 2)
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 0, y: -14))
+            path.addLine(to: CGPoint(x: 14, y: 7))
+            path.addLine(to: CGPoint(x: 0, y: -2))
+            path.addLine(to: CGPoint(x: -14, y: 7))
+            path.close()
+            color.setFill()
+            path.fill()
+        }
+    }
+
+    private struct SegmentArrow { let lat: Double; let lon: Double; let bearing: Double }
+    private func segmentArrows(points: [RoutePoint], minPixels: Double, zoom: Double) -> [SegmentArrow] {
+        var arrows: [SegmentArrow] = []
+        let metersPerPixel: (Double, Double) -> Double = { lat, z in
+            (156543.03392804097 * cos(lat * .pi / 180)) / pow(2, z)
+        }
+        for i in 1..<points.count {
+            let a = points[i - 1]
+            let b = points[i]
+            // midpoint mercator
+            var ax = Mercator.x(a.lon)
+            let ay = Mercator.y(a.lat)
+            var bx = Mercator.x(b.lon)
+            let by = Mercator.y(b.lat)
+            if bx - ax > 0.5 { bx -= 1 } else if bx - ax < -0.5 { bx += 1 }
+            let midX = ax + (bx - ax) / 2
+            let midY = ay + (by - ay) / 2
+            let mid = Mercator.coordinate(y: midY, x: midX)
+            let meters = Haversine.meters(from: a, to: b)
+            if meters == 0 { continue }
+            if meters < minPixels * metersPerPixel(mid.lat, zoom) { continue }
+            let dx = bx - ax
+            let dy = by - ay
+            let bearing = (atan2(dx, -dy) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+            arrows.append(SegmentArrow(lat: mid.lat, lon: mid.lon, bearing: bearing))
+        }
+        return arrows
     }
 
     private func numericSuffix(of identifier: String) -> Int? {
@@ -656,6 +830,8 @@ struct MapView: UIViewRepresentable {
 
     private func applyEverything(to mapView: MLNMapView, styleLoaded: Bool, coordinator: Coordinator) {
         applyRoutes(to: mapView)
+        applyArrows(to: mapView)
+        applyDraftRoute(to: mapView)
         applyProfileTrace(to: mapView, coordinator: coordinator)
         applyWaypoints(to: mapView)
         applyLocation(to: mapView)
@@ -1010,8 +1186,8 @@ struct MapView: UIViewRepresentable {
     // MARK: - Coordinator
 
     @MainActor
-    final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate {
-        private let parent: MapView
+    final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate, UIGestureRecognizerDelegate {
+        var parent: MapView
         var hasFitted = false
 
         /// Resampled profiles, kept per route so scrubbing does not resample on
@@ -1103,10 +1279,45 @@ struct MapView: UIViewRepresentable {
             parent.refreshWaypointLabels(for: mapView)
         }
 
-        func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
-            // Panning changes no SwiftUI state, so this is the only signal that the
-            // projected waypoint labels need re-laying out.
-            parent.refreshWaypointLabels(for: mapView)
+        @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended,
+                  let mapView = gesture.view as? MLNMapView else { return }
+            let coordinate = mapView.convert(gesture.location(in: mapView), toCoordinateFrom: mapView)
+            parent.onMapTap?(Coordinate(lat: coordinate.latitude, lon: coordinate.longitude), mapView.zoomLevel)
+        }
+
+        var draggingVertexIndex: Int?
+
+        @objc func handleVertexPan(_ pan: UIPanGestureRecognizer) {
+            guard let mapView = pan.view as? MLNMapView else { return }
+            switch pan.state {
+            case .began:
+                let features = mapView.visibleFeatures(at: pan.location(in: mapView), styleLayerIdentifiers: [MapLayers.draftPointsLayer])
+                if let feature = features.first(where: { ($0 as? MLNPointFeature)?.attributes["pointIndex"] != nil }),
+                   let index = (feature as? MLNPointFeature)?.attributes["pointIndex"] as? Int {
+                    draggingVertexIndex = index
+                    mapView.isScrollEnabled = false
+                } else {
+                    draggingVertexIndex = nil
+                    pan.state = .failed
+                }
+            case .changed:
+                guard let index = draggingVertexIndex else { return }
+                let coord = mapView.convert(pan.location(in: mapView), toCoordinateFrom: mapView)
+                parent.onDraftVertexMoved?(index, Coordinate(lat: coord.latitude, lon: coord.longitude))
+            case .ended, .cancelled, .failed:
+                if draggingVertexIndex != nil {
+                    mapView.isScrollEnabled = true
+                    parent.onDraftVertexEnded?()
+                    draggingVertexIndex = nil
+                }
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
         }
     }
 }

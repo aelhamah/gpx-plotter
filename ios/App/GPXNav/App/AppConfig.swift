@@ -58,6 +58,10 @@ enum AppConfig {
         tileProxyBaseURL.map(MapTilerConfig.init(baseURL:))
     }
 
+    static var snapConfig: MapTilerConfig? {
+        tileProxyBaseURL.map(MapTilerConfig.init(baseURL:))
+    }
+
     /// The same DEM config for the style builder, which runs off the main actor.
     static var terrainTileConfig: MapTilerConfig? { terrainConfig }
 

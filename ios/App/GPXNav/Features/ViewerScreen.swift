@@ -206,6 +206,13 @@ struct ViewerScreen: View {
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Edit", systemImage: "pencil") {
+                        workspace.draft = route
+                        workspace.save()
+                        NotificationCenter.default.post(name: .switchToCreate, object: nil)
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     // `figure.hiking`, not `location.fill`: the locate button
                     // directly below it already used that glyph, and two
