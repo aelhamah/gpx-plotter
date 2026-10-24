@@ -1,10 +1,10 @@
 window.GPXNAV_PREVIEW = {
-  "commit": "20a9656",
+  "commit": "c5082bb",
   "branch": "feature/ios-plot-route",
   "device": "iPhone 17 Pro Max",
   "runtime": "iOS 26.2",
   "xcode": "Xcode 26.2",
-  "capturedAt": "2026-10-24T16:41:48Z",
+  "capturedAt": "2026-10-24T17:04:23Z",
   "demoTiles": false,
   "width": 828,
   "height": 1800,
