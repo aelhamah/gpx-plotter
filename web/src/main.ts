@@ -1370,6 +1370,7 @@ function watchGeolocationPermission() {
     geolocationPermission = status.state;
     status.addEventListener('change', () => { geolocationPermission = status.state; refreshLocateButton(); });
     refreshLocateButton();
+    if (startup.granted && geolocationPermission === 'granted') locateMe();
   }).catch(() => { /* permissions API can refuse to report geolocation — prompt on click instead */ });
 }
 

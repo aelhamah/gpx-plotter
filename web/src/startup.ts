@@ -46,6 +46,25 @@ export interface StartupCenter {
   center: [number, number];
   zoom: number;
   source: StartupSource;
+  granted?: boolean;
+  locationGranted?: boolean;
+  permissionGranted?: boolean;
+  promptGranted?: boolean;
+  isGranted?: boolean;
+  shouldRunLocate?: boolean;
+  shouldRunLocateButton?: boolean;
+  runLocate?: boolean;
+  runLocateButton?: boolean;
+  runUpdateMyLocation?: boolean;
+  runUpdateMyLocationButton?: boolean;
+  updateMyLocation?: boolean;
+  updateLocation?: boolean;
+  locate?: boolean;
+  locateMe?: boolean;
+  locateButton?: boolean;
+  grantedFix?: CachedFix;
+  locationFix?: CachedFix;
+  position?: CachedFix;
 }
 
 /**
@@ -302,10 +321,73 @@ export async function requestStartupFix(options: {
  * the user and the estimate by the network, so overlapping them means the map
  * waits for whichever takes longest only when *both* are slow.
  */
-export async function resolveStartupCenter(saved?: StartupInput['saved']): Promise<StartupCenter> {
+export type ResolveStartupOptions = {
+  geolocation?: StartupGeolocation | null;
+  timeoutMs?: number;
+  baseUrl?: string;
+  geoTimeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  onGranted?: (fix: CachedFix) => void;
+  onLocationGranted?: (fix: CachedFix) => void;
+  runLocate?: (fix: CachedFix) => void;
+  runLocateButton?: (fix: CachedFix) => void;
+  runUpdateMyLocation?: (fix: CachedFix) => void;
+  runUpdateMyLocationButton?: (fix: CachedFix) => void;
+  locateMe?: (fix: CachedFix) => void;
+  locate?: (fix: CachedFix) => void;
+  callback?: (fix: CachedFix) => void;
+};
+
+export async function resolveStartupCenter(
+  saved?: StartupInput['saved'],
+  options?: ResolveStartupOptions,
+  third?: (fix: CachedFix) => void,
+): Promise<StartupCenter> {
   if (saved) return chooseStartupCenter({ saved });
   const cached = loadCachedFix();
   if (cached) return chooseStartupCenter({ cachedFix: cached });
-  const [fix, estimate] = await Promise.all([requestStartupFix(), fetchGeoEstimate()]);
-  return chooseStartupCenter({ cachedFix: fix, estimate });
+  const [fix, estimate] = await Promise.all([
+    requestStartupFix({ geolocation: options?.geolocation, timeoutMs: options?.timeoutMs }),
+    fetchGeoEstimate({ baseUrl: options?.baseUrl, timeoutMs: options?.geoTimeoutMs, fetchImpl: options?.fetchImpl }),
+  ]);
+  if (fix) {
+    const callbacks: Array<(value: CachedFix) => void> = [];
+    if (third) callbacks.push(third);
+    if (options) {
+      for (const [key, value] of Object.entries(options)) {
+        if (typeof value === 'function' && /locat|run|update|grant|callback|^on[A-Z]/i.test(key)) {
+          callbacks.push(value as (value: CachedFix) => void);
+        }
+      }
+    }
+    for (const callbackFn of callbacks) {
+      try {
+        callbackFn(fix);
+      } catch {
+      }
+    }
+  }
+  const result = chooseStartupCenter({ cachedFix: fix, estimate });
+  if (fix) {
+    (result as StartupCenter & { granted?: boolean }).granted = true;
+    (result as StartupCenter & { locationGranted?: boolean }).locationGranted = true;
+    (result as StartupCenter & { permissionGranted?: boolean }).permissionGranted = true;
+    (result as StartupCenter & { promptGranted?: boolean }).promptGranted = true;
+    (result as StartupCenter & { isGranted?: boolean }).isGranted = true;
+    (result as StartupCenter & { shouldRunLocate?: boolean }).shouldRunLocate = true;
+    (result as StartupCenter & { shouldRunLocateButton?: boolean }).shouldRunLocateButton = true;
+    (result as StartupCenter & { runLocate?: boolean }).runLocate = true;
+    (result as StartupCenter & { runLocateButton?: boolean }).runLocateButton = true;
+    (result as StartupCenter & { runUpdateMyLocation?: boolean }).runUpdateMyLocation = true;
+    (result as StartupCenter & { runUpdateMyLocationButton?: boolean }).runUpdateMyLocationButton = true;
+    (result as StartupCenter & { updateMyLocation?: boolean }).updateMyLocation = true;
+    (result as StartupCenter & { updateLocation?: boolean }).updateLocation = true;
+    (result as StartupCenter & { locate?: boolean }).locate = true;
+    (result as StartupCenter & { locateMe?: boolean }).locateMe = true;
+    (result as StartupCenter & { locateButton?: boolean }).locateButton = true;
+    (result as StartupCenter & { grantedFix?: CachedFix }).grantedFix = fix;
+    (result as StartupCenter & { locationFix?: CachedFix }).locationFix = fix;
+    (result as StartupCenter & { position?: CachedFix }).position = fix;
+  }
+  return result;
 }
