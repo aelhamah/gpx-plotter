@@ -147,6 +147,7 @@ struct MapView: UIViewRepresentable {
         mapView.addGestureRecognizer(tap)
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleVertexPan(_:)))
         pan.delegate = context.coordinator
+        context.coordinator.vertexPanGestureRecognizer = pan
         mapView.addGestureRecognizer(pan)
         mapView.logoView.isHidden = true
         mapView.attributionButton.isHidden = true
@@ -1062,8 +1063,6 @@ struct MapView: UIViewRepresentable {
         var delta = target - camera.heading
         if delta > 180 { delta -= 360 }
         if delta < -180 { delta += 360 }
-        // Keep the signed delta: folding a negative turn (counter-clockwise
-        // across north) back to 0...360 reverses the easing and stalls it.
         camera.heading = camera.heading + delta
     }
 
@@ -1310,6 +1309,7 @@ struct MapView: UIViewRepresentable {
     final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: MapView
         var hasFitted = false
+        var vertexPanGestureRecognizer: UIPanGestureRecognizer?
 
         /// Resampled profiles, kept per route so scrubbing does not resample on
         /// every gesture change. A cache, not a source of truth: the profile the
@@ -1444,6 +1444,15 @@ struct MapView: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === vertexPanGestureRecognizer else { return true }
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+                  let mapView = pan.view as? MLNMapView,
+                  mapView.style != nil else { return false }
+            let features = mapView.visibleFeatures(at: pan.location(in: mapView), styleLayerIdentifiers: [MapLayers.draftPointsLayer])
+            return features.contains { ($0 as? MLNPointFeature)?.attributes["pointIndex"] != nil }
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
