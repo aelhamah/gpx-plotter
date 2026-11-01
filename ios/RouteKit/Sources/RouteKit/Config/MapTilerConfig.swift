@@ -51,6 +51,27 @@ public struct MapTilerConfig: Equatable, Sendable {
             .replacingOccurrences(of: "{y}", with: "\(y)"))
     }
 
+    /// Marked trail/routing vector tiles ("trail" layer) used to snap drawn
+    /// points onto trails. Mirrors the web app's `OUTDOOR_TILE_URL`.
+    public var outdoorTileURL: String {
+        "\(baseURL)/tiles/outdoor/{z}/{x}/{y}.pbf"
+    }
+
+    /// OpenMapTiles-planet vector tiles ("transportation" and "mountain_peak"
+    /// layers) used to snap waypoints onto peaks and ordinary paths onto the
+    /// trail network. Mirrors the web app's `PLANET_TILE_URL`.
+    public var planetTileURL: String {
+        "\(baseURL)/tiles/v3/{z}/{x}/{y}.pbf"
+    }
+
+    /// One concrete tile URL for a template above (`{z}/{x}/{y}` substituted).
+    public func tileURL(_ template: String, z: Int, x: Int, y: Int) -> URL? {
+        URL(string: template
+            .replacingOccurrences(of: "{z}", with: "\(z)")
+            .replacingOccurrences(of: "{x}", with: "\(x)")
+            .replacingOccurrences(of: "{y}", with: "\(y)"))
+    }
+
     public static let defaultCenter = Coordinate(lat: 39.5, lon: -106.5)
     public static let defaultZoom = 8.0
 }

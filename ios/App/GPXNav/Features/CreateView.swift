@@ -1,121 +1,841 @@
 import SwiftUI
 import RouteKit
 
-/// Create a route: search for places and drop them as waypoints.
-///
-/// Drawing the line itself is the next step, and the search results already
-/// land here as waypoints, which is what the drawn line will be anchored to.
-/// See docs/ios-plan.md §7 and §12.
+/// Create a route: tap the map to draw it, with trail snapping, waypoints, undo/redo.
 struct CreateView: View {
+    let configuredMapId: Int?
     @EnvironmentObject private var workspace: WorkspaceStore
-    @StateObject private var draft = DraftRoute()
+    @EnvironmentObject private var location: LocationController
+    @EnvironmentObject private var services: AppServices
+    init(mapId: Int? = nil) {
+        self.configuredMapId = mapId
+    }
+
+    @StateObject private var controller = CreateDraftController()
+    @StateObject private var draftAnalysis = RouteAnalysis(
+        route: Route(id: 0, name: "", points: [], color: "#2563eb")
+    )
+
     @State private var isSearching = false
+    @State private var showLayerMenu = false
+    @State private var showElevationProfile = false
+    @State private var routeLabels: [ProjectedRouteLabel] = []
+    @State private var waypointLabels: [ProjectedWaypoint] = []
+    @State private var fitToken = 0
+    @State private var searchProximity: Coordinate? = nil
+    @State private var searchFocusResult: GeocodeResult? = nil
+    @State private var searchFocusToken = 0
+    @State private var followsUserLocation = false
+    @State private var locationFitPending = true
+    @State private var showDiscardAlert = false
+    @Environment(\.dismiss) private var dismiss
+
+    private var placeholderRoute: Route {
+        Route(id: 0, name: "", points: [], color: "#2563eb")
+    }
+
+    private var hasUnsavedChanges: Bool {
+        if let draft = workspace.draft, !workspace.routes.contains(where: { $0.id == draft.id }) {
+            return true
+        }
+        guard let selected = workspace.selectedMap, !selected.hasFinishedRoutes else {
+            return false
+        }
+        return !workspace.waypoints.isEmpty
+    }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    if draft.waypoints.isEmpty {
-                        ContentUnavailableView(
-                            "Nothing placed yet",
-                            systemImage: "mappin.and.ellipse",
-                            description: Text("Search for peaks, trailheads, and trails to place waypoints.")
-                        )
-                    } else {
-                        ForEach(Array(draft.waypoints.enumerated()), id: \.offset) { index, waypoint in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(waypoint.name)
-                                    if let elevation = waypoint.elevation {
-                                        Text(Units.formatElevation(elevation, system: workspace.unitSystem))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
+        ZStack {
+            MapView(
+                route: placeholderRoute,
+                draftRoute: controller.draft,
+                onMapTap: { coordinate, zoom in
+                    Task { await controller.handleMapTap(workspace: workspace, coordinate: coordinate, zoom: zoom) }
+                },
+                onDraftVertexMoved: { index, coordinate in
+                    controller.moveDraftVertex(workspace: workspace, index: index, coordinate: coordinate)
+                },
+                onDraftVertexEnded: {
+                    controller.endDraftVertexDrag(workspace: workspace)
+                },
+                onCenterChanged: { coordinate in
+                    searchProximity = coordinate
+                },
+                searchFocusResult: searchFocusResult,
+                searchFocusToken: searchFocusToken,
+                onStyleLoaded: {
+                    guard locationFitPending,
+                          workspace.routes.isEmpty,
+                          workspace.draft == nil,
+                          workspace.waypoints.isEmpty else {
+                        locationFitPending = false
+                        return
+                    }
+                    locationFitPending = false
+                    location.locate()
+                    followsUserLocation = true
+                    Task { @MainActor in
+                        for _ in 0..<12 {
+                            guard followsUserLocation else { return }
+                            guard location.fix == nil else { break }
+                            location.locate()
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        }
+                        guard location.fix != nil else { return }
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        followsUserLocation = false
+                    }
+                },
+                waypointLabels: $waypointLabels,
+                routeLabels: $routeLabels,
+                followsUserLocation: $followsUserLocation,
+                fitToken: $fitToken,
+
+                showRelief: workspace.showHillshade,
+                showSlope: workspace.showSlope,
+                showTerrain3D: workspace.showTerrain3D
+            )
+            .ignoresSafeArea()
+            .overlay(alignment: .bottomTrailing) {
+                if workspace.showSlope {
+                    SlopeLegend()
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 90)
+                }
+            }
+
+            VStack {
+                // Top bar: edit history and the two map-wide tools. Sized for
+                // the narrow screen — icon buttons only, no capsule that other
+                // chrome has to share a row with. Drawing controls live at the
+                // bottom, near what they act on.
+                HStack(spacing: 10) {
+                    Button {
+                        controller.undo(workspace: workspace)
+                    } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(controller.historyEmpty)
+
+                    Button {
+                        controller.redo(workspace: workspace)
+                    } label: { Image(systemName: "arrow.uturn.forward") }
+                    .disabled(controller.futureEmpty)
+
+                    Button {
+                        fitToDraft()
+                    } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    .disabled(controller.draft?.points.isEmpty ?? true)
+
+                    Spacer()
+
+                    Button {
+                        isSearching = true
+                    } label: { Image(systemName: "magnifyingglass") }
+
+                    Button {
+                        showLayerMenu = true
+                    } label: { Image(systemName: "globe.americas.fill") }
+                }
+                .buttonStyle(.bordered)
+                .padding(10)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+
+                // Names: map and route.
+                VStack(spacing: 6) {
+                    TextField("Map name", text: Binding(
+                        get: { workspace.documentName ?? "" },
+                        set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    if controller.draft != nil {
+                        TextField("Route name", text: Binding(
+                            get: { controller.draft?.name ?? "" },
+                            set: { newValue in
+                                if var draft = controller.draft {
+                                    draft.name = newValue
+                                    controller.draft = draft
+                                    workspace.draft = draft
+                                    workspace.save()
                                 }
-                                Spacer()
-                                Button {
-                                    draft.removeWaypoint(at: index)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .foregroundStyle(.red)
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
+                .padding(.horizontal, 12)
+
+                Spacer()
+
+                // Bottom-anchored band: profile above the action bar, both
+                // full width, so nothing mid-screen competes with the map.
+                VStack(spacing: 8) {
+                    // Elevation profile (when drawing)
+                    if controller.isDrawing, let draft = controller.draft, draft.points.count >= 2 {
+                        VStack(spacing: 0) {
+                            Button {
+                                showElevationProfile.toggle()
+                            } label: {
+                                HStack {
+                                    Text("Elevation Profile")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Image(systemName: showElevationProfile ? "chevron.up" : "chevron.down")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
                                 }
-                                .buttonStyle(.borderless)
-                                .accessibilityLabel("Remove \(waypoint.name)")
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+
+                            if showElevationProfile {
+                                RouteProfileChart(
+                                    analysis: draftAnalysis,
+                                    route: draft,
+                                    system: Units.defaultUnitSystem(),
+                                    scrubbedDistance: .constant(nil)
+                                )
+                                .frame(height: 150)
+                                .padding(.horizontal, 8)
+                                .padding(.bottom, 8)
+                                .transition(.slide.combined(with: .opacity))
                             }
                         }
-                        .onMove { draft.moveWaypoints(from: $0, to: $1) }
+                        .frame(maxWidth: .infinity)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .transition(.slide.combined(with: .opacity))
+                        .animation(.spring(response: 0.3), value: showElevationProfile)
                     }
-                } header: {
-                    Text("Waypoints")
-                } footer: {
-                    Text("Drawing the line between them is next. The GPX export follows that.")
-                }
 
-                Section("Actions") {
-                    Button("Search for a place", systemImage: "magnifyingglass") {
-                        isSearching = true
+                    if controller.waypointMode {
+                        Text(controller.waypointHint)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.regularMaterial, in: Capsule())
                     }
-                    Button("Clear", systemImage: "xmark.circle", role: .destructive) {
-                        draft.clear()
+                    if !workspace.waypoints.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack {
+                                ForEach(workspace.waypoints.indices, id: \.self) { index in
+                                    TextField(
+                                        "Waypoint",
+                                        text: Binding(
+                                            get: {
+                                                workspace.waypoints.indices.contains(index)
+                                                    ? workspace.waypoints[index].name
+                                                    : ""
+                                            },
+                                            set: { value in
+                                                if workspace.waypoints.indices.contains(index) {
+                                                    workspace.waypoints[index].name = value
+                                                    workspace.save()
+                                                }
+                                            }
+                                        )
+                                    )
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 140)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
                     }
-                    .disabled(draft.waypoints.isEmpty)
+
+                    if controller.isDrawing {
+                        drawBar
+                    } else if controller.mergePickMode {
+                        VStack(spacing: 8) {
+                            Text(controller.mergePick == nil ? "Pick first route to merge" : "Pick second route")
+                                .font(.caption)
+                            ScrollView(.horizontal) {
+                                HStack {
+                                    ForEach(workspace.routes) { route in
+                                        Button(route.name) {
+                                            controller.selectMergeRoute(workspace: workspace, route: route)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(controller.mergePick?.id == route.id ? .accentColor : nil)
+                                    }
+                                }
+                            }
+                            Button("Cancel merge") { controller.toggleMergePick(workspace: workspace) }
+                                .buttonStyle(.bordered)
+                        }
+                        .padding(.bottom, 16)
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                Button("Draw route", systemImage: "square.and.pencil") {
+                                    controller.startDrawing(workspace: workspace, location: location)
+                                    location.locate()
+                                    followsUserLocation = true
+                                    Task { @MainActor in
+                                        var attempts = 0
+                                        while location.fix == nil && attempts < 50 {
+                                            attempts += 1
+                                            try? await Task.sleep(nanoseconds: 100_000_000)
+                                        }
+                                        guard location.fix != nil else {
+                                            followsUserLocation = false
+                                            return
+                                        }
+                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                        followsUserLocation = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
+
+                                Button("Waypoint", systemImage: "mappin") {
+                                    controller.setWaypointMode(true, workspace: workspace)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+
+                                Button("Merge", systemImage: "arrow.triangle.merge") {
+                                    controller.toggleMergePick(workspace: workspace)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                                .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
+
+                                Button("New route", systemImage: "plus") {
+                                    controller.newRouteAndDraw(workspace: workspace, location: location)
+                                    location.locate()
+                                    followsUserLocation = true
+                                    Task { @MainActor in
+                                        var attempts = 0
+                                        while location.fix == nil && attempts < 50 {
+                                            attempts += 1
+                                            try? await Task.sleep(nanoseconds: 100_000_000)
+                                        }
+                                        guard location.fix != nil else {
+                                            followsUserLocation = false
+                                            return
+                                        }
+                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                        followsUserLocation = false
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                            }
+                        }
+                        .safeAreaPadding(.bottom, 4)
+                        .padding(.bottom, 12)
+                    }
                 }
             }
-            .navigationTitle("Create")
-            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .environment(\.editMode, .constant(draft.waypoints.isEmpty ? .inactive : .active))
+            .animation(.spring(response: 0.3), value: controller.isDrawing)
+            .animation(.spring(response: 0.3), value: controller.waypointMode)
+            .animation(.spring(response: 0.3), value: controller.mergePickMode)
         }
         .sheet(isPresented: $isSearching) {
-            SearchView(proximity: nil) { result in
-                draft.addWaypoint(result)
+            SearchView(proximity: searchProximity) { result in
+                searchFocusResult = result
+                searchFocusToken += 1
             }
         }
-        // `-openSearch`, the same argument the viewer's search uses, so the
-        // capture script can photograph this one too. It could not before: the
-        // argument was read only by the viewer, which left this screen's sheet
-        // with no way to reach it from outside.
-        .task {
+        .sheet(isPresented: $showLayerMenu) {
+            MapModesSheet()
+                .environmentObject(workspace)
+        }
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Back") {
+                    if hasUnsavedChanges {
+                        showDiscardAlert = true
+                    } else {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .alert("Discard unsaved route?", isPresented: $showDiscardAlert) {
+            Button("Discard", role: .destructive) {
+                if let id = workspace.selectedMapId, workspace.selectedMap?.hasFinishedRoutes != true {
+                    workspace.maps.removeAll { $0.id == id }
+                    workspace.selectedMapId = workspace.maps.first?.id
+                }
+                workspace.draft = nil
+                workspace.save()
+                dismiss()
+            }
+            Button("Keep Editing", role: .cancel) { }
+        }
+        .task(id: configuredMapId ?? workspace.selectedMapId) {
+            prepareEditor()
+        }
+        .onChange(of: location.status) { _, newValue in
+            guard followsUserLocation else { return }
+            switch newValue {
+            case .located:
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    followsUserLocation = false
+                }
+            case .denied:
+                followsUserLocation = false
+            default:
+                break
+            }
+        }
+        .onChange(of: location.fix) { _, newValue in
+            guard followsUserLocation, newValue != nil else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                followsUserLocation = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .switchToCreate)) { _ in
+            if let d = workspace.draft {
+                controller.draft = d
+                controller.isDrawing = true
+                controller.updateStatus()
+            }
+        }
+        .onChange(of: controller.draft?.points.count) { _, _ in
+            if let draft = controller.draft, draft.points.count >= 2 {
+                draftAnalysis.update(route: draft)
+                if workspace.fillsMissingElevation {
+                    draftAnalysis.fillMissingElevations()
+                }
+            } else {
+                draftAnalysis.update(route: Route(id: 0, name: "", points: [], color: "#2563eb"))
+            }
+        }
+        .id(configuredMapId ?? workspace.selectedMapId)
+    }
+
+    private func prepareEditor() {
+        controller.snapEngine = SnapEngine(
+            httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
+                config: AppConfig.snapConfig,
+                diskCache: services.cache
+            )
+            controller.reset()
+            if let d = workspace.draft {
+                controller.draft = d
+                controller.isDrawing = true
+                controller.updateStatus()
+            }
             if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                 isSearching = true
             }
+    }
+
+    private func fitToDraft() {
+        fitToken += 1
+    }
+
+    private var drawBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(hex: controller.draft?.color ?? "#2563eb"))
+                    .frame(width: 10, height: 10)
+                Text(controller.statusText)
+                    .font(.caption)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Text("\(controller.draft?.points.count ?? 0) pts")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Toggle(isOn: $controller.snappingEnabled) {
+                    Text("Snap")
+                }
+                .toggleStyle(.button)
+                .controlSize(.large)
+                .help("Snap to trails")
+
+                Button("Cancel", systemImage: "xmark") {
+                    controller.stopDrawing()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Spacer(minLength: 0)
+
+                Button("Finish", systemImage: "checkmark") {
+                    controller.finish(workspace: workspace)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled((controller.draft?.points.count ?? 0) < 2)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
+        .safeAreaPadding(.bottom, 4)
+    }
+
+}
+
+@MainActor
+final class CreateDraftController: ObservableObject {
+    @Published var draft: Route?
+    @Published var isDrawing = false
+    @Published var waypointMode = false
+    @Published var snappingEnabled = SNAP_ENABLED_BY_DEFAULT
+    @Published var mergePickMode = false
+    @Published var mergePick: Route?
+    @Published var statusText = ""
+    @Published private(set) var history: [Snapshot] = []
+    @Published private(set) var future: [Snapshot] = []
+
+    var snapEngine: SnapEngine = SnapEngine(
+        httpClient: DefaultHTTPClient(),
+        config: nil,
+        diskCache: nil
+    )
+
+    struct Snapshot {
+        let routes: [Route]
+        let waypoints: [Waypoint]
+        let draft: Route?
+    }
+
+    var historyEmpty: Bool { history.isEmpty }
+    var futureEmpty: Bool { future.isEmpty }
+
+    var waypointHint: String { waypointHintText(snappingEnabled: snappingEnabled) }
+
+    func commitSnapshot(workspace: WorkspaceStore) {
+        history.append(Snapshot(routes: workspace.routes, waypoints: workspace.waypoints, draft: draft))
+        if history.count > 50 { history.removeFirst() }
+        future.removeAll()
+    }
+
+    func undo(workspace: WorkspaceStore) {
+        guard let previous = history.popLast() else { return }
+        future.append(Snapshot(routes: workspace.routes, waypoints: workspace.waypoints, draft: draft))
+        workspace.routes = previous.routes
+        workspace.waypoints = previous.waypoints
+        draft = previous.draft
+        workspace.draft = previous.draft
+        workspace.save()
+        updateStatus()
+    }
+
+    func redo(workspace: WorkspaceStore) {
+        guard let next = future.popLast() else { return }
+        history.append(Snapshot(routes: workspace.routes, waypoints: workspace.waypoints, draft: draft))
+        workspace.routes = next.routes
+        workspace.waypoints = next.waypoints
+        draft = next.draft
+        workspace.draft = next.draft
+        workspace.save()
+        updateStatus()
+    }
+
+    func updateStatus() {
+        statusText = drawStatusText(pointCount: draft?.points.count ?? 0, snappingEnabled: snappingEnabled)
+    }
+
+    func reset() {
+        draft = nil
+        isDrawing = false
+        waypointMode = false
+        snappingEnabled = SNAP_ENABLED_BY_DEFAULT
+        mergePickMode = false
+        mergePick = nil
+        history.removeAll()
+        future.removeAll()
+        updateStatus()
+    }
+
+    func startDrawing(workspace: WorkspaceStore, location: LocationController? = nil) {
+        if mergePickMode { exitMergePick() }
+        if waypointMode { setWaypointMode(false, workspace: workspace) }
+        if draft == nil {
+            commitSnapshot(workspace: workspace)
+            let id = workspace.allocateRouteId()
+            draft = Route(id: id, name: "Route \(id)", points: [], color: RoutePalette.color(forId: id))
+        }
+        if let draft {
+            workspace.draft = draft
+            workspace.save()
+        }
+        isDrawing = true
+        updateStatus()
+    }
+    func stopDrawing() {
+        isDrawing = false
+        updateStatus()
+    }
+
+    func newRouteAndDraw(workspace: WorkspaceStore, location: LocationController? = nil) {
+        commitSnapshot(workspace: workspace)
+        let id = workspace.allocateRouteId()
+        draft = Route(id: id, name: "Route \(id)", points: [], color: RoutePalette.color(forId: id))
+        if let draft {
+            workspace.draft = draft
+            workspace.save()
+        }
+        isDrawing = true
+        updateStatus()
+    }
+    func finish(workspace: WorkspaceStore) {
+        guard isDrawing, var d = draft, d.points.count >= 2 else {
+            stopDrawing()
+            return
+        }
+        if d.points.count >= 2 {
+            let a = d.points[d.points.count - 1]
+            let b = d.points[d.points.count - 2]
+            if abs(a.lat - b.lat) < 1e-6 && abs(a.lon - b.lon) < 1e-6 {
+                d.points.removeLast()
+            }
+        }
+        if let idx = workspace.routes.firstIndex(where: { $0.id == d.id }) {
+            workspace.routes[idx] = d
+        } else {
+            workspace.routes.append(d)
+        }
+        workspace.selectedRouteId = d.id
+        workspace.draft = nil
+        draft = nil
+        isDrawing = false
+        workspace.save()
+        updateStatus()
+    }
+
+    func setWaypointMode(_ on: Bool, workspace: WorkspaceStore) {
+        waypointMode = on
+        if on {
+            if mergePickMode { exitMergePick() }
+            stopDrawing()
+        }
+    }
+
+    func toggleMergePick(workspace: WorkspaceStore) {
+        mergePickMode.toggle()
+        if mergePickMode {
+            if waypointMode { setWaypointMode(false, workspace: workspace) }
+            stopDrawing()
+            mergePick = nil
+        } else {
+            mergePick = nil
+        }
+    }
+
+    func exitMergePick() {
+        mergePickMode = false
+        mergePick = nil
+    }
+
+    func handleMapTap(workspace: WorkspaceStore, coordinate: Coordinate, zoom: Double) async {
+        if waypointMode {
+            await addWaypoint(workspace: workspace, coordinate: coordinate, zoom: zoom)
+            return
+        }
+        if isDrawing {
+            await addRoutePoint(workspace: workspace, coordinate: coordinate, zoom: zoom)
+            return
+        }
+        // merge picking not implemented
+    }
+
+    func addRoutePoint(workspace: WorkspaceStore, coordinate: Coordinate, zoom: Double) async {
+        guard isDrawing, var d = draft else { return }
+        commitSnapshot(workspace: workspace)
+        d.points.append(RoutePoint(lat: coordinate.lat, lon: coordinate.lon))
+        draft = d
+        workspace.draft = d
+        workspace.save()
+        updateStatus()
+        await snapRoutePointToTrail(workspace: workspace, raw: coordinate, zoom: zoom)
+    }
+
+    private func snapRoutePointToTrail(workspace: WorkspaceStore, raw: Coordinate, zoom: Double) async {
+        guard snappingEnabled, let d0 = draft else { return }
+        let index = d0.points.count - 1
+        guard index >= 0 else { return }
+        let previous = index > 0 ? d0.points[index - 1] : nil
+        let snapZoom = SnapTiles.snapZoom(for: zoom)
+        let nearNew = await snapEngine.trailsNearPoint(lng: raw.lon, lat: raw.lat, zoom: snapZoom)
+        let nearPrev: SnapEngine.TrailQuery? = previous != nil
+            ? await snapEngine.trailsNearPoint(lng: previous!.lon, lat: previous!.lat, zoom: snapZoom)
+            : nil
+        var lines = nearNew.lines
+        if let nearPrev { lines.append(contentsOf: nearPrev.lines) }
+        lines = TrailNetwork.dedupeTrailLines(lines)
+        guard let match = nearestLine(raw, lines, TRAIL_SNAP_METERS) else { return }
+        guard var d = draft, d.points.count > index else { return }
+        let current = d.points[index]
+        guard current.lon == raw.lon && current.lat == raw.lat else { return }
+
+        var inserted = 0
+        if let previous {
+            let interior = TrailNetwork.trailVerticesBetween(
+                lines,
+                from: Coordinate(lat: previous.lat, lon: previous.lon),
+                to: match.result.point,
+                radiusMeters: TRAIL_SNAP_METERS
+            )
+            if !interior.isEmpty {
+                d.points.insert(contentsOf: interior.map { RoutePoint(lat: $0.lat, lon: $0.lon) }, at: index)
+                inserted = interior.count
+            }
+        }
+
+        if inserted > 0 {
+            let ci = index + inserted
+            if ci < d.points.count {
+                d.points[ci].lat = match.result.point.lat
+                d.points[ci].lon = match.result.point.lon
+            }
+        } else {
+            d.points[index].lat = match.result.point.lat
+            d.points[index].lon = match.result.point.lon
+        }
+        draft = d
+        workspace.draft = d
+        workspace.save()
+        updateStatus()
+    }
+
+    func addWaypoint(workspace: WorkspaceStore, coordinate: Coordinate, zoom: Double) async {
+        guard waypointMode else { return }
+        commitSnapshot(workspace: workspace)
+        let index = workspace.waypoints.count
+        workspace.waypoints.append(Waypoint(lat: coordinate.lat, lon: coordinate.lon, name: "Waypoint \(index + 1)"))
+        waypointMode = false
+        workspace.save()
+        await snapWaypointToPeak(workspace: workspace, index: index, raw: coordinate, zoom: zoom)
+    }
+
+    func selectMergeRoute(workspace: WorkspaceStore, route: Route) {
+        guard mergePickMode else { return }
+        if mergePick == nil {
+            mergePick = route
+        } else if mergePick!.id != route.id {
+            performMerge(workspace: workspace, first: mergePick!, second: route)
+        }
+    }
+
+    private func performMerge(workspace: WorkspaceStore, first: Route, second: Route) {
+        commitSnapshot(workspace: workspace)
+        let id = workspace.allocateRouteId()
+        let merged = Route(
+            id: id,
+            name: "\(first.name) + \(second.name)",
+            points: mergeRoutePoints(first.points, second.points),
+            color: RoutePalette.color(forId: id)
+        )
+        workspace.routes.append(merged)
+        mergePickMode = false
+        mergePick = nil
+        workspace.save()
+        updateStatus()
+    }
+
+    private func mergeRoutePoints(_ a: [RoutePoint], _ b: [RoutePoint], overlapMeters: Double = 10) -> [RoutePoint] {
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        // orient
+        let aStart = a[0], aEnd = a[a.count-1]
+        let bStart = b[0], bEnd = b[b.count-1]
+        let aRev = Array(a.reversed())
+        let bRev = Array(b.reversed())
+        struct Opt { let first:[RoutePoint]; let second:[RoutePoint]; let gap:Double }
+        let options: [Opt] = [
+            Opt(first: a, second: b, gap: Haversine.meters(from: aEnd.coordinate, to: bStart.coordinate)),
+            Opt(first: a, second: bRev, gap: Haversine.meters(from: aEnd.coordinate, to: bEnd.coordinate)),
+            Opt(first: aRev, second: b, gap: Haversine.meters(from: aStart.coordinate, to: bStart.coordinate)),
+            Opt(first: aRev, second: bRev, gap: Haversine.meters(from: aStart.coordinate, to: bEnd.coordinate)),
+        ]
+        let chosen = options.min(by: { $0.gap < $1.gap })!
+        let first = chosen.first
+        let second = chosen.second
+        // trim duplicated head
+        func unitDir(_ pts: [RoutePoint]) -> (Double,Double)? {
+            guard pts.count >= 2 else { return nil }
+            let a = pts[pts.count-2], b = pts[pts.count-1]
+            let dx = b.lon - a.lon, dy = b.lat - a.lat
+            let len = hypot(dx,dy)
+            return len < 1e-12 ? nil : (dx/len, dy/len)
+        }
+        // For trim, need tail dir of first (last two) and head dir of second (first two)
+        let tailDir: (Double,Double)? = {
+            guard first.count >= 2 else { return nil }
+            let a = first[first.count-2], b = first[first.count-1]
+            let dx = b.lon - a.lon, dy = b.lat - a.lat
+            let len = hypot(dx,dy)
+            return len < 1e-12 ? nil : (dx/len, dy/len)
+        }()
+        let headDir: (Double,Double)? = {
+            guard second.count >= 2 else { return nil }
+            let a = second[0], b = second[1]
+            let dx = b.lon - a.lon, dy = b.lat - a.lat
+            let len = hypot(dx,dy)
+            return len < 1e-12 ? nil : (dx/len, dy/len)
+        }()
+        var trim = 0
+        if let td = tailDir, let hd = headDir {
+            let dot = td.0*hd.0 + td.1*hd.1
+            if dot > 0 {
+                var joint = first.count - 1
+                while trim < second.count - 1 && joint - trim > 0 {
+                    if Haversine.meters(from: first[joint-trim].coordinate, to: second[trim].coordinate) > overlapMeters + 1e-6 { break }
+                    trim += 1
+                }
+            }
+        }
+        if trim == 0 { return first + second }
+        return first + Array(second.dropFirst(trim))
+    }
+
+    private var isDraggingVertex = false
+
+    func moveDraftVertex(workspace: WorkspaceStore, index: Int, coordinate: Coordinate) {
+        if !isDraggingVertex {
+            commitSnapshot(workspace: workspace)
+            isDraggingVertex = true
+        }
+        guard var d = draft, d.points.indices.contains(index) else { return }
+        d.points[index].lat = coordinate.lat
+        d.points[index].lon = coordinate.lon
+        draft = d
+    }
+
+    func endDraftVertexDrag(workspace: WorkspaceStore) {
+        guard isDraggingVertex else { return }
+        isDraggingVertex = false
+        workspace.draft = draft
+        workspace.save()
+        updateStatus()
+    }
+
+    func addWaypointFromSearch(workspace: WorkspaceStore, result: GeocodeResult) {
+        workspace.waypoints.append(Waypoint(lat: result.center.lat, lon: result.center.lon, name: result.name, elevation: result.elevation))
+        workspace.save()
+    }
+
+    private func snapWaypointToPeak(workspace: WorkspaceStore, index: Int, raw: Coordinate, zoom: Double) async {
+        guard snappingEnabled else { return }
+        let peaks = await snapEngine.peaksNearPoint(lng: raw.lon, lat: raw.lat, zoom: SnapTiles.snapZoom(for: zoom))
+        guard !peaks.peaks.isEmpty else { return }
+        let lines = peaks.peaks.map { [$0.center] }
+        guard let match = nearestSnap(raw, lines, PEAK_SNAP_METERS) else { return }
+        guard index < workspace.waypoints.count else { return }
+        let current = workspace.waypoints[index]
+        guard current.lon == raw.lon && current.lat == raw.lat else { return }
+        if let peak = peaks.peaks.first(where: { $0.center.lon == match.point.lon && $0.center.lat == match.point.lat }) {
+            workspace.waypoints[index].lon = match.point.lon
+            workspace.waypoints[index].lat = match.point.lat
+            if let name = peak.name { workspace.waypoints[index].name = name }
+            workspace.waypoints[index].elevation = peak.elevation
+            workspace.save()
         }
     }
 }
 
-/// The in-progress route on the Create screen.
-///
-/// Deliberately separate from `WorkspaceStore`: a half-built route is not part of
-/// the saved workspace, and it should not survive a relaunch. It is a controller
-/// for this screen, not a view model hanging off the view.
-@MainActor
-final class DraftRoute: ObservableObject {
-    @Published private(set) var waypoints: [Waypoint] = []
-
-    func addWaypoint(_ result: GeocodeResult) {
-        waypoints.append(Waypoint(
-            lat: result.center.lat,
-            lon: result.center.lon,
-            name: result.name,
-            elevation: result.elevation
-        ))
-    }
-
-    func removeWaypoint(at index: Int) {
-        guard waypoints.indices.contains(index) else { return }
-        waypoints.remove(at: index)
-    }
-
-    func moveWaypoints(from source: IndexSet, to destination: Int) {
-        waypoints.move(fromOffsets: source, toOffset: destination)
-    }
-
-    func clear() {
-        waypoints = []
-    }
-
-    /// The GPX document for the current waypoints, for when drawing lands.
-    var gpx: String {
-        GPXWriter.export(routes: [], waypoints: waypoints)
-    }
-}
