@@ -37,6 +37,42 @@ struct CreateView: View {
         return Route(id: 0, name: "", points: points, color: "#2563eb")
     }
 
+    private func startEditingRoute(_ id: Int) {
+        if controller.isDrawing {
+            controller.finish(workspace: workspace)
+            if let remaining = controller.draft, remaining.points.count < 2 {
+                controller.draft = nil
+                workspace.draft = nil
+            }
+        }
+        guard let route = workspace.routes.first(where: { $0.id == id }) else { return }
+        workspace.selectedRouteId = id
+        controller.draft = route
+        workspace.draft = route
+        controller.isDrawing = true
+        workspace.save()
+        controller.updateStatus()
+    }
+
+    private func startNewRoute() {
+        controller.newRouteAndDraw(workspace: workspace, location: location)
+        location.locate()
+        followsUserLocation = true
+        Task { @MainActor in
+            var attempts = 0
+            while location.fix == nil && attempts < 50 {
+                attempts += 1
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard location.fix != nil else {
+                followsUserLocation = false
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            followsUserLocation = false
+        }
+    }
+
     private var hasUnsavedChanges: Bool {
         if let draft = workspace.draft, !workspace.routes.contains(where: { $0.id == draft.id }) {
             return true
@@ -95,6 +131,19 @@ struct CreateView: View {
                     .disabled(fitRoute.points.count < 2)
                     .accessibilityLabel("Fit map")
 
+                    Button {
+                        controller.setWaypointMode(true, workspace: workspace)
+                    } label: { Image(systemName: "mappin") }
+                    .disabled(controller.waypointMode)
+                    .foregroundStyle(controller.waypointMode ? Color.accentColor : .primary)
+                    .accessibilityLabel("Waypoint")
+
+                    Button {
+                        controller.toggleMergePick(workspace: workspace)
+                    } label: { Image(systemName: "arrow.triangle.merge") }
+                    .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
+                    .accessibilityLabel("Merge routes")
+
                     if controller.draft != nil {
                         TextField("Route name", text: Binding(
                             get: { controller.draft?.name ?? "" },
@@ -132,7 +181,14 @@ struct CreateView: View {
                 route: fitRoute,
                 draftRoute: controller.draft,
                 onMapTap: { coordinate, zoom in
+                    if !controller.isDrawing && !controller.waypointMode,
+                       let selected = workspace.selectedRouteId {
+                        workspace.selectedRouteId = nil
+                    }
                     Task { await controller.handleMapTap(workspace: workspace, coordinate: coordinate, zoom: zoom) }
+                },
+                onSelectRoute: { id in
+                    startEditingRoute(id)
                 },
                 onDraftVertexMoved: { index, coordinate in
                     controller.moveDraftVertex(workspace: workspace, index: index, coordinate: coordinate)
@@ -289,63 +345,36 @@ struct CreateView: View {
                         .padding(.bottom, 16)
                     } else {
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                Button("Draw route", systemImage: "square.and.pencil") {
-                                    controller.startDrawing(workspace: workspace, location: location)
-                                    location.locate()
-                                    followsUserLocation = true
-                                    Task { @MainActor in
-                                        var attempts = 0
-                                        while location.fix == nil && attempts < 50 {
-                                            attempts += 1
-                                            try? await Task.sleep(nanoseconds: 100_000_000)
+                            HStack(spacing: 8) {
+                                if workspace.routes.isEmpty {
+                                    Text("No routes yet")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(workspace.routes) { route in
+                                    Button {
+                                        startEditingRoute(route.id)
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(Color(hex: route.color))
+                                                .frame(width: 8, height: 8)
+                                            Text(route.name)
+                                                .lineLimit(1)
                                         }
-                                        guard location.fix != nil else {
-                                            followsUserLocation = false
-                                            return
-                                        }
-                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                        followsUserLocation = false
                                     }
+                                    .buttonStyle(.bordered)
+                                    .tint(workspace.selectedRouteId == route.id ? .accentColor : nil)
+                                }
+                                Button {
+                                    startNewRoute()
+                                } label: {
+                                    Label("New", systemImage: "plus")
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .controlSize(.large)
-
-                                Button("Waypoint", systemImage: "mappin") {
-                                    controller.setWaypointMode(true, workspace: workspace)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
-
-                                Button("Merge", systemImage: "arrow.triangle.merge") {
-                                    controller.toggleMergePick(workspace: workspace)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
-                                .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
-
-                                Button("New route", systemImage: "plus") {
-                                    controller.newRouteAndDraw(workspace: workspace, location: location)
-                                    location.locate()
-                                    followsUserLocation = true
-                                    Task { @MainActor in
-                                        var attempts = 0
-                                        while location.fix == nil && attempts < 50 {
-                                            attempts += 1
-                                            try? await Task.sleep(nanoseconds: 100_000_000)
-                                        }
-                                        guard location.fix != nil else {
-                                            followsUserLocation = false
-                                            return
-                                        }
-                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                        followsUserLocation = false
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
                             }
                         }
+                        .padding(.horizontal, 12)
                         .safeAreaPadding(.bottom, 4)
                         .padding(.bottom, 12)
                     }
