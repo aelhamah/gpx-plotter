@@ -144,12 +144,12 @@ struct SearchView: View {
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            let found = await AppConfig.geocodingClient?.geocode(
+            let found = await AppConfig.geocodingClient?.geocodeWithFallback(
                 trimmed,
-                options: GeocodeOptions(proximity: center)
+                options: GeocodeOptions(limit: 10, proximity: center)
             ) ?? []
             guard !Task.isCancelled else { return }
-            results = found
+            results = rankSearchResults(found, center: center)
             isSearching = false
         }
     }

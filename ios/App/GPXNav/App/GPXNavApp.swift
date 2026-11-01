@@ -34,9 +34,15 @@ struct GPXNavApp: App {
 
 @MainActor
 final class WorkspaceStore: ObservableObject {
-    @Published var routes: [Route]
+    @Published var maps: [MapDocument] = []
+    @Published var selectedMapId: Int? = nil
+
+    @Published var routes: [Route] = []
     @Published var waypoints: [Waypoint] = []
+    @Published var draft: Route? = nil
     @Published var selectedRouteId: Int? = nil
+    @Published var nextRouteId: Int = 1
+
     @Published var unitSystem: UnitSystem = Units.defaultUnitSystem()
     @Published var mapStyle: MapStyle = ProcessInfo.processInfo.arguments.contains("-satellite")
         ? .satellite
@@ -44,59 +50,34 @@ final class WorkspaceStore: ObservableObject {
     @Published var showHillshade = false
     @Published var showSlope = false
     @Published var showTerrain3D = false
-    /// Whether to ask the terrain model for the elevations a track does not
-    /// carry, off by default (#72).
-    ///
-    /// Off means the profile shows the elevations the file actually recorded,
-    /// joined by straight lines between them, and nothing else. On means the
-    /// gaps between those are filled from MapTiler's terrain model, which costs
-    /// a network round trip per gap and is the only reason to have a key at all.
-    ///
-    /// Neither setting overwrites an elevation the file provided. That is not a
-    /// promise this flag makes and can break -- it is what the fill has always
-    /// done, and `ElevationFillTests` pins it -- so turning this on cannot
-    /// corrupt a track that was recorded properly. The reason it is opt-in at
-    /// all is that the terrain model and a hand-drawn route disagree by hundreds
-    /// of metres, and the user is better placed than the app to decide whose
-    /// answer to show.
     @Published var fillsMissingElevation = false
-    /// Set when the last import failed, so the library can show why.
+
     @Published var importError: String?
-    /// Name of the GPX file the routes came from, when imported.
     @Published var documentName: String?
 
-    private var nextRouteId: Int
+    private var nextMapId = 1
 
     init() {
-        if let restored = Self.loadPersisted() {
-            routes = restored.routes
-            waypoints = restored.waypoints
-            selectedRouteId = restored.selectedRouteId
-            if let system = restored.unitSystem { unitSystem = system }
-            documentName = restored.documentName
-            nextRouteId = restored.nextRouteId
+        if let url = Self.storeURL, let data = try? Data(contentsOf: url),
+           let loaded = try? LibraryCodec.decode(data) {
+            maps = loaded.maps
+            selectedMapId = loaded.selectedMapId
+            nextMapId = (maps.map(\.id).max() ?? 0) + 1
+            if maps.isEmpty {
+                seedDemoMap()
+            }
+            hydrateSelectedMap()
         } else {
-            // Seeded from web/public/demos so the map has something to show on a
-            // fresh install. Replaced by whatever is imported next.
-            let demo = DemoData.route
-            routes = [demo]
-            nextRouteId = demo.id + 1
+            seedDemoMap()
+            hydrateSelectedMap()
         }
-        // Terrain overlays normally start off and are toggled in Settings, but
-        // `simctl launch` cannot tap, so `-showRelief` / `-showSlope` turn them
-        // on for the M0 terrain check. `-satellite` does the same for the base
-        // layer, which is how the raster tileset's half of the offline cache gets
-        // exercised.
+
         let arguments = ProcessInfo.processInfo.arguments
         showHillshade = arguments.contains("-showRelief")
         showSlope = arguments.contains("-showSlope")
         showTerrain3D = arguments.contains("-terrain3D")
-        // `-fillElevation` opts a capture or a device check into the terrain
-        // fill, which is off for everyone else (#72).
         fillsMissingElevation = arguments.contains("-fillElevation")
 
-        // `-importGPX <name>` reads a GPX from Documents at launch, so the import
-        // path can be checked without driving the document picker.
         if let index = arguments.firstIndex(of: "-importGPX"),
            arguments.count > index + 1 {
             let name = arguments[index + 1]
@@ -106,15 +87,94 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    // MARK: - GPX import
+    // MARK: - Current map access
 
-    /// Parse `text` and add its routes and waypoints to the workspace.
-    ///
-    /// Route ids are reassigned on the way in, because a GPX file carries no
-    /// ids and two imports of the same file would otherwise collide.
+    var selectedMap: MapDocument? {
+        guard let selectedMapId else { return nil }
+        return maps.first { $0.id == selectedMapId }
+    }
+
+    func selectedMapIndex() -> Int? {
+        guard let selectedMapId else { return nil }
+        return maps.firstIndex { $0.id == selectedMapId }
+    }
+
+    private func seedDemoMap() {
+        let demo = DemoData.route
+        var map = MapDocument(id: nextMapId, name: "Demo route")
+        map.routes = [demo]
+        map.nextRouteId = demo.id + 1
+        nextMapId += 1
+        maps = [map]
+        selectedMapId = map.id
+    }
+
+    private func hydrateSelectedMap() {
+        guard let map = selectedMap else {
+            routes = []
+            waypoints = []
+            draft = nil
+            selectedRouteId = nil
+            documentName = nil
+            nextRouteId = 1
+            return
+        }
+        routes = map.routes
+        waypoints = map.waypoints
+        draft = map.draft
+        selectedRouteId = map.selectedRouteId
+        documentName = map.name
+        nextRouteId = map.nextRouteId
+    }
+
+    func syncSelectedMap() {
+        guard let index = selectedMapIndex() else { return }
+        var map = maps[index]
+        map.routes = routes
+        map.waypoints = waypoints
+        map.draft = draft
+        map.selectedRouteId = selectedRouteId
+        if let name = documentName { map.name = name }
+        map.nextRouteId = nextRouteId
+        maps[index] = map
+        maps = maps
+    }
+
+    func selectMap(_ id: Int) {
+        syncSelectedMap()
+        selectedMapId = id
+        hydrateSelectedMap()
+    }
+
+    func allocateMapId() -> Int {
+        let id = nextMapId
+        nextMapId += 1
+        return id
+    }
+
+    func allocateRouteId() -> Int {
+        let id = nextRouteId
+        nextRouteId += 1
+        return id
+    }
+
+    func newMap() -> MapDocument {
+        syncSelectedMap()
+        let map = MapDocument(id: allocateMapId(), name: "New Map", nextRouteId: 1)
+        maps.append(map)
+        selectedMapId = map.id
+        hydrateSelectedMap()
+        return map
+    }
+
+    // MARK: - Import (selected map)
+
     @discardableResult
     func importGPX(_ text: String, fileName: String?) -> Bool {
         importError = nil
+        if selectedMap == nil {
+            _ = newMap()
+        }
         let parsed: ParsedGPX
         do {
             parsed = try parseGPX(text)
@@ -132,24 +192,18 @@ final class WorkspaceStore: ObservableObject {
         var imported: [Route] = []
         for route in parsed.routes {
             var copy = route
-            copy.id = nextRouteId
-            nextRouteId += 1
+            copy.id = allocateRouteId()
             copy.color = RoutePalette.color(forId: copy.id)
             imported.append(copy)
         }
         routes.append(contentsOf: imported)
         waypoints.append(contentsOf: parsed.waypoints)
         if let name = fileName { documentName = name }
-        // Open what was just imported.
         if let first = imported.first { selectedRouteId = first.id }
         save()
         return true
     }
 
-    /// Import a GPX from the app's Documents directory, for `-importGPX <name>`.
-    ///
-    /// `simctl launch` cannot drive the document picker, so this makes the
-    /// import path verifiable on the simulator.
     @discardableResult
     func importGPXFromDocuments(named name: String) -> Bool {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
@@ -166,41 +220,31 @@ final class WorkspaceStore: ObservableObject {
     private static var storeURL: URL? {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         guard let base else { return nil }
-        // iOS does not create Application Support for us, and the first save
-        // would otherwise fail with "the folder doesn't exist".
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base.appendingPathComponent("workspace.json")
     }
 
-    private static func loadPersisted() -> PersistedWorkspace? {
-        guard let url = storeURL, let data = try? Data(contentsOf: url) else { return nil }
-        return try? WorkspaceCodec.decode(data)
-    }
-
     func save() {
+        syncSelectedMap()
         guard let url = Self.storeURL else { return }
-        let workspace = PersistedWorkspace(
-            routes: routes,
-            waypoints: waypoints,
-            nextRouteId: nextRouteId,
-            documentName: documentName,
-            selectedRouteId: selectedRouteId,
-            unitSystem: unitSystem
+        let library = PersistedLibrary(
+            version: libraryStorageVersion,
+            maps: maps,
+            selectedMapId: selectedMapId
         )
         do {
-            try WorkspaceCodec.encode(workspace).write(to: url, options: .atomic)
+            let data = try LibraryCodec.encode(library)
+            try data.write(to: url, options: .atomic)
         } catch {
             print("Workspace save failed: \(error)")
         }
     }
 
-    /// Wipe the library and the saved file, e.g. from Settings.
     func clearAll() {
-        routes = []
-        waypoints = []
-        selectedRouteId = nil
-        documentName = nil
-        nextRouteId = 1
+        maps = []
+        selectedMapId = nil
+        nextMapId = 1
+        hydrateSelectedMap()
         if let url = Self.storeURL { try? FileManager.default.removeItem(at: url) }
     }
 }
@@ -212,21 +256,11 @@ enum RoutePalette {
         "#9333ea", "#0f766e", "#dc2626"
     ]
 
-    /// Deterministic pick for a 1-based route id, wrapping like the web app.
     static func color(forId id: Int) -> String {
         cycle[(((id - 1) % cycle.count) + cycle.count) % cycle.count]
     }
 }
 
-/// The app's long-lived services: the loopback server, the tile cache it serves
-/// from, the style builder both it and the offline manager need, and the offline
-/// manager itself.
-///
-/// These are one object because they are genuinely one thing: the loopback
-/// server repoints the basemap at the cache, so a tile only reaches the disk
-/// once, and the offline manager is prefetching into the same cache the map is
-/// already warming. Handing each view its own instance would mean the map and
-/// the download filled two different caches.
 @MainActor
 final class AppServices: ObservableObject {
     let cache = TileCache()

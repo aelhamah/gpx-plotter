@@ -15,6 +15,19 @@ import UIKit
 /// See docs/ios-plan.md §6.
 struct MapView: UIViewRepresentable {
     let route: Route
+    /// In-progress route drawn on the Create screen, or nil elsewhere.
+    var draftRoute: Route? = nil
+    /// Called with the coordinate of a tap on the bare map (not on chrome).
+    var onMapTap: ((Coordinate, Double) -> Void)? = nil
+    var onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil
+    var onDraftVertexEnded: (() -> Void)? = nil
+    /// Reports the map's current center whenever the camera settles. Search uses
+    /// it as the proximity bias.
+    var onCenterChanged: ((Coordinate) -> Void)? = nil
+    /// Tap-to-fit from search results. A bump token makes repeated taps of the
+    /// same place still framed.
+    var searchFocusResult: GeocodeResult? = nil
+    var searchFocusToken: Int = 0
     /// Distance along the route the profile is scrubbed to. The map draws the
     /// covered portion as a trace, the way the web app's `profile-trace` layer
     /// does. Nil hides it.
@@ -47,6 +60,7 @@ struct MapView: UIViewRepresentable {
     /// with `MLNMapView.convert(_:toPointTo:)`, which goes through the camera, so
     /// they still sit on their waypoint under pitch and 3D terrain.
     @Binding var waypointLabels: [ProjectedWaypoint]
+    @Binding var routeLabels: [ProjectedRouteLabel]
     /// Whether the camera should stay on the user.
     ///
     /// Navigation sets this and the viewer does not. It is a standing follow
@@ -73,35 +87,67 @@ struct MapView: UIViewRepresentable {
     /// not know the navigation bar's height, the sheet's detent, or where the
     /// controls are — see `MapInsets`.
     var mapInsets: MapInsets = MapInsets()
+    /// Whether to show relief (hillshade) overlay.
+    var showRelief: Bool = false
+    /// Whether to show slope angle overlay.
+    var showSlope: Bool = false
+    /// Whether to enable 3D terrain.
+    var showTerrain3D: Bool = false
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
 
     init(
         route: Route,
+        draftRoute: Route? = nil,
+        onMapTap: ((Coordinate, Double) -> Void)? = nil,
+        onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil,
+        onDraftVertexEnded: (() -> Void)? = nil,
+        onCenterChanged: ((Coordinate) -> Void)? = nil,
+        searchFocusResult: GeocodeResult? = nil,
+        searchFocusToken: Int = 0,
         scrubbedDistance: Binding<Double?> = .constant(nil),
         loadError: Binding<String?> = .constant(nil),
         onStyleLoaded: (() -> Void)? = nil,
         waypointLabels: Binding<[ProjectedWaypoint]> = .constant([]),
+        routeLabels: Binding<[ProjectedRouteLabel]> = .constant([]),
         followsUserLocation: Binding<Bool> = .constant(false),
         fitToken: Binding<Int> = .constant(0),
         maxBasemapZoom: Double? = nil,
-        mapInsets: MapInsets = MapInsets()
+        mapInsets: MapInsets = MapInsets(),
+        showRelief: Bool = false,
+        showSlope: Bool = false,
+        showTerrain3D: Bool = false
     ) {
         self.route = route
+        self.draftRoute = draftRoute
+        self.onMapTap = onMapTap
+        self.onDraftVertexMoved = onDraftVertexMoved
+        self.onDraftVertexEnded = onDraftVertexEnded
+        self.onCenterChanged = onCenterChanged
+        self.searchFocusResult = searchFocusResult
+        self.searchFocusToken = searchFocusToken
         self._scrubbedDistance = scrubbedDistance
         self._loadError = loadError
         self.onStyleLoaded = onStyleLoaded
         self._waypointLabels = waypointLabels
+        self._routeLabels = routeLabels
         self._followsUserLocation = followsUserLocation
         self._fitToken = fitToken
         self.maxBasemapZoom = maxBasemapZoom
         self.mapInsets = mapInsets
+        self.showRelief = showRelief
+        self.showSlope = showSlope
+        self.showTerrain3D = showTerrain3D
     }
 
     func makeUIView(context: Context) -> MLNMapView {
         let mapView = MLNMapView(frame: .zero, styleURL: styleURL(for: workspace.mapStyle))
         mapView.delegate = context.coordinator
-        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
+        mapView.addGestureRecognizer(tap)
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleVertexPan(_:)))
+        pan.delegate = context.coordinator
+        mapView.addGestureRecognizer(pan)
         mapView.logoView.isHidden = true
         mapView.attributionButton.isHidden = true
         // The app draws its own compass, in the rail with the rest of the map
@@ -119,6 +165,7 @@ struct MapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MLNMapView, context: Context) {
+        context.coordinator.parent = self
         let desired = styleURL(for: workspace.mapStyle)
         if mapView.styleURL != desired {
             // A style swap drops every custom source/layer; the coordinator
@@ -152,6 +199,12 @@ struct MapView: UIViewRepresentable {
             context.coordinator.lastFitToken = fitToken
             fitMapToRoute(mapView, route: route, animated: true)
         }
+        if context.coordinator.lastSearchFocusToken != searchFocusToken,
+           let result = searchFocusResult {
+            context.coordinator.lastSearchFocusToken = searchFocusToken
+            fitMapToSearchResult(mapView, result: result, animated: true)
+        }
+
         // The style can finish loading before the view's first layout (a warm
         // loopback answers instantly), and the fit in `didFinishLoading` then
         // bails on the zero-size viewport. The first layout-driven update —
@@ -174,7 +227,7 @@ struct MapView: UIViewRepresentable {
     // MARK: - Style
 
     private func styleURL(for style: MapStyle) -> URL {
-        AppConfig.styleURL(for: style, terrain3D: workspace.showTerrain3D)
+        AppConfig.styleURL(for: style, terrain3D: showTerrain3D)
     }
 
     // MARK: - Routes
@@ -199,6 +252,161 @@ struct MapView: UIViewRepresentable {
             guard let id = numericSuffix(of: source.identifier), !visibleIDs.contains(id) else { continue }
             style.removeSource(source)
         }
+    }
+
+    private func applyDraftRoute(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        guard let draft = draftRoute, !draft.points.isEmpty else {
+            for id in [MapLayers.draftRouteCasing, MapLayers.draftRouteLine, MapLayers.draftPointsLayer] {
+                if let layer = style.layer(withIdentifier: id) { style.removeLayer(layer) }
+            }
+            for id in [MapLayers.draftRouteSource, MapLayers.draftPointsSource] {
+                if let source = style.source(withIdentifier: id) { style.removeSource(source) }
+            }
+            return
+        }
+        let coordinates = draft.points.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        let line = MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
+        if style.source(withIdentifier: MapLayers.draftRouteSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.draftRouteSource, shape: line, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.draftRouteSource) as? MLNShapeSource {
+            existing.shape = line
+        }
+        guard let source = style.source(withIdentifier: MapLayers.draftRouteSource) as? MLNSource else { return }
+        if style.layer(withIdentifier: MapLayers.draftRouteCasing) == nil {
+            let casing = MLNLineStyleLayer(identifier: MapLayers.draftRouteCasing, source: source)
+            casing.lineColor = NSExpression(forConstantValue: UIColor.white)
+            casing.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.routeCasingWidth)
+            casing.lineOpacity = NSExpression(forConstantValue: MapLayers.Paint.routeCasingOpacity)
+            MapLayers.applyRoundCaps(to: casing)
+            style.addLayer(casing)
+        }
+        if style.layer(withIdentifier: MapLayers.draftRouteLine) == nil {
+            let lineLayer = MLNLineStyleLayer(identifier: MapLayers.draftRouteLine, source: source)
+            lineLayer.lineColor = NSExpression(forConstantValue: UIColor(draft.color))
+            lineLayer.lineWidth = NSExpression(forConstantValue: MapLayers.Paint.routeLineWidth)
+            MapLayers.applyRoundCaps(to: lineLayer)
+            style.addLayer(lineLayer)
+        }
+
+        // Vertices
+        let features: [MLNPointFeature] = draft.points.enumerated().map { index, point in
+            let feature = MLNPointFeature()
+            feature.coordinate = CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
+            feature.attributes = ["pointIndex": index]
+            return feature
+        }
+        if style.source(withIdentifier: MapLayers.draftPointsSource) == nil {
+            style.addSource(MLNShapeSource(identifier: MapLayers.draftPointsSource, features: features, options: nil))
+        } else if let existing = style.source(withIdentifier: MapLayers.draftPointsSource) as? MLNShapeSource {
+            existing.shape = MLNShapeCollection(shapes: features)
+        }
+        guard let pointsSource = style.source(withIdentifier: MapLayers.draftPointsSource) as? MLNSource else { return }
+        if style.layer(withIdentifier: MapLayers.draftPointsLayer) == nil {
+            let layer = MLNCircleStyleLayer(identifier: MapLayers.draftPointsLayer, source: pointsSource)
+            layer.circleRadius = MapLayers.markerRadiusExpression(boost: MapLayers.Paint.selectedMarkerBoost)
+            layer.circleColor = NSExpression(forConstantValue: UIColor(draft.color))
+            layer.circleStrokeColor = NSExpression(forConstantValue: MapLayers.Paint.markerStrokeColor)
+            layer.circleStrokeWidth = MapLayers.markerStrokeExpression()
+            style.addLayer(layer)
+        }
+    }
+
+    private func applyArrows(to mapView: MLNMapView) {
+        guard let style = mapView.style else { return }
+        let zoom = mapView.zoomLevel
+        let visible = workspace.routes.filter { ($0.visible ?? true) && $0.points.count >= 2 }
+        let selectedRouteId = route.id
+        // Register arrow images per color.
+        for route in visible {
+            let color = UIColor(route.color)
+            let id = "route-arrow-\(route.color)"
+            if style.image(forName: id) == nil {
+                style.setImage(arrowImage(color: color), forName: id)
+            }
+        }
+        // Build point features.
+        var features: [MLNPointFeature] = []
+        let ordered = visible.filter { $0.id != route.id } + visible.filter { $0.id == route.id }
+        for route in ordered {
+            let active = route.id == selectedRouteId
+            for arrow in segmentArrows(points: route.points, minPixels: 64, zoom: zoom) {
+                let feature = MLNPointFeature()
+                feature.coordinate = CLLocationCoordinate2D(latitude: arrow.lat, longitude: arrow.lon)
+                feature.attributes = [
+                    "bearing": arrow.bearing,
+                    "icon": "route-arrow-\(route.color)",
+                    "active": active,
+                ]
+                features.append(feature)
+            }
+        }
+
+        // Replace source.
+        if let layer = style.layer(withIdentifier: "route-arrows") {
+            style.removeLayer(layer)
+        }
+        if let source = style.source(withIdentifier: "route-arrows") {
+            style.removeSource(source)
+        }
+        guard !features.isEmpty else { return }
+        let source = MLNShapeSource(identifier: "route-arrows", features: features, options: nil)
+        style.addSource(source)
+        guard let src = style.source(withIdentifier: "route-arrows") as? MLNSource else { return }
+        let layer = MLNSymbolStyleLayer(identifier: "route-arrows", source: src)
+        layer.iconImageName = NSExpression(forKeyPath: "icon")
+        layer.iconRotation = NSExpression(forKeyPath: "bearing")
+        layer.iconRotationAlignment = NSExpression(forConstantValue: "map")
+        layer.iconPitchAlignment = NSExpression(forConstantValue: "map")
+        layer.iconAllowsOverlap = NSExpression(forConstantValue: true)
+        layer.iconIgnoresPlacement = NSExpression(forConstantValue: true)
+        layer.iconScale = NSExpression(forConstantValue: 0.5)
+        style.addLayer(layer)
+    }
+
+    private func arrowImage(color: UIColor) -> UIImage {
+        let size: CGFloat = 44
+        return UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
+            let ctx = UIGraphicsGetCurrentContext()!
+            ctx.translateBy(x: size / 2, y: size / 2)
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 0, y: -14))
+            path.addLine(to: CGPoint(x: 14, y: 7))
+            path.addLine(to: CGPoint(x: 0, y: -2))
+            path.addLine(to: CGPoint(x: -14, y: 7))
+            path.close()
+            color.setFill()
+            path.fill()
+        }
+    }
+
+    private struct SegmentArrow { let lat: Double; let lon: Double; let bearing: Double }
+    private func segmentArrows(points: [RoutePoint], minPixels: Double, zoom: Double) -> [SegmentArrow] {
+        var arrows: [SegmentArrow] = []
+        let metersPerPixel: (Double, Double) -> Double = { lat, z in
+            (156543.03392804097 * cos(lat * .pi / 180)) / pow(2, z)
+        }
+        for i in 1..<points.count {
+            let a = points[i - 1]
+            let b = points[i]
+            // midpoint mercator
+            var ax = Mercator.x(a.lon)
+            let ay = Mercator.y(a.lat)
+            var bx = Mercator.x(b.lon)
+            let by = Mercator.y(b.lat)
+            if bx - ax > 0.5 { bx -= 1 } else if bx - ax < -0.5 { bx += 1 }
+            let midX = ax + (bx - ax) / 2
+            let midY = ay + (by - ay) / 2
+            let mid = Mercator.coordinate(y: midY, x: midX)
+            let meters = Haversine.meters(from: a, to: b)
+            if meters == 0 { continue }
+            if meters < minPixels * metersPerPixel(mid.lat, zoom) { continue }
+            let dx = bx - ax
+            let dy = by - ay
+            let bearing = (atan2(dx, -dy) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+            arrows.append(SegmentArrow(lat: mid.lat, lon: mid.lon, bearing: bearing))
+        }
+        return arrows
     }
 
     private func numericSuffix(of identifier: String) -> Int? {
@@ -457,7 +665,7 @@ struct MapView: UIViewRepresentable {
     private func applyRelief(to mapView: MLNMapView) {
         guard let style = mapView.style else { return }
 
-        if workspace.showHillshade {
+        if showRelief {
             if style.source(withIdentifier: MapLayers.demSource) == nil {
                 style.addSource(MapLayers.makeDEMSource())
             }
@@ -485,7 +693,7 @@ struct MapView: UIViewRepresentable {
     private func applySlopeRaster(to mapView: MLNMapView) {
         guard let style = mapView.style else { return }
 
-        if workspace.showSlope {
+        if showSlope {
             if style.source(withIdentifier: MapLayers.slopeSource) == nil {
                 style.addSource(MapLayers.makeSlopeSource())
             }
@@ -551,7 +759,7 @@ struct MapView: UIViewRepresentable {
     /// `easeTo({ pitch: 55 })` alongside `setTerrain`. Without the tilt the
     /// terrain is loaded but invisible.
     private func applyTerrainCamera(to mapView: MLNMapView) {
-        let target = workspace.showTerrain3D ? AppConfig.terrainPitch : 0
+        let target = showTerrain3D ? AppConfig.terrainPitch : 0
         // Only when the tilt actually changes. Called from `didFinishLoading`,
         // it used to ease unconditionally for 0.6s on every style load —
         // copying whatever camera was live at that moment. During a style swap
@@ -636,6 +844,55 @@ struct MapView: UIViewRepresentable {
         return true
     }
 
+    private func fitMapToSearchResult(_ mapView: MLNMapView, result: GeocodeResult, animated: Bool) {
+        guard mapView.bounds.width > 1, mapView.bounds.height > 1 else { return }
+        let padding = AppConfig.fitEdgePadding
+        let viewport = (
+            width: Double(mapView.bounds.width),
+            height: Double(mapView.bounds.height)
+        )
+        let paddingEdges = (
+            top: Double(padding.top),
+            left: Double(padding.left),
+            bottom: Double(max(padding.bottom, mapInsets.bottom)),
+            right: Double(padding.right)
+        )
+        let pitch = workspace.showTerrain3D ? AppConfig.terrainPitch : 0
+        let maxZoom = maxBasemapZoom ?? AppConfig.fallbackMaxZoom(for: workspace.mapStyle)
+
+        let center = CLLocationCoordinate2D(latitude: result.center.lat, longitude: result.center.lon)
+        let targetZoom: Double?
+        if let bbox = result.bbox, bbox.count >= 4 {
+            let west = min(bbox[0], bbox[2])
+            let east = max(bbox[0], bbox[2])
+            let south = min(bbox[1], bbox[3])
+            let north = max(bbox[1], bbox[3])
+            let bounds = (west: west, south: south, east: east, north: north)
+            let raw = MapFit.clampedZoom(bounds: bounds, viewport: viewport, padding: paddingEdges, maxZoom: maxZoom)
+            if let raw {
+                targetZoom = max(raw - Self.searchTiltPullback(pitch: pitch), 0)
+            } else {
+                targetZoom = Self.searchPointZoom
+            }
+        } else {
+            targetZoom = max(Self.searchPointZoom - Self.searchTiltPullback(pitch: pitch), 0)
+        }
+
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        camera.centerCoordinate = center
+        camera.heading = 0
+        if let targetZoom {
+            camera.altitude = MLNAltitudeForZoomLevel(
+                targetZoom,
+                camera.pitch,
+                camera.centerCoordinate.latitude,
+                mapView.bounds.size
+            )
+        }
+        mapView.setCamera(camera, withDuration: animated ? 0.4 : 0, animationTimingFunction: nil)
+    }
+
+
     /// The geographic bounds of a route, or nil when it has no extent.
     private static func bounds(of route: Route) -> (
         west: Double, south: Double, east: Double, north: Double
@@ -656,6 +913,8 @@ struct MapView: UIViewRepresentable {
 
     private func applyEverything(to mapView: MLNMapView, styleLoaded: Bool, coordinator: Coordinator) {
         applyRoutes(to: mapView)
+        applyArrows(to: mapView)
+        applyDraftRoute(to: mapView)
         applyProfileTrace(to: mapView, coordinator: coordinator)
         applyWaypoints(to: mapView)
         applyLocation(to: mapView)
@@ -942,6 +1201,27 @@ struct MapView: UIViewRepresentable {
                 point: CGPoint(x: rect.midX, y: rect.midY)
             ))
         }
+        var projectedRouteLabels: [ProjectedRouteLabel] = []
+        var routeCandidates: [(Int, String, Route)] = []
+        if route.points.count >= 1 {
+            routeCandidates.append((route.id, route.name, route))
+        }
+        if let draftRoute, draftRoute.points.count >= 1 {
+            routeCandidates.append((draftRoute.id, draftRoute.name, draftRoute))
+        }
+        for (routeId, name, routeCandidate) in routeCandidates {
+            let midpoint = routeCandidate.points[Int(routeCandidate.points.count / 2)]
+            let coordinate = CLLocationCoordinate2D(latitude: midpoint.lat, longitude: midpoint.lon)
+            let anchor = mapView.convert(coordinate, toPointTo: mapView)
+            guard area.insetBy(dx: -8, dy: -8).contains(anchor) else { continue }
+            let point = CGPoint(x: anchor.x + 12, y: anchor.y - 12)
+            projectedRouteLabels.append(ProjectedRouteLabel(
+                id: routeId,
+                text: name,
+                point: point
+            ))
+        }
+        setRouteLabels(projectedRouteLabels)
         setWaypointLabels(labels)
     }
 
@@ -953,6 +1233,12 @@ struct MapView: UIViewRepresentable {
     private func setWaypointLabels(_ labels: [ProjectedWaypoint]) {
         if waypointLabels != labels {
             waypointLabels = labels
+        }
+    }
+
+    private func setRouteLabels(_ labels: [ProjectedRouteLabel]) {
+        if routeLabels != labels {
+            routeLabels = labels
         }
     }
 
@@ -1010,8 +1296,8 @@ struct MapView: UIViewRepresentable {
     // MARK: - Coordinator
 
     @MainActor
-    final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate {
-        private let parent: MapView
+    final class Coordinator: NSObject, @preconcurrency MLNMapViewDelegate, UIGestureRecognizerDelegate {
+        var parent: MapView
         var hasFitted = false
 
         /// Resampled profiles, kept per route so scrubbing does not resample on
@@ -1049,10 +1335,12 @@ struct MapView: UIViewRepresentable {
         /// not read as a fit request and animate over the fit
         /// `didFinishLoading` is about to do.
         var lastFitToken: Int
+        var lastSearchFocusToken: Int
 
         init(_ parent: MapView) {
             self.parent = parent
             self.lastFitToken = parent.fitToken
+            self.lastSearchFocusToken = parent.searchFocusToken
         }
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
@@ -1075,6 +1363,8 @@ struct MapView: UIViewRepresentable {
             if !hasFitted {
                 hasFitted = parent.fitMapToRoute(mapView, route: parent.route, animated: false)
             }
+            let initialCenter = mapView.centerCoordinate
+            parent.onCenterChanged?(Coordinate(lat: initialCenter.latitude, lon: initialCenter.longitude))
             // After the fit, so fitting the route does not undo the tilt.
             parent.applyTerrainCamera(to: mapView)
             // After that too: this is the first moment the style's real ceiling is
@@ -1104,12 +1394,60 @@ struct MapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
-            // Panning changes no SwiftUI state, so this is the only signal that the
-            // projected waypoint labels need re-laying out.
-            parent.refreshWaypointLabels(for: mapView)
+            let center = mapView.centerCoordinate
+            parent.onCenterChanged?(Coordinate(lat: center.latitude, lon: center.longitude))
+        }
+
+        @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended,
+                  let mapView = gesture.view as? MLNMapView else { return }
+            let coordinate = mapView.convert(gesture.location(in: mapView), toCoordinateFrom: mapView)
+            parent.onMapTap?(Coordinate(lat: coordinate.latitude, lon: coordinate.longitude), mapView.zoomLevel)
+        }
+
+        var draggingVertexIndex: Int?
+
+        @objc func handleVertexPan(_ pan: UIPanGestureRecognizer) {
+            guard let mapView = pan.view as? MLNMapView else { return }
+            switch pan.state {
+            case .began:
+                let features = mapView.visibleFeatures(at: pan.location(in: mapView), styleLayerIdentifiers: [MapLayers.draftPointsLayer])
+                if let feature = features.first(where: { ($0 as? MLNPointFeature)?.attributes["pointIndex"] != nil }),
+                   let index = (feature as? MLNPointFeature)?.attributes["pointIndex"] as? Int {
+                    draggingVertexIndex = index
+                    mapView.isScrollEnabled = false
+                } else {
+                    draggingVertexIndex = nil
+                    pan.state = .failed
+                }
+            case .changed:
+                guard let index = draggingVertexIndex else { return }
+                let coord = mapView.convert(pan.location(in: mapView), toCoordinateFrom: mapView)
+                parent.onDraftVertexMoved?(index, Coordinate(lat: coord.latitude, lon: coord.longitude))
+            case .ended, .cancelled, .failed:
+                if draggingVertexIndex != nil {
+                    mapView.isScrollEnabled = true
+                    parent.onDraftVertexEnded?()
+                    draggingVertexIndex = nil
+                }
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
         }
     }
 }
+
+private extension MapView {
+    static let searchPointZoom: Double = 13
+    static func searchTiltPullback(pitch: Double) -> Double {
+        1.5 * (max(pitch, 0) / 55.0)
+    }
+}
+
 
 /// A waypoint name placed at a point in the map view's coordinates.
 ///
@@ -1118,6 +1456,12 @@ struct MapView: UIViewRepresentable {
 /// `MapView.refreshWaypointLabels`, so the overlay draws it wherever it is.
 struct ProjectedWaypoint: Identifiable, Equatable {
     let id: String
+    let text: String
+    let point: CGPoint
+}
+
+struct ProjectedRouteLabel: Identifiable, Equatable {
+    let id: Int
     let text: String
     let point: CGPoint
 }

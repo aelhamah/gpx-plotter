@@ -95,7 +95,7 @@ final class SearchTests: XCTestCase {
         XCTAssertTrue(url.hasPrefix("https://proxy.example/geocoding/Mount%20Rainier.json"))
         XCTAssertTrue(url.contains("types=\(geocodeTypes)"))
         XCTAssertTrue(url.contains("address"))
-        XCTAssertTrue(url.contains("limit=6"))
+        XCTAssertTrue(url.contains("limit=10"))
         XCTAssertFalse(url.contains("proximity="))
     }
 

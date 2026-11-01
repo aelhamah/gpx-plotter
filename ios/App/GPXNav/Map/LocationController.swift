@@ -411,7 +411,7 @@ extension LocationController: CLLocationManagerDelegate {
         let fix = LocationFix(
             lon: location.coordinate.longitude,
             lat: location.coordinate.latitude,
-            accuracyMeters: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : .greatestFiniteMagnitude,
+            accuracyMeters: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : 30,
             timestamp: location.timestamp
         )
         let speed = location.speed >= 0 ? location.speed : 0

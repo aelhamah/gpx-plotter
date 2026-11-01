@@ -85,3 +85,38 @@ public func nearestOnLine(_ p: Coordinate, _ line: [Coordinate], _ maxMeters: Do
     }
     return best
 }
+
+/// A nearest snap result along with the polyline it belongs to.
+///
+/// The line travels with the result because following a trail needs to know
+/// *which* polyline the point landed on, not only where. Port of the web app's
+/// `LineSnapResult` in `web/src/snap.ts`.
+public struct LineSnapResult: Equatable, Sendable {
+    public var line: [Coordinate]
+    public var result: SnapResult
+
+    public init(line: [Coordinate], result: SnapResult) {
+        self.line = line
+        self.result = result
+    }
+}
+
+/// Nearest snap target along with the polyline it belongs to (needed to follow
+/// trails). Port of `nearestLine` in `web/src/snap.ts`.
+public func nearestLine(_ p: Coordinate, _ lines: [[Coordinate]], _ maxMeters: Double) -> LineSnapResult? {
+    var best: LineSnapResult?
+    for line in lines {
+        guard let result = nearestOnLine(p, line, maxMeters) else { continue }
+        if best == nil || result.distanceMeters < best!.result.distanceMeters {
+            best = LineSnapResult(line: line, result: result)
+        }
+    }
+    return best
+}
+
+/// Nearest snap target across many polylines, within `maxMeters`. Each line may
+/// be a single peak point (one entry) or a trail as [point, point, ...]. Port
+/// of `nearestSnap` in `web/src/snap.ts`.
+public func nearestSnap(_ p: Coordinate, _ lines: [[Coordinate]], _ maxMeters: Double) -> SnapResult? {
+    nearestLine(p, lines, maxMeters)?.result
+}
