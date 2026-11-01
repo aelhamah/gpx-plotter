@@ -224,6 +224,13 @@ struct MapView: UIViewRepresentable {
         Coordinator(self)
     }
 
+    /// Normalize a heading/bearing into [0, 360).
+    private static func normalizedHeading(_ heading: CLLocationDirection) -> CLLocationDirection {
+        var value = heading.truncatingRemainder(dividingBy: 360)
+        if value < 0 { value += 360 }
+        return value
+    }
+
     // MARK: - Style
 
     private func styleURL(for style: MapStyle) -> URL {
@@ -1033,7 +1040,7 @@ struct MapView: UIViewRepresentable {
         // on a stationary phone can be a long time. Saying "I consumed this
         // heading" at the point of the move is true in both cases and false in
         // neither.
-        coordinator.followState.lastHeading = location.heading
+        coordinator.followState.lastHeading = location.heading.map(Self.normalizedHeading)
         mapView.setCamera(camera, withDuration: 0.4, animationTimingFunction: nil)
     }
 
@@ -1049,12 +1056,14 @@ struct MapView: UIViewRepresentable {
             camera.heading = 0
             return
         }
+        let target = Self.normalizedHeading(heading)
         // Take the short way round. MapLibre eases heading linearly, so from 350
         // to 10 without this the map spins 340 degrees backwards to get there.
-        var delta = heading - camera.heading
+        var delta = target - camera.heading
         if delta > 180 { delta -= 360 }
         if delta < -180 { delta += 360 }
-        camera.heading = camera.heading + delta
+        let result = camera.heading + delta
+        camera.heading = result < 0 ? result + 360 : result
     }
 
     /// Keep the bearing on the direction of travel as it changes.
@@ -1067,8 +1076,9 @@ struct MapView: UIViewRepresentable {
     /// `FollowState.lastFix` does for position.
     private func applyHeadingIfNeeded(to mapView: MLNMapView, coordinator: Coordinator) {
         guard location.followsHeading, let heading = location.heading else { return }
-        guard coordinator.followState.lastHeading != heading else { return }
-        coordinator.followState.lastHeading = heading
+        let normalizedHeading = Self.normalizedHeading(heading)
+        guard coordinator.followState.lastHeading != normalizedHeading else { return }
+        coordinator.followState.lastHeading = normalizedHeading
 
         let camera = mapView.camera.copy() as! MLNMapCamera
         applyRotation(to: camera)
