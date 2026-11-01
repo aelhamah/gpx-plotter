@@ -165,6 +165,27 @@ final class LocationController: NSObject, ObservableObject {
                 break
             }
         }
+        if arguments.contains("-headingSweep") {
+            followMode = .orientation
+            wantsHeading = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                while !Task.isCancelled {
+                    // Clockwise across north: 350 -> 370 (10).
+                    for step in 0...20 {
+                        self.headingValue = 350 + Double(step)
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    // Counter-clockwise across north: 10 -> -10 (350).
+                    for step in 0...20 {
+                        self.headingValue = 10 - Double(step)
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+        }
     }
 
     deinit {

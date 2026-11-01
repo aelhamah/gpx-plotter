@@ -160,24 +160,11 @@ struct NavigationScreen: View {
         }
         .onChange(of: session.hasArrived) { _, arrived in
             guard arrived else { return }
-            hasEnded = true
-            location.stopStreaming()
-            // Lingers briefly rather than vanishing: the arrival is the one thing
-            // worth seeing on the lock screen after the hike.
-            // The readout may in principle be absent if the session was ended
-            // without ever taking a fix; the activity's own last state is then the
-            // honest thing to end on.
-            let finalState = session.readout.map { state($0, isPaused: false) }
-            Task {
-                if let finalState {
-                    await LiveActivityController.shared.finish(
-                        finalState,
-                        dismissal: .after(.now.addingTimeInterval(30))
-                    )
-                } else {
-                    await LiveActivityController.shared.end(dismissal: .after(.now.addingTimeInterval(30)))
-                }
-            }
+            // Arrival is a state, not the end of the hike: do not stop
+            // streaming or take the Live Activity down. Just make sure the
+            // arrived state reaches the activity at once, so the throttle
+            // cannot leave the lock screen one fix short.
+            Task { if let readout = session.readout { await updateActivity(readout, isPaused: isPaused, immediately: true) } }
         }
     }
 
