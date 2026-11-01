@@ -45,6 +45,17 @@ final class RouteAnalysis: ObservableObject {
         fillTask?.cancel()
     }
 
+    /// Point the analysis at a new route: the Create screen calls this as the
+    /// draft grows, where re-creating the whole object would drop a terrain
+    /// fill in flight and refetch the same tiles on every tap.
+    func update(route: Route) {
+        fillTask?.cancel()
+        fillTask = nil
+        isFillingTerrain = false
+        terrainUnavailable = false
+        profile = RouteProfile.make(from: route.points, stepMeters: Self.stepMeters)
+    }
+
     /// Complete the profile's elevation series.
     ///
     /// The terrain model supplies the ground between the route's vertices, and

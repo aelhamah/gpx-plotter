@@ -210,7 +210,7 @@ struct ViewerScreen: View {
                     Button("Edit", systemImage: "pencil") {
                         workspace.draft = route
                         workspace.save()
-                        NotificationCenter.default.post(name: .switchToCreate, object: nil)
+                        NotificationCenter.default.post(name: .switchToEditor, object: nil)
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {

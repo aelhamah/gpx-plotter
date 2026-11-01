@@ -3,15 +3,42 @@ import RouteKit
 
 /// Create a route: tap the map to draw it, with trail snapping, waypoints, undo/redo.
 struct CreateView: View {
+    let configuredMapId: Int?
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var location: LocationController
     @EnvironmentObject private var services: AppServices
+    init(mapId: Int? = nil) {
+        self.configuredMapId = mapId
+    }
+
     @StateObject private var controller = CreateDraftController()
+    @StateObject private var draftAnalysis = RouteAnalysis(
+        route: Route(id: 0, name: "", points: [], color: "#2563eb")
+    )
 
     @State private var isSearching = false
-    @State private var mergeSheet = false
+    @State private var showLayerMenu = false
+    @State private var showElevationProfile = false
+    @State private var routeLabels: [ProjectedRouteLabel] = []
+    @State private var waypointLabels: [ProjectedWaypoint] = []
+    @State private var fitToken = 0
+    @State private var followsUserLocation = false
+    @State private var locationFitPending = true
+    @State private var showDiscardAlert = false
+    @Environment(\.dismiss) private var dismiss
 
     private var placeholderRoute: Route {
         Route(id: 0, name: "", points: [], color: "#2563eb")
+    }
+
+    private var hasUnsavedChanges: Bool {
+        if let draft = workspace.draft, !workspace.routes.contains(where: { $0.id == draft.id }) {
+            return true
+        }
+        guard let selected = workspace.selectedMap, !selected.hasFinishedRoutes else {
+            return false
+        }
+        return !workspace.waypoints.isEmpty
     }
 
     var body: some View {
@@ -27,129 +54,334 @@ struct CreateView: View {
                 },
                 onDraftVertexEnded: {
                     controller.endDraftVertexDrag(workspace: workspace)
-                }
+                },
+                onStyleLoaded: {
+                    guard locationFitPending,
+                          workspace.routes.isEmpty,
+                          workspace.draft == nil,
+                          workspace.waypoints.isEmpty else {
+                        locationFitPending = false
+                        return
+                    }
+                    locationFitPending = false
+                    location.locate()
+                    followsUserLocation = true
+                    Task { @MainActor in
+                        for _ in 0..<12 {
+                            guard followsUserLocation else { return }
+                            guard location.fix == nil else { break }
+                            location.locate()
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        }
+                        guard location.fix != nil else { return }
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        followsUserLocation = false
+                    }
+                },
+                waypointLabels: $waypointLabels,
+                routeLabels: $routeLabels,
+                followsUserLocation: $followsUserLocation,
+                fitToken: $fitToken,
+
+                showRelief: workspace.showHillshade,
+                showSlope: workspace.showSlope,
+                showTerrain3D: workspace.showTerrain3D
             )
             .ignoresSafeArea()
+            .overlay(alignment: .bottomTrailing) {
+                if workspace.showSlope {
+                    SlopeLegend()
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 90)
+                }
+            }
 
             VStack {
-                // Top bar
-                HStack(spacing: 12) {
+                // Top bar: edit history and the two map-wide tools. Sized for
+                // the narrow screen — icon buttons only, no capsule that other
+                // chrome has to share a row with. Drawing controls live at the
+                // bottom, near what they act on.
+                HStack(spacing: 10) {
                     Button {
                         controller.undo(workspace: workspace)
                     } label: { Image(systemName: "arrow.uturn.backward") }
                     .disabled(controller.historyEmpty)
+
                     Button {
                         controller.redo(workspace: workspace)
                     } label: { Image(systemName: "arrow.uturn.forward") }
                     .disabled(controller.futureEmpty)
 
+                    Button {
+                        fitToDraft()
+                    } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    .disabled(controller.draft?.points.isEmpty ?? true)
+
                     Spacer()
 
-                    Toggle(isOn: $controller.snappingEnabled) {
-                        Text("Snap")
-                    }
-                    .toggleStyle(.button)
+                    Button {
+                        isSearching = true
+                    } label: { Image(systemName: "magnifyingglass") }
 
                     Button {
-                        controller.toggleMergePick(workspace: workspace)
-                    } label: { Image(systemName: "arrow.triangle.merge") }
-                    .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
-
-                    Button("Finish", systemImage: "checkmark.circle.fill") {
-                        controller.finish(workspace: workspace)
-                    }
-                    .disabled(!(controller.draft?.points.count ?? 0 >= 2) || !controller.isDrawing)
+                        showLayerMenu = true
+                    } label: { Image(systemName: "globe.americas.fill") }
                 }
-                .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .buttonStyle(.bordered)
+                .padding(10)
+                .background(.regularMaterial, in: Capsule())
                 .padding(.horizontal, 12)
-                .padding(.top, 60)
+                .padding(.top, 8)
+
+                // Names: map and route.
+                VStack(spacing: 6) {
+                    TextField("Map name", text: Binding(
+                        get: { workspace.documentName ?? "" },
+                        set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    if controller.draft != nil {
+                        TextField("Route name", text: Binding(
+                            get: { controller.draft?.name ?? "" },
+                            set: { newValue in
+                                if var draft = controller.draft {
+                                    draft.name = newValue
+                                    controller.draft = draft
+                                    workspace.draft = draft
+                                    workspace.save()
+                                }
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
+                .padding(.horizontal, 12)
 
                 Spacer()
 
-                if controller.waypointMode {
-                    Text(controller.waypointHint)
-                        .font(.caption)
-                        .padding(8)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(.bottom, 8)
-                }
+                // Bottom-anchored band: profile above the action bar, both
+                // full width, so nothing mid-screen competes with the map.
+                VStack(spacing: 8) {
+                    // Elevation profile (when drawing)
+                    if controller.isDrawing, let draft = controller.draft, draft.points.count >= 2 {
+                        VStack(spacing: 0) {
+                            Button {
+                                showElevationProfile.toggle()
+                            } label: {
+                                HStack {
+                                    Text("Elevation Profile")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Image(systemName: showElevationProfile ? "chevron.up" : "chevron.down")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
 
-                if controller.isDrawing {
-                    drawBar
-                } else if controller.mergePickMode {
-                    VStack(spacing: 8) {
-                        Text(controller.mergePick == nil ? "Pick first route to merge" : "Pick second route")
+                            if showElevationProfile {
+                                RouteProfileChart(
+                                    analysis: draftAnalysis,
+                                    route: draft,
+                                    system: Units.defaultUnitSystem(),
+                                    scrubbedDistance: .constant(nil)
+                                )
+                                .frame(height: 150)
+                                .padding(.horizontal, 8)
+                                .padding(.bottom, 8)
+                                .transition(.slide.combined(with: .opacity))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .transition(.slide.combined(with: .opacity))
+                        .animation(.spring(response: 0.3), value: showElevationProfile)
+                    }
+
+                    if controller.waypointMode {
+                        Text(controller.waypointHint)
                             .font(.caption)
+                            .padding(8)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                    if !workspace.waypoints.isEmpty {
                         ScrollView(.horizontal) {
                             HStack {
-                                ForEach(workspace.routes) { route in
-                                    Button(route.name) {
-                                        controller.selectMergeRoute(workspace: workspace, route: route)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(controller.mergePick?.id == route.id ? .accentColor : nil)
+                                ForEach(workspace.waypoints.indices, id: \.self) { index in
+                                    TextField(
+                                        "Waypoint",
+                                        text: Binding(
+                                            get: {
+                                                workspace.waypoints.indices.contains(index)
+                                                    ? workspace.waypoints[index].name
+                                                    : ""
+                                            },
+                                            set: { value in
+                                                if workspace.waypoints.indices.contains(index) {
+                                                    workspace.waypoints[index].name = value
+                                                    workspace.save()
+                                                }
+                                            }
+                                        )
+                                    )
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 140)
                                 }
                             }
                         }
-                        Button("Cancel merge") { controller.toggleMergePick(workspace: workspace) }
-                            .buttonStyle(.bordered)
+                        .padding(.horizontal, 12)
                     }
-                    .padding(.bottom, 24)
-                } else {
-                    HStack(spacing: 12) {
-                        Button("Draw route", systemImage: "square.and.pencil") {
-                            controller.startDrawing(workspace: workspace)
-                        }
-                        .buttonStyle(.borderedProminent)
 
-                        Button("Add waypoint", systemImage: "mappin") {
-                            controller.setWaypointMode(true, workspace: workspace)
+                    if controller.isDrawing {
+                        drawBar
+                    } else if controller.mergePickMode {
+                        VStack(spacing: 8) {
+                            Text(controller.mergePick == nil ? "Pick first route to merge" : "Pick second route")
+                                .font(.caption)
+                            ScrollView(.horizontal) {
+                                HStack {
+                                    ForEach(workspace.routes) { route in
+                                        Button(route.name) {
+                                            controller.selectMergeRoute(workspace: workspace, route: route)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(controller.mergePick?.id == route.id ? .accentColor : nil)
+                                    }
+                                }
+                            }
+                            Button("Cancel merge") { controller.toggleMergePick(workspace: workspace) }
+                                .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
+                        .padding(.bottom, 16)
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                Button("Draw route", systemImage: "square.and.pencil") {
+                                    controller.startDrawing(workspace: workspace, location: location)
+                                    location.locate()
+                                    followsUserLocation = true
+                                    Task { @MainActor in
+                                        var attempts = 0
+                                        while location.fix == nil && attempts < 50 {
+                                            attempts += 1
+                                            try? await Task.sleep(nanoseconds: 100_000_000)
+                                        }
+                                        guard location.fix != nil else {
+                                            followsUserLocation = false
+                                            return
+                                        }
+                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                        followsUserLocation = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
 
-                        Button("New route", systemImage: "plus") {
-                            controller.newRouteAndDraw(workspace: workspace)
+                                Button("Waypoint", systemImage: "mappin") {
+                                    controller.setWaypointMode(true, workspace: workspace)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+
+                                Button("Merge", systemImage: "arrow.triangle.merge") {
+                                    controller.toggleMergePick(workspace: workspace)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                                .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
+
+                                Button("New route", systemImage: "plus") {
+                                    controller.newRouteAndDraw(workspace: workspace, location: location)
+                                    location.locate()
+                                    followsUserLocation = true
+                                    Task { @MainActor in
+                                        var attempts = 0
+                                        while location.fix == nil && attempts < 50 {
+                                            attempts += 1
+                                            try? await Task.sleep(nanoseconds: 100_000_000)
+                                        }
+                                        guard location.fix != nil else {
+                                            followsUserLocation = false
+                                            return
+                                        }
+                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                        followsUserLocation = false
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                            }
                         }
-                        .buttonStyle(.bordered)
+                        .safeAreaPadding(.bottom, 4)
+                        .padding(.bottom, 12)
                     }
-                    .padding(.bottom, 24)
                 }
             }
-
-            if controller.mergePickMode {
-                VStack {
-                    Spacer()
-                    Text("Tap a route to merge (not yet wired on iOS)")
-                        .padding()
-                        .background(.regularMaterial)
-                        .cornerRadius(12)
-                    Spacer()
-                }
-            }
+            .animation(.spring(response: 0.3), value: controller.isDrawing)
+            .animation(.spring(response: 0.3), value: controller.waypointMode)
+            .animation(.spring(response: 0.3), value: controller.mergePickMode)
         }
         .sheet(isPresented: $isSearching) {
             SearchView(proximity: nil) { result in
                 if controller.waypointMode {
-                    // search result becomes waypoint via controller
-                } else {
-                    controller.addWaypointFromSearch(workspace: workspace, result: result)
+                    controller.setWaypointMode(false, workspace: workspace)
+                }
+                controller.addWaypointFromSearch(workspace: workspace, result: result)
+            }
+        }
+        .sheet(isPresented: $showLayerMenu) {
+            MapModesSheet()
+                .environmentObject(workspace)
+        }
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Back") {
+                    if hasUnsavedChanges {
+                        showDiscardAlert = true
+                    } else {
+                        dismiss()
+                    }
                 }
             }
         }
-        .task {
-            controller.snapEngine = SnapEngine(
-                httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
-                config: AppConfig.snapConfig,
-                diskCache: services.cache
-            )
-            if controller.draft == nil, let d = workspace.draft {
-                controller.draft = d
-                controller.isDrawing = true
-                controller.updateStatus()
+        .alert("Discard unsaved route?", isPresented: $showDiscardAlert) {
+            Button("Discard", role: .destructive) {
+                if let id = workspace.selectedMapId, workspace.selectedMap?.hasFinishedRoutes != true {
+                    workspace.maps.removeAll { $0.id == id }
+                    workspace.selectedMapId = workspace.maps.first?.id
+                }
+                workspace.draft = nil
+                workspace.save()
+                dismiss()
             }
-            if ProcessInfo.processInfo.arguments.contains("-openSearch") {
-                isSearching = true
+            Button("Keep Editing", role: .cancel) { }
+        }
+        .task(id: configuredMapId ?? workspace.selectedMapId) {
+            prepareEditor()
+        }
+        .onChange(of: location.status) { _, newValue in
+            guard followsUserLocation else { return }
+            switch newValue {
+            case .located:
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    followsUserLocation = false
+                }
+            case .denied:
+                followsUserLocation = false
+            default:
+                break
+            }
+        }
+        .onChange(of: location.fix) { _, newValue in
+            guard followsUserLocation, newValue != nil else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                followsUserLocation = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .switchToCreate)) { _ in
@@ -159,26 +391,86 @@ struct CreateView: View {
                 controller.updateStatus()
             }
         }
+        .onChange(of: controller.draft?.points.count) { _, _ in
+            if let draft = controller.draft, draft.points.count >= 2 {
+                draftAnalysis.update(route: draft)
+                if workspace.fillsMissingElevation {
+                    draftAnalysis.fillMissingElevations()
+                }
+            } else {
+                draftAnalysis.update(route: Route(id: 0, name: "", points: [], color: "#2563eb"))
+            }
+        }
+        .id(configuredMapId ?? workspace.selectedMapId)
+    }
+
+    private func prepareEditor() {
+        controller.snapEngine = SnapEngine(
+            httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
+                config: AppConfig.snapConfig,
+                diskCache: services.cache
+            )
+            controller.reset()
+            if let d = workspace.draft {
+                controller.draft = d
+                controller.isDrawing = true
+                controller.updateStatus()
+            }
+            if ProcessInfo.processInfo.arguments.contains("-openSearch") {
+                isSearching = true
+            }
+    }
+
+    private func fitToDraft() {
+        fitToken += 1
     }
 
     private var drawBar: some View {
-        HStack(spacing: 8) {
-            Circle().fill(Color(hex: controller.draft?.color ?? "#2563eb")).frame(width: 10, height: 10)
-            Text(controller.statusText)
-                .font(.caption)
-                .lineLimit(2)
-            Spacer()
-            Text("\(controller.draft?.points.count ?? 0) pts")
-                .font(.caption.monospacedDigit())
-            Button("Finish") { controller.finish(workspace: workspace) }
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(hex: controller.draft?.color ?? "#2563eb"))
+                    .frame(width: 10, height: 10)
+                Text(controller.statusText)
+                    .font(.caption)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Text("\(controller.draft?.points.count ?? 0) pts")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Toggle(isOn: $controller.snappingEnabled) {
+                    Text("Snap")
+                }
+                .toggleStyle(.button)
+                .controlSize(.large)
+                .help("Snap to trails")
+
+                Button("Cancel", systemImage: "xmark") {
+                    controller.stopDrawing()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Spacer(minLength: 0)
+
+                Button("Finish", systemImage: "checkmark") {
+                    controller.finish(workspace: workspace)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled((controller.draft?.points.count ?? 0) < 2)
-            Button("Cancel") { controller.stopDrawing() }
+            }
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding(.horizontal, 12)
-        .padding(.bottom, 24)
+        .padding(.bottom, 12)
+        .safeAreaPadding(.bottom, 4)
     }
+
 }
 
 @MainActor
@@ -222,6 +514,7 @@ final class CreateDraftController: ObservableObject {
         workspace.routes = previous.routes
         workspace.waypoints = previous.waypoints
         draft = previous.draft
+        workspace.draft = previous.draft
         workspace.save()
         updateStatus()
     }
@@ -232,6 +525,7 @@ final class CreateDraftController: ObservableObject {
         workspace.routes = next.routes
         workspace.waypoints = next.waypoints
         draft = next.draft
+        workspace.draft = next.draft
         workspace.save()
         updateStatus()
     }
@@ -240,7 +534,19 @@ final class CreateDraftController: ObservableObject {
         statusText = drawStatusText(pointCount: draft?.points.count ?? 0, snappingEnabled: snappingEnabled)
     }
 
-    func startDrawing(workspace: WorkspaceStore) {
+    func reset() {
+        draft = nil
+        isDrawing = false
+        waypointMode = false
+        snappingEnabled = SNAP_ENABLED_BY_DEFAULT
+        mergePickMode = false
+        mergePick = nil
+        history.removeAll()
+        future.removeAll()
+        updateStatus()
+    }
+
+    func startDrawing(workspace: WorkspaceStore, location: LocationController? = nil) {
         if mergePickMode { exitMergePick() }
         if waypointMode { setWaypointMode(false, workspace: workspace) }
         if draft == nil {
@@ -248,23 +554,29 @@ final class CreateDraftController: ObservableObject {
             let id = workspace.allocateRouteId()
             draft = Route(id: id, name: "Route \(id)", points: [], color: RoutePalette.color(forId: id))
         }
+        if let draft {
+            workspace.draft = draft
+            workspace.save()
+        }
         isDrawing = true
         updateStatus()
     }
-
     func stopDrawing() {
         isDrawing = false
         updateStatus()
     }
 
-    func newRouteAndDraw(workspace: WorkspaceStore) {
+    func newRouteAndDraw(workspace: WorkspaceStore, location: LocationController? = nil) {
         commitSnapshot(workspace: workspace)
         let id = workspace.allocateRouteId()
         draft = Route(id: id, name: "Route \(id)", points: [], color: RoutePalette.color(forId: id))
+        if let draft {
+            workspace.draft = draft
+            workspace.save()
+        }
         isDrawing = true
         updateStatus()
     }
-
     func finish(workspace: WorkspaceStore) {
         guard isDrawing, var d = draft, d.points.count >= 2 else {
             stopDrawing()
@@ -331,6 +643,7 @@ final class CreateDraftController: ObservableObject {
         commitSnapshot(workspace: workspace)
         d.points.append(RoutePoint(lat: coordinate.lat, lon: coordinate.lon))
         draft = d
+        workspace.draft = d
         workspace.save()
         updateStatus()
         await snapRoutePointToTrail(workspace: workspace, raw: coordinate, zoom: zoom)
@@ -379,6 +692,7 @@ final class CreateDraftController: ObservableObject {
             d.points[index].lon = match.result.point.lon
         }
         draft = d
+        workspace.draft = d
         workspace.save()
         updateStatus()
     }
@@ -490,6 +804,7 @@ final class CreateDraftController: ObservableObject {
     func endDraftVertexDrag(workspace: WorkspaceStore) {
         guard isDraggingVertex else { return }
         isDraggingVertex = false
+        workspace.draft = draft
         workspace.save()
         updateStatus()
     }
@@ -517,3 +832,4 @@ final class CreateDraftController: ObservableObject {
         }
     }
 }
+

@@ -110,3 +110,50 @@ public enum WorkspaceCodec {
         var pitch: Double
     }
 }
+
+public let libraryStorageVersion = 2
+
+
+/// Codec for the map library. Version 2 is the current format; a legacy
+/// version-1 workspace is tolerated and converted into a single map on decode,
+/// which is what keeps an upgrade from losing the user's routes.
+public enum LibraryCodec {
+    public static func encode(_ library: PersistedLibrary) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(library)
+    }
+
+    public static func decode(_ data: Data) throws -> PersistedLibrary? {
+        let decoder = JSONDecoder()
+
+        // Try the current format first.
+        if let raw = try? decoder.decode(RawLibrary.self, from: data),
+           raw.version == libraryStorageVersion,
+           let maps = raw.maps {
+            let selected = raw.selectedMapId
+            return PersistedLibrary(
+                version: libraryStorageVersion,
+                maps: maps,
+                selectedMapId: selected
+            )
+        }
+
+        // Fall back to the legacy single workspace and turn it into one map.
+        if let old = try? WorkspaceCodec.decode(data) {
+            return PersistedLibrary(
+                version: libraryStorageVersion,
+                maps: [MapDocument(migrating: old)],
+                selectedMapId: nil
+            )
+        }
+
+        return nil
+    }
+
+    private struct RawLibrary: Codable {
+        var version: Int
+        var maps: [MapDocument]?
+        var selectedMapId: Int?
+    }
+}
