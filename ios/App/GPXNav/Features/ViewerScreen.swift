@@ -89,7 +89,10 @@ struct ViewerScreen: View {
                 waypointLabels: $waypointLabels,
                 fitToken: $fitToken,
                 maxBasemapZoom: maxBasemapZoom,
-                mapInsets: mapInsets
+                mapInsets: mapInsets,
+                showRelief: workspace.showHillshade,
+                showSlope: workspace.showSlope,
+                showTerrain3D: workspace.showTerrain3D
             )
         } else {
             Color(.systemBackground)

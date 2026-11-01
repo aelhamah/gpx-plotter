@@ -21,6 +21,10 @@ struct MapView: UIViewRepresentable {
     var onMapTap: ((Coordinate, Double) -> Void)? = nil
     var onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil
     var onDraftVertexEnded: (() -> Void)? = nil
+    /// Called when the user pans the map with a real gesture rather than a
+    /// programmatic camera move. Navigation uses it to suspend following as soon
+    /// as the map is taken, instead of waiting for the next fix to drag it back.
+    var onUserPan: (() -> Void)? = nil
     /// Distance along the route the profile is scrubbed to. The map draws the
     /// covered portion as a trace, the way the web app's `profile-trace` layer
     /// does. Nil hides it.
@@ -58,9 +62,8 @@ struct MapView: UIViewRepresentable {
     ///
     /// Navigation sets this and the viewer does not. It is a standing follow
     /// rather than the locate button's one-shot request, because a hiker walking
-    /// needs the dot under the crosshair — but it means panning is immediately
-    /// undone by the next fix. A recentre affordance that suspends following is
-    /// the obvious next step and is not here.
+    /// needs the dot under the crosshair. A user pan switches it off through
+    /// `onUserPan`, so the next fix does not drag the map back.
     @Binding var followsUserLocation: Bool
     /// Incremented to ask the map to frame the route again. `ViewerScreen` has no
     /// handle on the `MLNMapView`, so the fit button raises this instead. Only
@@ -95,6 +98,7 @@ struct MapView: UIViewRepresentable {
         onMapTap: ((Coordinate, Double) -> Void)? = nil,
         onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil,
         onDraftVertexEnded: (() -> Void)? = nil,
+        onUserPan: (() -> Void)? = nil,
         scrubbedDistance: Binding<Double?> = .constant(nil),
         loadError: Binding<String?> = .constant(nil),
         onStyleLoaded: (() -> Void)? = nil,
@@ -113,6 +117,7 @@ struct MapView: UIViewRepresentable {
         self.onMapTap = onMapTap
         self.onDraftVertexMoved = onDraftVertexMoved
         self.onDraftVertexEnded = onDraftVertexEnded
+        self.onUserPan = onUserPan
         self._scrubbedDistance = scrubbedDistance
         self._loadError = loadError
         self.onStyleLoaded = onStyleLoaded
@@ -135,6 +140,16 @@ struct MapView: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleVertexPan(_:)))
         pan.delegate = context.coordinator
         mapView.addGestureRecognizer(pan)
+        // The vertex pan claims gestures itself in
+        // `gestureRecognizerShouldBegin`, so every drag that does not start on a
+        // vertex has to fall through to MapLibre's own one-finger scroll. Making
+        // the built-in pan wait for this recognizer to fail is what enforces
+        // that precedence: the vertex pan fails immediately away from a vertex,
+        // and wins on one. Two-finger drags tilt the map and are left alone.
+        for case let other as UIPanGestureRecognizer in mapView.gestureRecognizers ?? []
+        where other !== pan && other.minimumNumberOfTouches <= 1 {
+            other.require(toFail: pan)
+        }
         mapView.logoView.isHidden = true
         mapView.attributionButton.isHidden = true
         // The app draws its own compass, in the rail with the rest of the map
@@ -1321,6 +1336,18 @@ struct MapView: UIViewRepresentable {
             parent.refreshWaypointLabels(for: mapView)
         }
 
+        func mapView(
+            _ mapView: MLNMapView,
+            regionWillChangeWith reason: MLNCameraChangeReason,
+            animated: Bool
+        ) {
+            // A camera move the user made, as opposed to a locate tap, a fit, or
+            // the follow camera easing after a fix. Following has to stand down
+            // the moment the map is taken, not on the next fix.
+            guard reason.contains(.gesturePan) else { return }
+            parent.onUserPan?()
+        }
+
         @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended,
                   let mapView = gesture.view as? MLNMapView else { return }
@@ -1330,19 +1357,50 @@ struct MapView: UIViewRepresentable {
 
         var draggingVertexIndex: Int?
 
+        /// Claim a one-finger drag only when it starts on a draft vertex.
+        ///
+        /// Without this the vertex recognizer was greedy: it began on every
+        /// pan, and its exclusivity blocked MapLibre's own scroll, so a normal
+        /// one-finger drag never moved the map. Hit-testing here means a drag
+        /// in open map fails this recognizer immediately and the built-in pan
+        /// takes it, while a drag on a vertex still edits the route.
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            draggingVertexIndex = nil
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+                  let mapView = pan.view as? MLNMapView else { return false }
+            // Two-finger drags tilt the map rather than move a vertex.
+            guard pan.numberOfTouches <= 1 else { return false }
+            guard let index = vertexIndex(at: pan.location(in: mapView), in: mapView) else {
+                return false
+            }
+            draggingVertexIndex = index
+            return true
+        }
+
+        /// The draft vertex under `point`, when there is one.
+        private func vertexIndex(at point: CGPoint, in mapView: MLNMapView) -> Int? {
+            let features = mapView.visibleFeatures(at: point, styleLayerIdentifiers: [MapLayers.draftPointsLayer])
+            for feature in features {
+                guard let pointFeature = feature as? MLNPointFeature,
+                      let index = pointFeature.attributes["pointIndex"] as? Int else { continue }
+                return index
+            }
+            return nil
+        }
+
         @objc func handleVertexPan(_ pan: UIPanGestureRecognizer) {
             guard let mapView = pan.view as? MLNMapView else { return }
             switch pan.state {
             case .began:
-                let features = mapView.visibleFeatures(at: pan.location(in: mapView), styleLayerIdentifiers: [MapLayers.draftPointsLayer])
-                if let feature = features.first(where: { ($0 as? MLNPointFeature)?.attributes["pointIndex"] != nil }),
-                   let index = (feature as? MLNPointFeature)?.attributes["pointIndex"] as? Int {
-                    draggingVertexIndex = index
-                    mapView.isScrollEnabled = false
-                } else {
-                    draggingVertexIndex = nil
+                guard draggingVertexIndex != nil else {
                     pan.state = .failed
+                    return
                 }
+                // Only while a vertex is actually moving. Leaving the map's own
+                // scroll off for the recognizer's whole life is what made an
+                // ordinary pan dead whenever the gesture happened to start near
+                // a vertex.
+                mapView.isScrollEnabled = false
             case .changed:
                 guard let index = draggingVertexIndex else { return }
                 let coord = mapView.convert(pan.location(in: mapView), toCoordinateFrom: mapView)
@@ -1356,10 +1414,6 @@ struct MapView: UIViewRepresentable {
             default:
                 break
             }
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            false
         }
     }
 }
