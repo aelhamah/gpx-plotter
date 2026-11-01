@@ -1062,8 +1062,6 @@ struct MapView: UIViewRepresentable {
         var delta = target - camera.heading
         if delta > 180 { delta -= 360 }
         if delta < -180 { delta += 360 }
-        // Keep the signed delta: folding a negative turn (counter-clockwise
-        // across north) back to 0...360 reverses the easing and stalls it.
         camera.heading = camera.heading + delta
     }
 
