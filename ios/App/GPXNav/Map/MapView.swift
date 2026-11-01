@@ -53,6 +53,7 @@ struct MapView: UIViewRepresentable {
     /// with `MLNMapView.convert(_:toPointTo:)`, which goes through the camera, so
     /// they still sit on their waypoint under pitch and 3D terrain.
     @Binding var waypointLabels: [ProjectedWaypoint]
+    @Binding var routeLabels: [ProjectedRouteLabel]
     /// Whether the camera should stay on the user.
     ///
     /// Navigation sets this and the viewer does not. It is a standing follow
@@ -79,6 +80,12 @@ struct MapView: UIViewRepresentable {
     /// not know the navigation bar's height, the sheet's detent, or where the
     /// controls are — see `MapInsets`.
     var mapInsets: MapInsets = MapInsets()
+    /// Whether to show relief (hillshade) overlay.
+    var showRelief: Bool = false
+    /// Whether to show slope angle overlay.
+    var showSlope: Bool = false
+    /// Whether to enable 3D terrain.
+    var showTerrain3D: Bool = false
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var location: LocationController
 
@@ -92,10 +99,14 @@ struct MapView: UIViewRepresentable {
         loadError: Binding<String?> = .constant(nil),
         onStyleLoaded: (() -> Void)? = nil,
         waypointLabels: Binding<[ProjectedWaypoint]> = .constant([]),
+        routeLabels: Binding<[ProjectedRouteLabel]> = .constant([]),
         followsUserLocation: Binding<Bool> = .constant(false),
         fitToken: Binding<Int> = .constant(0),
         maxBasemapZoom: Double? = nil,
-        mapInsets: MapInsets = MapInsets()
+        mapInsets: MapInsets = MapInsets(),
+        showRelief: Bool = false,
+        showSlope: Bool = false,
+        showTerrain3D: Bool = false
     ) {
         self.route = route
         self.draftRoute = draftRoute
@@ -106,10 +117,14 @@ struct MapView: UIViewRepresentable {
         self._loadError = loadError
         self.onStyleLoaded = onStyleLoaded
         self._waypointLabels = waypointLabels
+        self._routeLabels = routeLabels
         self._followsUserLocation = followsUserLocation
         self._fitToken = fitToken
         self.maxBasemapZoom = maxBasemapZoom
         self.mapInsets = mapInsets
+        self.showRelief = showRelief
+        self.showSlope = showSlope
+        self.showTerrain3D = showTerrain3D
     }
 
     func makeUIView(context: Context) -> MLNMapView {
@@ -193,7 +208,7 @@ struct MapView: UIViewRepresentable {
     // MARK: - Style
 
     private func styleURL(for style: MapStyle) -> URL {
-        AppConfig.styleURL(for: style, terrain3D: workspace.showTerrain3D)
+        AppConfig.styleURL(for: style, terrain3D: showTerrain3D)
     }
 
     // MARK: - Routes
@@ -631,7 +646,7 @@ struct MapView: UIViewRepresentable {
     private func applyRelief(to mapView: MLNMapView) {
         guard let style = mapView.style else { return }
 
-        if workspace.showHillshade {
+        if showRelief {
             if style.source(withIdentifier: MapLayers.demSource) == nil {
                 style.addSource(MapLayers.makeDEMSource())
             }
@@ -659,7 +674,7 @@ struct MapView: UIViewRepresentable {
     private func applySlopeRaster(to mapView: MLNMapView) {
         guard let style = mapView.style else { return }
 
-        if workspace.showSlope {
+        if showSlope {
             if style.source(withIdentifier: MapLayers.slopeSource) == nil {
                 style.addSource(MapLayers.makeSlopeSource())
             }
@@ -725,7 +740,7 @@ struct MapView: UIViewRepresentable {
     /// `easeTo({ pitch: 55 })` alongside `setTerrain`. Without the tilt the
     /// terrain is loaded but invisible.
     private func applyTerrainCamera(to mapView: MLNMapView) {
-        let target = workspace.showTerrain3D ? AppConfig.terrainPitch : 0
+        let target = showTerrain3D ? AppConfig.terrainPitch : 0
         // Only when the tilt actually changes. Called from `didFinishLoading`,
         // it used to ease unconditionally for 0.6s on every style load —
         // copying whatever camera was live at that moment. During a style swap
@@ -1118,6 +1133,27 @@ struct MapView: UIViewRepresentable {
                 point: CGPoint(x: rect.midX, y: rect.midY)
             ))
         }
+        var projectedRouteLabels: [ProjectedRouteLabel] = []
+        var routeCandidates: [(Int, String, Route)] = []
+        if route.points.count >= 1 {
+            routeCandidates.append((route.id, route.name, route))
+        }
+        if let draftRoute, draftRoute.points.count >= 1 {
+            routeCandidates.append((draftRoute.id, draftRoute.name, draftRoute))
+        }
+        for (routeId, name, routeCandidate) in routeCandidates {
+            let midpoint = routeCandidate.points[Int(routeCandidate.points.count / 2)]
+            let coordinate = CLLocationCoordinate2D(latitude: midpoint.lat, longitude: midpoint.lon)
+            let anchor = mapView.convert(coordinate, toPointTo: mapView)
+            guard area.insetBy(dx: -8, dy: -8).contains(anchor) else { continue }
+            let point = CGPoint(x: anchor.x + 12, y: anchor.y - 12)
+            projectedRouteLabels.append(ProjectedRouteLabel(
+                id: routeId,
+                text: name,
+                point: point
+            ))
+        }
+        setRouteLabels(projectedRouteLabels)
         setWaypointLabels(labels)
     }
 
@@ -1129,6 +1165,12 @@ struct MapView: UIViewRepresentable {
     private func setWaypointLabels(_ labels: [ProjectedWaypoint]) {
         if waypointLabels != labels {
             waypointLabels = labels
+        }
+    }
+
+    private func setRouteLabels(_ labels: [ProjectedRouteLabel]) {
+        if routeLabels != labels {
+            routeLabels = labels
         }
     }
 
@@ -1329,6 +1371,12 @@ struct MapView: UIViewRepresentable {
 /// `MapView.refreshWaypointLabels`, so the overlay draws it wherever it is.
 struct ProjectedWaypoint: Identifiable, Equatable {
     let id: String
+    let text: String
+    let point: CGPoint
+}
+
+struct ProjectedRouteLabel: Identifiable, Equatable {
+    let id: Int
     let text: String
     let point: CGPoint
 }
