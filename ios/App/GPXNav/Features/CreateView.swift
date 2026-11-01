@@ -30,8 +30,47 @@ struct CreateView: View {
     @State private var showDiscardAlert = false
     @Environment(\.dismiss) private var dismiss
 
-    private var placeholderRoute: Route {
-        Route(id: 0, name: "", points: [], color: "#2563eb")
+    private var fitRoute: Route {
+        var points: [RoutePoint] = []
+        for route in workspace.routes { points.append(contentsOf: route.points) }
+        if let draft = controller.draft { points.append(contentsOf: draft.points) }
+        return Route(id: 0, name: "", points: points, color: "#2563eb")
+    }
+
+    private func startEditingRoute(_ id: Int) {
+        if controller.isDrawing {
+            controller.finish(workspace: workspace)
+            if let remaining = controller.draft, remaining.points.count < 2 {
+                controller.draft = nil
+                workspace.draft = nil
+            }
+        }
+        guard let route = workspace.routes.first(where: { $0.id == id }) else { return }
+        workspace.selectedRouteId = id
+        controller.draft = route
+        workspace.draft = route
+        controller.isDrawing = true
+        workspace.save()
+        controller.updateStatus()
+    }
+
+    private func startNewRoute() {
+        controller.newRouteAndDraw(workspace: workspace, location: location)
+        location.locate()
+        followsUserLocation = true
+        Task { @MainActor in
+            var attempts = 0
+            while location.fix == nil && attempts < 50 {
+                attempts += 1
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard location.fix != nil else {
+                followsUserLocation = false
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            followsUserLocation = false
+        }
     }
 
     private var hasUnsavedChanges: Bool {
@@ -44,13 +83,112 @@ struct CreateView: View {
         return !workspace.waypoints.isEmpty
     }
 
+    @ViewBuilder
+    private var createTopBar: some View {
+            // Two-row top bar: title/map name and search on top, everything else below.
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    Button {
+                        if hasUnsavedChanges {
+                            showDiscardAlert = true
+                        } else {
+                            dismiss()
+                        }
+                    } label: { Image(systemName: "chevron.backward") }
+                    .accessibilityLabel("Back")
+
+                    TextField("Map name", text: Binding(
+                        get: { workspace.documentName ?? "" },
+                        set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 60, maxWidth: .infinity)
+
+                    Button {
+                        isSearching = true
+                    } label: { Image(systemName: "magnifyingglass") }
+                }
+                .buttonStyle(.bordered)
+
+                HStack(spacing: 6) {
+                    Button {
+                        controller.undo(workspace: workspace)
+                    } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(controller.historyEmpty)
+
+                    Button {
+                        controller.redo(workspace: workspace)
+                    } label: { Image(systemName: "arrow.uturn.forward") }
+                    .disabled(controller.futureEmpty)
+
+                    Button {
+                        fitToken += 1
+                    } label: {
+                        FitGlyph()
+                            .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                            .frame(width: 17, height: 17)
+                    }
+                    .disabled(fitRoute.points.count < 2)
+                    .accessibilityLabel("Fit map")
+
+                    Button {
+                        controller.setWaypointMode(true, workspace: workspace)
+                    } label: { Image(systemName: "mappin") }
+                    .disabled(controller.waypointMode)
+                    .foregroundStyle(controller.waypointMode ? Color.accentColor : .primary)
+                    .accessibilityLabel("Waypoint")
+
+                    Button {
+                        controller.toggleMergePick(workspace: workspace)
+                    } label: { Image(systemName: "arrow.triangle.merge") }
+                    .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
+                    .accessibilityLabel("Merge routes")
+
+                    if controller.draft != nil {
+                        TextField("Route name", text: Binding(
+                            get: { controller.draft?.name ?? "" },
+                            set: { newValue in
+                                if var draft = controller.draft {
+                                    draft.name = newValue
+                                    controller.draft = draft
+                                    workspace.draft = draft
+                                    workspace.save()
+                                }
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 60, maxWidth: .infinity)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+
+                    Button {
+                        showLayerMenu = true
+                    } label: { Image(systemName: "globe.americas.fill") }
+                }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+            .padding(10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+    }
+
     var body: some View {
         ZStack {
             MapView(
-                route: placeholderRoute,
+                route: fitRoute,
                 draftRoute: controller.draft,
                 onMapTap: { coordinate, zoom in
+                    if !controller.isDrawing && !controller.waypointMode,
+                       let selected = workspace.selectedRouteId {
+                        workspace.selectedRouteId = nil
+                    }
                     Task { await controller.handleMapTap(workspace: workspace, coordinate: coordinate, zoom: zoom) }
+                },
+                onSelectRoute: { id in
+                    startEditingRoute(id)
                 },
                 onDraftVertexMoved: { index, coordinate in
                     controller.moveDraftVertex(workspace: workspace, index: index, coordinate: coordinate)
@@ -105,68 +243,9 @@ struct CreateView: View {
             }
 
             VStack {
-                // Top bar: edit history and the two map-wide tools. Sized for
-                // the narrow screen — icon buttons only, no capsule that other
-                // chrome has to share a row with. Drawing controls live at the
-                // bottom, near what they act on.
-                HStack(spacing: 10) {
-                    Button {
-                        controller.undo(workspace: workspace)
-                    } label: { Image(systemName: "arrow.uturn.backward") }
-                    .disabled(controller.historyEmpty)
-
-                    Button {
-                        controller.redo(workspace: workspace)
-                    } label: { Image(systemName: "arrow.uturn.forward") }
-                    .disabled(controller.futureEmpty)
-
-                    Button {
-                        fitToDraft()
-                    } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .disabled(controller.draft?.points.isEmpty ?? true)
-
-                    Spacer()
-
-                    Button {
-                        isSearching = true
-                    } label: { Image(systemName: "magnifyingglass") }
-
-                    Button {
-                        showLayerMenu = true
-                    } label: { Image(systemName: "globe.americas.fill") }
-                }
-                .buttonStyle(.bordered)
-                .padding(10)
-                .background(.regularMaterial, in: Capsule())
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-
-                // Names: map and route.
-                VStack(spacing: 6) {
-                    TextField("Map name", text: Binding(
-                        get: { workspace.documentName ?? "" },
-                        set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    if controller.draft != nil {
-                        TextField("Route name", text: Binding(
-                            get: { controller.draft?.name ?? "" },
-                            set: { newValue in
-                                if var draft = controller.draft {
-                                    draft.name = newValue
-                                    controller.draft = draft
-                                    workspace.draft = draft
-                                    workspace.save()
-                                }
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                    }
-                }
-                .padding(.horizontal, 12)
+                createTopBar
 
                 Spacer()
-
                 // Bottom-anchored band: profile above the action bar, both
                 // full width, so nothing mid-screen competes with the map.
                 VStack(spacing: 8) {
@@ -266,63 +345,36 @@ struct CreateView: View {
                         .padding(.bottom, 16)
                     } else {
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                Button("Draw route", systemImage: "square.and.pencil") {
-                                    controller.startDrawing(workspace: workspace, location: location)
-                                    location.locate()
-                                    followsUserLocation = true
-                                    Task { @MainActor in
-                                        var attempts = 0
-                                        while location.fix == nil && attempts < 50 {
-                                            attempts += 1
-                                            try? await Task.sleep(nanoseconds: 100_000_000)
+                            HStack(spacing: 8) {
+                                if workspace.routes.isEmpty {
+                                    Text("No routes yet")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(workspace.routes) { route in
+                                    Button {
+                                        startEditingRoute(route.id)
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(Color(hex: route.color))
+                                                .frame(width: 8, height: 8)
+                                            Text(route.name)
+                                                .lineLimit(1)
                                         }
-                                        guard location.fix != nil else {
-                                            followsUserLocation = false
-                                            return
-                                        }
-                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                        followsUserLocation = false
                                     }
+                                    .buttonStyle(.bordered)
+                                    .tint(workspace.selectedRouteId == route.id ? .accentColor : nil)
+                                }
+                                Button {
+                                    startNewRoute()
+                                } label: {
+                                    Label("New", systemImage: "plus")
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .controlSize(.large)
-
-                                Button("Waypoint", systemImage: "mappin") {
-                                    controller.setWaypointMode(true, workspace: workspace)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
-
-                                Button("Merge", systemImage: "arrow.triangle.merge") {
-                                    controller.toggleMergePick(workspace: workspace)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
-                                .foregroundStyle(controller.mergePickMode ? Color.accentColor : .primary)
-
-                                Button("New route", systemImage: "plus") {
-                                    controller.newRouteAndDraw(workspace: workspace, location: location)
-                                    location.locate()
-                                    followsUserLocation = true
-                                    Task { @MainActor in
-                                        var attempts = 0
-                                        while location.fix == nil && attempts < 50 {
-                                            attempts += 1
-                                            try? await Task.sleep(nanoseconds: 100_000_000)
-                                        }
-                                        guard location.fix != nil else {
-                                            followsUserLocation = false
-                                            return
-                                        }
-                                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                        followsUserLocation = false
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
                             }
                         }
+                        .padding(.horizontal, 12)
                         .safeAreaPadding(.bottom, 4)
                         .padding(.bottom, 12)
                     }
@@ -343,17 +395,6 @@ struct CreateView: View {
                 .environmentObject(workspace)
         }
         .navigationBarBackButtonHidden(true)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Back") {
-                    if hasUnsavedChanges {
-                        showDiscardAlert = true
-                    } else {
-                        dismiss()
-                    }
-                }
-            }
-        }
         .alert("Discard unsaved route?", isPresented: $showDiscardAlert) {
             Button("Discard", role: .destructive) {
                 if let id = workspace.selectedMapId, workspace.selectedMap?.hasFinishedRoutes != true {
@@ -425,10 +466,6 @@ struct CreateView: View {
             if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                 isSearching = true
             }
-    }
-
-    private func fitToDraft() {
-        fitToken += 1
     }
 
     private var drawBar: some View {

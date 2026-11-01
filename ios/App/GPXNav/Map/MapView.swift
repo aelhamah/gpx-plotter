@@ -19,6 +19,7 @@ struct MapView: UIViewRepresentable {
     var draftRoute: Route? = nil
     /// Called with the coordinate of a tap on the bare map (not on chrome).
     var onMapTap: ((Coordinate, Double) -> Void)? = nil
+    var onSelectRoute: ((Int) -> Void)? = nil
     var onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil
     var onDraftVertexEnded: (() -> Void)? = nil
     /// Reports the map's current center whenever the camera settles. Search uses
@@ -100,6 +101,7 @@ struct MapView: UIViewRepresentable {
         route: Route,
         draftRoute: Route? = nil,
         onMapTap: ((Coordinate, Double) -> Void)? = nil,
+        onSelectRoute: ((Int) -> Void)? = nil,
         onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil,
         onDraftVertexEnded: (() -> Void)? = nil,
         onCenterChanged: ((Coordinate) -> Void)? = nil,
@@ -121,6 +123,7 @@ struct MapView: UIViewRepresentable {
         self.route = route
         self.draftRoute = draftRoute
         self.onMapTap = onMapTap
+        self.onSelectRoute = onSelectRoute
         self.onDraftVertexMoved = onDraftVertexMoved
         self.onDraftVertexEnded = onDraftVertexEnded
         self.onCenterChanged = onCenterChanged
@@ -1412,7 +1415,19 @@ struct MapView: UIViewRepresentable {
         @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended,
                   let mapView = gesture.view as? MLNMapView else { return }
-            let coordinate = mapView.convert(gesture.location(in: mapView), toCoordinateFrom: mapView)
+            let point = gesture.location(in: mapView)
+            // Route lines take priority over an empty-map tap so a tap on (or
+            // very near) a plotted route selects it rather than adding a point.
+            if let onSelectRoute = parent.onSelectRoute {
+                for route in parent.workspace.routes {
+                    let hits = mapView.visibleFeatures(at: point, styleLayerIdentifiers: [MapLayers.routeLine(route.id)])
+                    if !hits.isEmpty {
+                        onSelectRoute(route.id)
+                        return
+                    }
+                }
+            }
+            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
             parent.onMapTap?(Coordinate(lat: coordinate.latitude, lon: coordinate.longitude), mapView.zoomLevel)
         }
 
