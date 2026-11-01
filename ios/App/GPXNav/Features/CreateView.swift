@@ -47,6 +47,85 @@ struct CreateView: View {
         return !workspace.waypoints.isEmpty
     }
 
+    @ViewBuilder
+    private var createTopBar: some View {
+            // Two-row top bar: title/map name and search on top, everything else below.
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    Button {
+                        if hasUnsavedChanges {
+                            showDiscardAlert = true
+                        } else {
+                            dismiss()
+                        }
+                    } label: { Image(systemName: "chevron.backward") }
+                    .accessibilityLabel("Back")
+
+                    TextField("Map name", text: Binding(
+                        get: { workspace.documentName ?? "" },
+                        set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 60, maxWidth: .infinity)
+
+                    Button {
+                        isSearching = true
+                    } label: { Image(systemName: "magnifyingglass") }
+                }
+                .buttonStyle(.bordered)
+
+                HStack(spacing: 6) {
+                    Button {
+                        controller.undo(workspace: workspace)
+                    } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(controller.historyEmpty)
+
+                    Button {
+                        controller.redo(workspace: workspace)
+                    } label: { Image(systemName: "arrow.uturn.forward") }
+                    .disabled(controller.futureEmpty)
+
+                    Button {
+                        fitToken += 1
+                    } label: {
+                        FitGlyph()
+                            .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                            .frame(width: 17, height: 17)
+                    }
+                    .disabled(fitRoute.points.count < 2)
+                    .accessibilityLabel("Fit map")
+
+                    if controller.draft != nil {
+                        TextField("Route name", text: Binding(
+                            get: { controller.draft?.name ?? "" },
+                            set: { newValue in
+                                if var draft = controller.draft {
+                                    draft.name = newValue
+                                    controller.draft = draft
+                                    workspace.draft = draft
+                                    workspace.save()
+                                }
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 60, maxWidth: .infinity)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+
+                    Button {
+                        showLayerMenu = true
+                    } label: { Image(systemName: "globe.americas.fill") }
+                }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+            .padding(10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+    }
+
     var body: some View {
         ZStack {
             MapView(
@@ -108,79 +187,9 @@ struct CreateView: View {
             }
 
             VStack {
-            // Single-row top bar: back, edit history, fit, inline rename, search, layers.
-            HStack(spacing: 8) {
-                Button {
-                    if hasUnsavedChanges {
-                        showDiscardAlert = true
-                    } else {
-                        dismiss()
-                    }
-                } label: { Image(systemName: "chevron.backward") }
-                .accessibilityLabel("Back")
+                createTopBar
 
-                Button {
-                    controller.undo(workspace: workspace)
-                } label: { Image(systemName: "arrow.uturn.backward") }
-                .disabled(controller.historyEmpty)
-
-                Button {
-                    controller.redo(workspace: workspace)
-                } label: { Image(systemName: "arrow.uturn.forward") }
-                .disabled(controller.futureEmpty)
-
-                Button {
-                    fitToken += 1
-                } label: {
-                    FitGlyph()
-                        .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-                        .frame(width: 17, height: 17)
-                }
-                .disabled(fitRoute.points.count < 2)
-                .accessibilityLabel("Fit map")
-
-                TextField("Map name", text: Binding(
-                    get: { workspace.documentName ?? "" },
-                    set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 90, maxWidth: 150)
-
-                if controller.draft != nil {
-                    TextField("Route name", text: Binding(
-                        get: { controller.draft?.name ?? "" },
-                        set: { newValue in
-                            if var draft = controller.draft {
-                                draft.name = newValue
-                                controller.draft = draft
-                                workspace.draft = draft
-                                workspace.save()
-                            }
-                        }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 90, maxWidth: 150)
-                }
-
-                Spacer(minLength: 4)
-
-                Button {
-                    isSearching = true
-                } label: { Image(systemName: "magnifyingglass") }
-
-                Button {
-                    showLayerMenu = true
-                } label: { Image(systemName: "globe.americas.fill") }
-            }
-            .buttonStyle(.bordered)
-            .padding(10)
-            .background(.regularMaterial, in: Capsule())
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-
-            Spacer()
-
-
+                Spacer()
                 // Bottom-anchored band: profile above the action bar, both
                 // full width, so nothing mid-screen competes with the map.
                 VStack(spacing: 8) {
