@@ -22,6 +22,9 @@ struct CreateView: View {
     @State private var routeLabels: [ProjectedRouteLabel] = []
     @State private var waypointLabels: [ProjectedWaypoint] = []
     @State private var fitToken = 0
+    @State private var searchProximity: Coordinate? = nil
+    @State private var searchFocusResult: GeocodeResult? = nil
+    @State private var searchFocusToken = 0
     @State private var followsUserLocation = false
     @State private var locationFitPending = true
     @State private var showDiscardAlert = false
@@ -55,6 +58,11 @@ struct CreateView: View {
                 onDraftVertexEnded: {
                     controller.endDraftVertexDrag(workspace: workspace)
                 },
+                onCenterChanged: { coordinate in
+                    searchProximity = coordinate
+                },
+                searchFocusResult: searchFocusResult,
+                searchFocusToken: searchFocusToken,
                 onStyleLoaded: {
                     guard locationFitPending,
                           workspace.routes.isEmpty,
@@ -325,11 +333,9 @@ struct CreateView: View {
             .animation(.spring(response: 0.3), value: controller.mergePickMode)
         }
         .sheet(isPresented: $isSearching) {
-            SearchView(proximity: nil) { result in
-                if controller.waypointMode {
-                    controller.setWaypointMode(false, workspace: workspace)
-                }
-                controller.addWaypointFromSearch(workspace: workspace, result: result)
+            SearchView(proximity: searchProximity) { result in
+                searchFocusResult = result
+                searchFocusToken += 1
             }
         }
         .sheet(isPresented: $showLayerMenu) {

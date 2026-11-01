@@ -21,6 +21,13 @@ struct MapView: UIViewRepresentable {
     var onMapTap: ((Coordinate, Double) -> Void)? = nil
     var onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil
     var onDraftVertexEnded: (() -> Void)? = nil
+    /// Reports the map's current center whenever the camera settles. Search uses
+    /// it as the proximity bias.
+    var onCenterChanged: ((Coordinate) -> Void)? = nil
+    /// Tap-to-fit from search results. A bump token makes repeated taps of the
+    /// same place still framed.
+    var searchFocusResult: GeocodeResult? = nil
+    var searchFocusToken: Int = 0
     /// Distance along the route the profile is scrubbed to. The map draws the
     /// covered portion as a trace, the way the web app's `profile-trace` layer
     /// does. Nil hides it.
@@ -95,6 +102,9 @@ struct MapView: UIViewRepresentable {
         onMapTap: ((Coordinate, Double) -> Void)? = nil,
         onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil,
         onDraftVertexEnded: (() -> Void)? = nil,
+        onCenterChanged: ((Coordinate) -> Void)? = nil,
+        searchFocusResult: GeocodeResult? = nil,
+        searchFocusToken: Int = 0,
         scrubbedDistance: Binding<Double?> = .constant(nil),
         loadError: Binding<String?> = .constant(nil),
         onStyleLoaded: (() -> Void)? = nil,
@@ -113,6 +123,9 @@ struct MapView: UIViewRepresentable {
         self.onMapTap = onMapTap
         self.onDraftVertexMoved = onDraftVertexMoved
         self.onDraftVertexEnded = onDraftVertexEnded
+        self.onCenterChanged = onCenterChanged
+        self.searchFocusResult = searchFocusResult
+        self.searchFocusToken = searchFocusToken
         self._scrubbedDistance = scrubbedDistance
         self._loadError = loadError
         self.onStyleLoaded = onStyleLoaded
@@ -186,6 +199,12 @@ struct MapView: UIViewRepresentable {
             context.coordinator.lastFitToken = fitToken
             fitMapToRoute(mapView, route: route, animated: true)
         }
+        if context.coordinator.lastSearchFocusToken != searchFocusToken,
+           let result = searchFocusResult {
+            context.coordinator.lastSearchFocusToken = searchFocusToken
+            fitMapToSearchResult(mapView, result: result, animated: true)
+        }
+
         // The style can finish loading before the view's first layout (a warm
         // loopback answers instantly), and the fit in `didFinishLoading` then
         // bails on the zero-size viewport. The first layout-driven update —
@@ -825,6 +844,55 @@ struct MapView: UIViewRepresentable {
         return true
     }
 
+    private func fitMapToSearchResult(_ mapView: MLNMapView, result: GeocodeResult, animated: Bool) {
+        guard mapView.bounds.width > 1, mapView.bounds.height > 1 else { return }
+        let padding = AppConfig.fitEdgePadding
+        let viewport = (
+            width: Double(mapView.bounds.width),
+            height: Double(mapView.bounds.height)
+        )
+        let paddingEdges = (
+            top: Double(padding.top),
+            left: Double(padding.left),
+            bottom: Double(max(padding.bottom, mapInsets.bottom)),
+            right: Double(padding.right)
+        )
+        let pitch = workspace.showTerrain3D ? AppConfig.terrainPitch : 0
+        let maxZoom = maxBasemapZoom ?? AppConfig.fallbackMaxZoom(for: workspace.mapStyle)
+
+        let center = CLLocationCoordinate2D(latitude: result.center.lat, longitude: result.center.lon)
+        let targetZoom: Double?
+        if let bbox = result.bbox, bbox.count >= 4 {
+            let west = min(bbox[0], bbox[2])
+            let east = max(bbox[0], bbox[2])
+            let south = min(bbox[1], bbox[3])
+            let north = max(bbox[1], bbox[3])
+            let bounds = (west: west, south: south, east: east, north: north)
+            let raw = MapFit.clampedZoom(bounds: bounds, viewport: viewport, padding: paddingEdges, maxZoom: maxZoom)
+            if let raw {
+                targetZoom = max(raw - Self.searchTiltPullback(pitch: pitch), 0)
+            } else {
+                targetZoom = Self.searchPointZoom
+            }
+        } else {
+            targetZoom = max(Self.searchPointZoom - Self.searchTiltPullback(pitch: pitch), 0)
+        }
+
+        let camera = mapView.camera.copy() as! MLNMapCamera
+        camera.centerCoordinate = center
+        camera.heading = 0
+        if let targetZoom {
+            camera.altitude = MLNAltitudeForZoomLevel(
+                targetZoom,
+                camera.pitch,
+                camera.centerCoordinate.latitude,
+                mapView.bounds.size
+            )
+        }
+        mapView.setCamera(camera, withDuration: animated ? 0.4 : 0, animationTimingFunction: nil)
+    }
+
+
     /// The geographic bounds of a route, or nil when it has no extent.
     private static func bounds(of route: Route) -> (
         west: Double, south: Double, east: Double, north: Double
@@ -1267,10 +1335,12 @@ struct MapView: UIViewRepresentable {
         /// not read as a fit request and animate over the fit
         /// `didFinishLoading` is about to do.
         var lastFitToken: Int
+        var lastSearchFocusToken: Int
 
         init(_ parent: MapView) {
             self.parent = parent
             self.lastFitToken = parent.fitToken
+            self.lastSearchFocusToken = parent.searchFocusToken
         }
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
@@ -1293,6 +1363,8 @@ struct MapView: UIViewRepresentable {
             if !hasFitted {
                 hasFitted = parent.fitMapToRoute(mapView, route: parent.route, animated: false)
             }
+            let initialCenter = mapView.centerCoordinate
+            parent.onCenterChanged?(Coordinate(lat: initialCenter.latitude, lon: initialCenter.longitude))
             // After the fit, so fitting the route does not undo the tilt.
             parent.applyTerrainCamera(to: mapView)
             // After that too: this is the first moment the style's real ceiling is
@@ -1319,6 +1391,11 @@ struct MapView: UIViewRepresentable {
             // the end of it. Without this the labels swim behind the map while
             // you drag and only snap into place when you let go.
             parent.refreshWaypointLabels(for: mapView)
+        }
+
+        func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
+            let center = mapView.centerCoordinate
+            parent.onCenterChanged?(Coordinate(lat: center.latitude, lon: center.longitude))
         }
 
         @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
@@ -1363,6 +1440,14 @@ struct MapView: UIViewRepresentable {
         }
     }
 }
+
+private extension MapView {
+    static let searchPointZoom: Double = 13
+    static func searchTiltPullback(pitch: Double) -> Double {
+        1.5 * (max(pitch, 0) / 55.0)
+    }
+}
+
 
 /// A waypoint name placed at a point in the map view's coordinates.
 ///
