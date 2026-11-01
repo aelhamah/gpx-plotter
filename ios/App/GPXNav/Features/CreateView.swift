@@ -30,8 +30,11 @@ struct CreateView: View {
     @State private var showDiscardAlert = false
     @Environment(\.dismiss) private var dismiss
 
-    private var placeholderRoute: Route {
-        Route(id: 0, name: "", points: [], color: "#2563eb")
+    private var fitRoute: Route {
+        var points: [RoutePoint] = []
+        for route in workspace.routes { points.append(contentsOf: route.points) }
+        if let draft = controller.draft { points.append(contentsOf: draft.points) }
+        return Route(id: 0, name: "", points: points, color: "#2563eb")
     }
 
     private var hasUnsavedChanges: Bool {
@@ -47,7 +50,7 @@ struct CreateView: View {
     var body: some View {
         ZStack {
             MapView(
-                route: placeholderRoute,
+                route: fitRoute,
                 draftRoute: controller.draft,
                 onMapTap: { coordinate, zoom in
                     Task { await controller.handleMapTap(workspace: workspace, coordinate: coordinate, zoom: zoom) }
@@ -105,67 +108,78 @@ struct CreateView: View {
             }
 
             VStack {
-                // Top bar: edit history and the two map-wide tools. Sized for
-                // the narrow screen — icon buttons only, no capsule that other
-                // chrome has to share a row with. Drawing controls live at the
-                // bottom, near what they act on.
-                HStack(spacing: 10) {
-                    Button {
-                        controller.undo(workspace: workspace)
-                    } label: { Image(systemName: "arrow.uturn.backward") }
-                    .disabled(controller.historyEmpty)
+            // Single-row top bar: back, edit history, fit, inline rename, search, layers.
+            HStack(spacing: 8) {
+                Button {
+                    if hasUnsavedChanges {
+                        showDiscardAlert = true
+                    } else {
+                        dismiss()
+                    }
+                } label: { Image(systemName: "chevron.backward") }
+                .accessibilityLabel("Back")
 
-                    Button {
-                        controller.redo(workspace: workspace)
-                    } label: { Image(systemName: "arrow.uturn.forward") }
-                    .disabled(controller.futureEmpty)
+                Button {
+                    controller.undo(workspace: workspace)
+                } label: { Image(systemName: "arrow.uturn.backward") }
+                .disabled(controller.historyEmpty)
 
-                    Button {
-                        fitToDraft()
-                    } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .disabled(controller.draft?.points.isEmpty ?? true)
+                Button {
+                    controller.redo(workspace: workspace)
+                } label: { Image(systemName: "arrow.uturn.forward") }
+                .disabled(controller.futureEmpty)
 
-                    Spacer()
-
-                    Button {
-                        isSearching = true
-                    } label: { Image(systemName: "magnifyingglass") }
-
-                    Button {
-                        showLayerMenu = true
-                    } label: { Image(systemName: "globe.americas.fill") }
+                Button {
+                    fitToken += 1
+                } label: {
+                    FitGlyph()
+                        .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                        .frame(width: 17, height: 17)
                 }
-                .buttonStyle(.bordered)
-                .padding(10)
-                .background(.regularMaterial, in: Capsule())
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
+                .disabled(fitRoute.points.count < 2)
+                .accessibilityLabel("Fit map")
 
-                // Names: map and route.
-                VStack(spacing: 6) {
-                    TextField("Map name", text: Binding(
-                        get: { workspace.documentName ?? "" },
-                        set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
+                TextField("Map name", text: Binding(
+                    get: { workspace.documentName ?? "" },
+                    set: { workspace.documentName = $0.isEmpty ? nil : $0; workspace.save() }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 90, maxWidth: 150)
+
+                if controller.draft != nil {
+                    TextField("Route name", text: Binding(
+                        get: { controller.draft?.name ?? "" },
+                        set: { newValue in
+                            if var draft = controller.draft {
+                                draft.name = newValue
+                                controller.draft = draft
+                                workspace.draft = draft
+                                workspace.save()
+                            }
+                        }
                     ))
                     .textFieldStyle(.roundedBorder)
-                    if controller.draft != nil {
-                        TextField("Route name", text: Binding(
-                            get: { controller.draft?.name ?? "" },
-                            set: { newValue in
-                                if var draft = controller.draft {
-                                    draft.name = newValue
-                                    controller.draft = draft
-                                    workspace.draft = draft
-                                    workspace.save()
-                                }
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                    }
+                    .frame(minWidth: 90, maxWidth: 150)
                 }
-                .padding(.horizontal, 12)
 
-                Spacer()
+                Spacer(minLength: 4)
+
+                Button {
+                    isSearching = true
+                } label: { Image(systemName: "magnifyingglass") }
+
+                Button {
+                    showLayerMenu = true
+                } label: { Image(systemName: "globe.americas.fill") }
+            }
+            .buttonStyle(.bordered)
+            .padding(10)
+            .background(.regularMaterial, in: Capsule())
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+
+            Spacer()
+
 
                 // Bottom-anchored band: profile above the action bar, both
                 // full width, so nothing mid-screen competes with the map.
@@ -343,17 +357,6 @@ struct CreateView: View {
                 .environmentObject(workspace)
         }
         .navigationBarBackButtonHidden(true)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Back") {
-                    if hasUnsavedChanges {
-                        showDiscardAlert = true
-                    } else {
-                        dismiss()
-                    }
-                }
-            }
-        }
         .alert("Discard unsaved route?", isPresented: $showDiscardAlert) {
             Button("Discard", role: .destructive) {
                 if let id = workspace.selectedMapId, workspace.selectedMap?.hasFinishedRoutes != true {
@@ -425,10 +428,6 @@ struct CreateView: View {
             if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                 isSearching = true
             }
-    }
-
-    private func fitToDraft() {
-        fitToken += 1
     }
 
     private var drawBar: some View {
