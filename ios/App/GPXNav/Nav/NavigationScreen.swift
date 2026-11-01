@@ -66,12 +66,18 @@ struct NavigationScreen: View {
             if services.serverReady {
                 MapView(
                     route: session.route,
+                    // Dismiss following the instant the user pans, rather than
+                    // letting the next fix snap the camera back and fight them.
+                    onUserPan: { followsUser = false },
                     // The walked portion of the route. Same mechanism the profile
                     // chart's scrub uses, and it means the same thing here: how far
                     // along the route you have got.
                     scrubbedDistance: $coveredDistance,
                     onStyleLoaded: { },
-                    followsUserLocation: $followsUser
+                    followsUserLocation: $followsUser,
+                    showRelief: workspace.showHillshade,
+                    showSlope: workspace.showSlope,
+                    showTerrain3D: workspace.showTerrain3D
                 )
                 .ignoresSafeArea()
             } else {
@@ -445,6 +451,11 @@ struct NavigationScreen: View {
             Spacer()
 
             Button {
+                // Recentring is also a request to follow again: a map that
+                // stays in Pan freely after being brought back to the user
+                // would drift away on the next fix, which is not what tapping
+                // this button means.
+                followsUser = true
                 // The same cycle as the viewer's locate button, seen from
                 // inside it: orientation → north-up → orientation, which from
                 // here is the two states people expect from a compass button
