@@ -15,6 +15,11 @@ struct CreateView: View {
     @StateObject private var draftAnalysis = RouteAnalysis(
         route: Route(id: 0, name: "", points: [], color: "#2563eb")
     )
+    @StateObject private var viewRouteAnalysis = RouteAnalysis(
+        route: Route(id: 0, name: "", points: [], color: "#2563eb")
+    )
+    @State private var isEditing = true
+    @State private var isNavigating = false
 
     @State private var isSearching = false
     @State private var showLayerMenu = false
@@ -36,6 +41,14 @@ struct CreateView: View {
         for route in workspace.routes { points.append(contentsOf: route.points) }
         if let draft = controller.draft { points.append(contentsOf: draft.points) }
         return Route(id: 0, name: "", points: points, color: "#2563eb")
+    }
+
+    private var viewRoute: Route? {
+        if let id = workspace.selectedRouteId,
+           let route = workspace.routes.first(where: { $0.id == id }) {
+            return route
+        }
+        return workspace.routes.first
     }
 
     private func startEditingRoute(_ id: Int) {
@@ -108,6 +121,13 @@ struct CreateView: View {
                     Button {
                         isSearching = true
                     } label: { Image(systemName: "magnifyingglass") }
+
+                    if workspace.selectedMap?.hasFinishedRoutes == true {
+                        Button {
+                            isEditing = false
+                        } label: { Image(systemName: "eye") }
+                        .accessibilityLabel("View")
+                    }
                 }
                 .buttonStyle(.bordered)
 
@@ -177,7 +197,83 @@ struct CreateView: View {
     }
 
     @ViewBuilder
-    private func elevationProfileCard(for draft: Route) -> some View {
+    private var viewTopBar: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Button {
+                    if hasUnsavedChanges {
+                        showDiscardAlert = true
+                    } else {
+                        dismiss()
+                    }
+                } label: { Image(systemName: "chevron.backward") }
+                .accessibilityLabel("Back")
+
+                Text(workspace.documentName ?? "Map")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    isEditing = true
+                } label: { Image(systemName: "pencil") }
+                .accessibilityLabel("Edit")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            HStack(spacing: 6) {
+                if !workspace.routes.isEmpty {
+                    Menu {
+                        ForEach(workspace.routes) { route in
+                            Button(route.name) {
+                                workspace.selectedRouteId = route.id
+                                workspace.save()
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(viewRoute?.name ?? "Route")
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                Button {
+                    showLayerMenu = true
+                } label: { Image(systemName: "globe.americas.fill") }
+
+                Button {
+                    fitToken += 1
+                } label: {
+                    FitGlyph()
+                        .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                        .frame(width: 17, height: 17)
+                }
+                .disabled(fitRoute.points.count < 2)
+                .accessibilityLabel("Fit map")
+
+                if let route = viewRoute {
+                    Button {
+                        isNavigating = true
+                    } label: { Image(systemName: "figure.hiking") }
+                    .disabled(route.points.count < 2)
+                    .accessibilityLabel("Navigate")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+
+    private func elevationProfileCard(for draft: Route, analysis: RouteAnalysis) -> some View {
         VStack(spacing: 0) {
             Button {
                 showElevationProfile.toggle()
@@ -204,7 +300,7 @@ struct CreateView: View {
 
             if showElevationProfile {
                 RouteProfileChart(
-                    analysis: draftAnalysis,
+                    analysis: analysis,
                     route: draft,
                     system: Units.defaultUnitSystem(),
                     scrubbedDistance: $scrubbedDistance
@@ -225,7 +321,7 @@ struct CreateView: View {
     private var createBottomBand: some View {
         VStack(spacing: 4) {
             if controller.isDrawing, let draft = controller.draft, draft.points.count >= 2 {
-                elevationProfileCard(for: draft)
+                elevationProfileCard(for: draft, analysis: draftAnalysis)
             }
 
             if controller.waypointMode {
@@ -329,7 +425,9 @@ struct CreateView: View {
 MapView(
                 route: fitRoute,
                 draftRoute: controller.draft,
+                traceRoute: isEditing ? nil : viewRoute,
                 onMapTap: { coordinate, zoom in
+                    guard isEditing else { return }
                     if !controller.isDrawing && !controller.waypointMode,
                        let selected = workspace.selectedRouteId {
                         workspace.selectedRouteId = nil
@@ -337,6 +435,7 @@ MapView(
                     Task { await controller.handleMapTap(workspace: workspace, coordinate: coordinate, zoom: zoom) }
                 },
                 onSelectRoute: { id in
+                    guard isEditing else { return }
                     startEditingRoute(id)
                 },
                 onDraftVertexMoved: { index, coordinate in
@@ -397,9 +496,20 @@ MapView(
             }
 
             VStack {
-                createTopBar
+                if isEditing {
+                    createTopBar
+                } else {
+                    viewTopBar
+                }
                 Spacer()
-                createBottomBand
+                if isEditing {
+                    createBottomBand
+                } else if let route = viewRoute, route.points.count >= 2 {
+                    elevationProfileCard(for: route, analysis: viewRouteAnalysis)
+                        .padding(.horizontal, 12)
+                        .safeAreaPadding(.bottom, 4)
+                        .padding(.bottom, 12)
+                }
             }
             .animation(.spring(response: 0.3), value: controller.isDrawing)
             .animation(.spring(response: 0.3), value: controller.waypointMode)
@@ -415,6 +525,18 @@ MapView(
             MapModesSheet()
                 .environmentObject(workspace)
         }
+        .fullScreenCover(isPresented: $isNavigating) {
+            if let route = viewRoute {
+                NavigationScreen(
+                    route: route,
+                    waypoints: workspace.waypoints,
+                    profile: viewRouteAnalysis.profile
+                )
+                .environmentObject(workspace)
+                .environmentObject(location)
+                .environmentObject(services)
+            }
+        }
         .navigationBarBackButtonHidden(true)
         .alert("Discard unsaved route?", isPresented: $showDiscardAlert) {
             Button("Discard", role: .destructive) {
@@ -427,6 +549,14 @@ MapView(
                 dismiss()
             }
             Button("Keep Editing", role: .cancel) { }
+        }
+        .onChange(of: workspace.selectedRouteId) { _, _ in
+            if let route = viewRoute {
+                viewRouteAnalysis.update(route: route)
+                if workspace.fillsMissingElevation {
+                    viewRouteAnalysis.fillMissingElevations()
+                }
+            }
         }
         .task(id: configuredMapId ?? workspace.selectedMapId) {
             prepareEditor()
@@ -474,6 +604,9 @@ MapView(
     }
 
     private func prepareEditor() {
+        if let configuredMapId {
+            workspace.selectMap(configuredMapId)
+        }
         controller.snapEngine = SnapEngine(
             httpClient: DefaultHTTPClient(userAgent: MapNetworkIdentity.userAgent),
                 config: AppConfig.snapConfig,
@@ -484,6 +617,17 @@ MapView(
                 controller.draft = d
                 controller.isDrawing = true
                 controller.updateStatus()
+            }
+            if let route = viewRoute {
+                viewRouteAnalysis.update(route: route)
+                if workspace.fillsMissingElevation {
+                    viewRouteAnalysis.fillMissingElevations()
+                }
+            }
+            if workspace.selectedMap?.hasFinishedRoutes == true && workspace.draft == nil {
+                isEditing = false
+            } else {
+                isEditing = true
             }
             if ProcessInfo.processInfo.arguments.contains("-openSearch") {
                 isSearching = true

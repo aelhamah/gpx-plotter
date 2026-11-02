@@ -54,6 +54,7 @@ struct RootTabView: View {
 extension Notification.Name {
     static let switchToCreate = Notification.Name("switchToCreate")
     static let switchToEditor = Notification.Name("switchToEditor")
+    static let switchToViewer = Notification.Name("switchToViewer")
 }
 
 
@@ -84,6 +85,11 @@ struct LibraryMapsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .switchToEditor)) { _ in
             path.append(.editor(workspace.selectedMapId ?? -1))
         }
+        .onReceive(NotificationCenter.default.publisher(for: .switchToViewer)) { _ in
+            guard let map = workspace.selectedMap, map.hasFinishedRoutes else { return }
+            if case .viewer(let existing) = path.last, existing.id == map.id { return }
+            path.append(.viewer(map))
+        }
     }
 
     private var libraryList: some View {
@@ -96,7 +102,7 @@ struct LibraryMapsView: View {
                 )
             }
             ForEach(visibleMaps) { map in
-                NavigationLink(value: LibraryDestination.viewer(map)) {
+                NavigationLink(value: LibraryDestination.editor(map.id)) {
                     libraryRow(map)
                 }
             }
@@ -155,7 +161,7 @@ struct LibraryMapsView: View {
             let arguments = ProcessInfo.processInfo.arguments
             guard arguments.contains("-openFirstRoute"), path.isEmpty else { return }
             guard let map = visibleMaps.first else { return }
-            path.append(.viewer(map))
+            path.append(.editor(map.id))
         }
         .alert("Discard current unsaved map?", isPresented: $showNewMapWarning) {
             Button("Discard", role: .destructive) {
@@ -207,8 +213,8 @@ struct LibraryMapsView: View {
             }
             .environmentObject(workspace)
             .onAppear { workspace.selectMap(map.id) }
-        case .editor:
-            CreateView()
+        case .editor(let id):
+            CreateView(mapId: id)
         }
     }
 
@@ -250,7 +256,7 @@ struct LibraryMapsView: View {
                 workspace.selectMap(newMap.id)
                 if workspace.importGPX(text, fileName: url.lastPathComponent) {
                     if let imported = workspace.selectedMap {
-                        path.append(.viewer(imported))
+                        path.append(.editor(imported.id))
                     }
                 } else {
                     workspace.maps.removeAll { $0.id == newMap.id }

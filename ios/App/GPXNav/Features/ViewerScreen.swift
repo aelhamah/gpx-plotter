@@ -54,10 +54,20 @@ struct ViewerScreen: View {
     /// through `ChromeFramesPreference`; read by `mapInsets`.
     @State private var chromeFrames: [String: CGRect] = [:]
 
-    let route: Route
+    let initialRoute: Route
+    @State private var selectedRouteId: Int?
+
+    var route: Route {
+        if let id = selectedRouteId,
+           let selected = workspace.routes.first(where: { $0.id == id }) {
+            return selected
+        }
+        return workspace.routes.first(where: { $0.id == initialRoute.id }) ?? initialRoute
+    }
 
     init(route: Route) {
-        self.route = route
+        self.initialRoute = route
+        _selectedRouteId = State(initialValue: route.id)
         _analysis = StateObject(wrappedValue: RouteAnalysis(route: route))
     }
 
@@ -201,13 +211,33 @@ struct ViewerScreen: View {
                     // overrides a correct value with a guessed one, which is how the
                     // sheet came out visibly squarer than the phone's own corner.
             }
-            .navigationTitle(route.name)
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Menu {
+                        ForEach(workspace.routes) { candidate in
+                            Button(candidate.name) {
+                                selectedRouteId = candidate.id
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(route.name).font(.headline)
+                            Image(systemName: "chevron.down").font(.caption)
+                        }
+                    }
+                }
+            }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Edit", systemImage: "pencil") {
+                        if let map = workspace.maps.first(where: { $0.routes.contains(where: { $0.id == route.id }) }) {
+                            workspace.selectMap(map.id)
+                        }
+                        workspace.selectedRouteId = route.id
                         workspace.draft = route
                         workspace.save()
                         NotificationCenter.default.post(name: .switchToEditor, object: nil)
@@ -274,6 +304,15 @@ struct ViewerScreen: View {
                 // outdoor's ceiling (or the reverse) is the wrong figure either
                 // way for as long as the fetch takes.
                 maxBasemapZoom = nil
+            }
+            .onChange(of: selectedRouteId) { _, _ in
+                workspace.selectedRouteId = route.id
+                analysis.update(route: route)
+                if workspace.fillsMissingElevation {
+                    analysis.fillMissingElevations()
+                }
+                Task { await packs.estimate(for: route) }
+                fitToken += 1
             }
             .task {
                 workspace.selectedRouteId = route.id
