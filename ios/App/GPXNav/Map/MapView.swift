@@ -17,6 +17,9 @@ struct MapView: UIViewRepresentable {
     let route: Route
     /// In-progress route drawn on the Create screen, or nil elsewhere.
     var draftRoute: Route? = nil
+    /// Route whose profile scrubbing should drive the map trace, when not
+    /// editing a draft. Used in view mode for a selected route.
+    var traceRoute: Route? = nil
     /// Called with the coordinate of a tap on the bare map (not on chrome).
     var onMapTap: ((Coordinate, Double) -> Void)? = nil
     var onSelectRoute: ((Int) -> Void)? = nil
@@ -100,6 +103,7 @@ struct MapView: UIViewRepresentable {
     init(
         route: Route,
         draftRoute: Route? = nil,
+        traceRoute: Route? = nil,
         onMapTap: ((Coordinate, Double) -> Void)? = nil,
         onSelectRoute: ((Int) -> Void)? = nil,
         onDraftVertexMoved: ((Int, Coordinate) -> Void)? = nil,
@@ -121,6 +125,7 @@ struct MapView: UIViewRepresentable {
         showTerrain3D: Bool = false
     ) {
         self.route = route
+        self.traceRoute = traceRoute
         self.draftRoute = draftRoute
         self.onMapTap = onMapTap
         self.onSelectRoute = onSelectRoute
@@ -941,7 +946,7 @@ struct MapView: UIViewRepresentable {
     /// `TRACE_COLOR`.
     private func applyProfileTrace(to mapView: MLNMapView, coordinator: Coordinator) {
         guard let style = mapView.style else { return }
-        let tracedRoute = draftRoute ?? route
+        let tracedRoute = draftRoute ?? traceRoute ?? route
         if coordinator.traceState.routeId != tracedRoute.id {
             coordinator.traceState.routeId = tracedRoute.id
             coordinator.traceState.index = nil
