@@ -941,7 +941,12 @@ struct MapView: UIViewRepresentable {
     /// `TRACE_COLOR`.
     private func applyProfileTrace(to mapView: MLNMapView, coordinator: Coordinator) {
         guard let style = mapView.style else { return }
-        let profile = analysis(for: route, coordinator: coordinator)
+        let tracedRoute = draftRoute ?? route
+        if coordinator.traceState.routeId != tracedRoute.id {
+            coordinator.traceState.routeId = tracedRoute.id
+            coordinator.traceState.index = nil
+        }
+        let profile = analysis(for: tracedRoute, coordinator: coordinator)
         let distance = scrubbedDistance
 
         guard let distance, distance > 0, profile.points.count > 1 else {
@@ -1131,9 +1136,17 @@ struct MapView: UIViewRepresentable {
         private var profiles: [Int: RouteProfile] = [:]
 
         func profile(for route: Route) -> RouteProfile {
-            if let cached = profiles[route.id] { return cached }
+            var hasher = Hasher()
+            hasher.combine(route.points.count)
+            for point in route.points {
+                hasher.combine(point.lat)
+                hasher.combine(point.lon)
+                hasher.combine(point.elevation)
+            }
+            let key = hasher.finalize()
+            if let cached = profiles[key] { return cached }
             let profile = RouteProfile.make(from: route.points)
-            profiles[route.id] = profile
+            profiles[key] = profile
             return profile
         }
     }
@@ -1143,6 +1156,7 @@ struct MapView: UIViewRepresentable {
     /// got to.
     fileprivate final class TraceState {
         var index: Int?
+        var routeId: Int?
     }
 
     /// The fix the camera last followed, so a state change that did not move the
