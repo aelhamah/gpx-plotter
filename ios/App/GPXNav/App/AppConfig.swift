@@ -389,6 +389,12 @@ enum PanelMetrics {
     /// Floor for the profile chart, so it cannot collapse on a short sheet.
     static let chartMinimumHeight: CGFloat = 140
 
+    /// Height of the elevation profile card in the Create tab when collapsed.
+    static let createProfileCompactHeight: CGFloat = 160
+
+    /// Height of the elevation profile card in the Create tab when expanded.
+    static let createProfileExpandedHeight: CGFloat = 240
+
     /// The chart's height in the tallest layout — which is what the expanded
     /// detent is built from. Everywhere else it is flexible and takes the slack.
     static let chartHeight: CGFloat = 176

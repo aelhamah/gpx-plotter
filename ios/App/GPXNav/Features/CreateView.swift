@@ -19,6 +19,7 @@ struct CreateView: View {
     @State private var isSearching = false
     @State private var showLayerMenu = false
     @State private var showElevationProfile = false
+    @State private var scrubbedDistance: Double? = nil
     @State private var routeLabels: [ProjectedRouteLabel] = []
     @State private var waypointLabels: [ProjectedWaypoint] = []
     @State private var fitToken = 0
@@ -175,9 +176,157 @@ struct CreateView: View {
             .padding(.top, 8)
     }
 
-    var body: some View {
-        ZStack {
-            MapView(
+    @ViewBuilder
+    private func elevationProfileCard(for draft: Route) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                showElevationProfile.toggle()
+                if !showElevationProfile {
+                    scrubbedDistance = nil
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Elevation Profile")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: showElevationProfile ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 12)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showElevationProfile ? "Collapse elevation profile" : "Expand elevation profile")
+
+            if showElevationProfile {
+                RouteProfileChart(
+                    analysis: draftAnalysis,
+                    route: draft,
+                    system: Units.defaultUnitSystem(),
+                    scrubbedDistance: $scrubbedDistance
+                )
+                .frame(height: 180)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(.spring(response: 0.3), value: showElevationProfile)
+    }
+
+    @ViewBuilder
+    private var createBottomBand: some View {
+        VStack(spacing: 4) {
+            if controller.isDrawing, let draft = controller.draft, draft.points.count >= 2 {
+                elevationProfileCard(for: draft)
+            }
+
+            if controller.waypointMode {
+                Text(controller.waypointHint)
+                    .font(.caption)
+                    .padding(8)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            if !workspace.waypoints.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(workspace.waypoints.indices, id: \.self) { index in
+                            TextField(
+                                "Waypoint",
+                                text: Binding(
+                                    get: {
+                                        workspace.waypoints.indices.contains(index)
+                                            ? workspace.waypoints[index].name
+                                            : ""
+                                    },
+                                    set: { value in
+                                        if workspace.waypoints.indices.contains(index) {
+                                            workspace.waypoints[index].name = value
+                                            workspace.save()
+                                        }
+                                    }
+                                )
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 140)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+
+            if controller.isDrawing {
+                drawBar
+            } else if controller.mergePickMode {
+                VStack(spacing: 8) {
+                    Text(controller.mergePick == nil ? "Pick first route to merge" : "Pick second route")
+                        .font(.caption)
+                    ScrollView(.horizontal) {
+                        HStack {
+                            ForEach(workspace.routes) { route in
+                                Button(route.name) {
+                                    controller.selectMergeRoute(workspace: workspace, route: route)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(controller.mergePick?.id == route.id ? .accentColor : nil)
+                            }
+                        }
+                    }
+                    Button("Cancel merge") { controller.toggleMergePick(workspace: workspace) }
+                        .buttonStyle(.bordered)
+                }
+                .padding(.bottom, 16)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if workspace.routes.isEmpty {
+                            Text("No routes yet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(workspace.routes) { route in
+                            Button {
+                                startEditingRoute(route.id)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(Color(hex: route.color))
+                                        .frame(width: 8, height: 8)
+                                    Text(route.name)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(workspace.selectedRouteId == route.id ? .accentColor : nil)
+                        }
+                        Button {
+                            startNewRoute()
+                        } label: {
+                            Label("New", systemImage: "plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .safeAreaPadding(.bottom, 4)
+                .padding(.bottom, 12)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { }
+        .padding(.horizontal, 12)
+    }
+
+    @ViewBuilder
+    private var createMapView: some View {
+MapView(
                 route: fitRoute,
                 draftRoute: controller.draft,
                 onMapTap: { coordinate, zoom in
@@ -201,6 +350,7 @@ struct CreateView: View {
                 },
                 searchFocusResult: searchFocusResult,
                 searchFocusToken: searchFocusToken,
+                scrubbedDistance: $scrubbedDistance,
                 onStyleLoaded: {
                     guard locationFitPending,
                           workspace.routes.isEmpty,
@@ -233,7 +383,11 @@ struct CreateView: View {
                 showSlope: workspace.showSlope,
                 showTerrain3D: workspace.showTerrain3D
             )
-            .ignoresSafeArea()
+    }
+
+    var body: some View {
+        ZStack {
+            createMapView            .ignoresSafeArea()
             .overlay(alignment: .bottomTrailing) {
                 if workspace.showSlope {
                     SlopeLegend()
@@ -244,141 +398,8 @@ struct CreateView: View {
 
             VStack {
                 createTopBar
-
                 Spacer()
-                // Bottom-anchored band: profile above the action bar, both
-                // full width, so nothing mid-screen competes with the map.
-                VStack(spacing: 8) {
-                    // Elevation profile (when drawing)
-                    if controller.isDrawing, let draft = controller.draft, draft.points.count >= 2 {
-                        VStack(spacing: 0) {
-                            Button {
-                                showElevationProfile.toggle()
-                            } label: {
-                                HStack {
-                                    Text("Elevation Profile")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Image(systemName: showElevationProfile ? "chevron.up" : "chevron.down")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.plain)
-
-                            if showElevationProfile {
-                                RouteProfileChart(
-                                    analysis: draftAnalysis,
-                                    route: draft,
-                                    system: Units.defaultUnitSystem(),
-                                    scrubbedDistance: .constant(nil)
-                                )
-                                .frame(height: 150)
-                                .padding(.horizontal, 8)
-                                .padding(.bottom, 8)
-                                .transition(.slide.combined(with: .opacity))
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                        .transition(.slide.combined(with: .opacity))
-                        .animation(.spring(response: 0.3), value: showElevationProfile)
-                    }
-
-                    if controller.waypointMode {
-                        Text(controller.waypointHint)
-                            .font(.caption)
-                            .padding(8)
-                            .background(.regularMaterial, in: Capsule())
-                    }
-                    if !workspace.waypoints.isEmpty {
-                        ScrollView(.horizontal) {
-                            HStack {
-                                ForEach(workspace.waypoints.indices, id: \.self) { index in
-                                    TextField(
-                                        "Waypoint",
-                                        text: Binding(
-                                            get: {
-                                                workspace.waypoints.indices.contains(index)
-                                                    ? workspace.waypoints[index].name
-                                                    : ""
-                                            },
-                                            set: { value in
-                                                if workspace.waypoints.indices.contains(index) {
-                                                    workspace.waypoints[index].name = value
-                                                    workspace.save()
-                                                }
-                                            }
-                                        )
-                                    )
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 140)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                    }
-
-                    if controller.isDrawing {
-                        drawBar
-                    } else if controller.mergePickMode {
-                        VStack(spacing: 8) {
-                            Text(controller.mergePick == nil ? "Pick first route to merge" : "Pick second route")
-                                .font(.caption)
-                            ScrollView(.horizontal) {
-                                HStack {
-                                    ForEach(workspace.routes) { route in
-                                        Button(route.name) {
-                                            controller.selectMergeRoute(workspace: workspace, route: route)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .tint(controller.mergePick?.id == route.id ? .accentColor : nil)
-                                    }
-                                }
-                            }
-                            Button("Cancel merge") { controller.toggleMergePick(workspace: workspace) }
-                                .buttonStyle(.bordered)
-                        }
-                        .padding(.bottom, 16)
-                    } else {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                if workspace.routes.isEmpty {
-                                    Text("No routes yet")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                ForEach(workspace.routes) { route in
-                                    Button {
-                                        startEditingRoute(route.id)
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Circle()
-                                                .fill(Color(hex: route.color))
-                                                .frame(width: 8, height: 8)
-                                            Text(route.name)
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(workspace.selectedRouteId == route.id ? .accentColor : nil)
-                                }
-                                Button {
-                                    startNewRoute()
-                                } label: {
-                                    Label("New", systemImage: "plus")
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .safeAreaPadding(.bottom, 4)
-                        .padding(.bottom, 12)
-                    }
-                }
+                createBottomBand
             }
             .animation(.spring(response: 0.3), value: controller.isDrawing)
             .animation(.spring(response: 0.3), value: controller.waypointMode)
@@ -438,15 +459,16 @@ struct CreateView: View {
                 controller.updateStatus()
             }
         }
-        .onChange(of: controller.draft?.points.count) { _, _ in
+        .onChange(of: controller.draft?.points.count) { _, newCount in
             if let draft = controller.draft, draft.points.count >= 2 {
                 draftAnalysis.update(route: draft)
-                if workspace.fillsMissingElevation {
-                    draftAnalysis.fillMissingElevations()
-                }
+                draftAnalysis.fillMissingElevations()
             } else {
                 draftAnalysis.update(route: Route(id: 0, name: "", points: [], color: "#2563eb"))
             }
+        }
+        .onChange(of: controller.isDrawing) { _, drawing in
+            if !drawing { scrubbedDistance = nil }
         }
         .id(configuredMapId ?? workspace.selectedMapId)
     }
@@ -469,33 +491,20 @@ struct CreateView: View {
     }
 
     private var drawBar: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Color(hex: controller.draft?.color ?? "#2563eb"))
-                    .frame(width: 10, height: 10)
-                Text(controller.statusText)
-                    .font(.caption)
-                    .lineLimit(2)
-                Spacer(minLength: 8)
-                Text("\(controller.draft?.points.count ?? 0) pts")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 10) {
+        HStack(spacing: 6) {
                 Toggle(isOn: $controller.snappingEnabled) {
                     Text("Snap")
                 }
                 .toggleStyle(.button)
-                .controlSize(.large)
+                .controlSize(.small)
                 .help("Snap to trails")
 
                 Button("Cancel", systemImage: "xmark") {
                     controller.stopDrawing()
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.large)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
 
                 Spacer(minLength: 0)
 
@@ -503,11 +512,12 @@ struct CreateView: View {
                     controller.finish(workspace: workspace)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
                 .disabled((controller.draft?.points.count ?? 0) < 2)
             }
-        }
-        .padding(12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding(.horizontal, 12)
         .padding(.bottom, 12)
